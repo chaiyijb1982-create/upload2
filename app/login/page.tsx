@@ -72,9 +72,7 @@ export default function LoginPage() {
         return;
       }
 
-      router.replace("/");
-
-      router.refresh();
+      window.location.href = "/";
 
     } catch {
 
