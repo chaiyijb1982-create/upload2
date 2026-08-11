@@ -206,7 +206,9 @@ export async function getChinaFundPrice(
 
     };
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     console.error(
       "getChinaFundPrice error:",
@@ -227,12 +229,26 @@ export async function getChinaFundPrice(
 // 美股 / ETF
 //
 // 例如：
-//
 // VOO
 // QQQ
 // GLD
 // TSM
 // INTC
+//
+// 注意：
+// 服务器端使用
+//
+// 这一版增加了完整调试信息：
+//
+// 1. HTTP 状态
+// 2. RAW 返回
+// 3. JSON 数据
+// 4. current price
+// 5. previous close
+// 6. timestamp
+//
+// 目的：
+// 定位 Vercel 环境为什么获取 Finnhub 失败
 // =====================================================
 
 export async function getFinnhubPrice(
@@ -243,14 +259,26 @@ export async function getFinnhubPrice(
     cleanCode(code);
 
 
+  // =================================================
+  // Symbol
+  // =================================================
+
   if (
     !symbol
   ) {
+
+    console.error(
+      "❌ Finnhub symbol 为空"
+    );
 
     return null;
 
   }
 
+
+  // =================================================
+  // API Key
+  // =================================================
 
   const apiKey =
     process.env.FINNHUB_KEY;
@@ -261,13 +289,17 @@ export async function getFinnhubPrice(
   ) {
 
     console.error(
-      "❌ 缺少 FINNHUB_KEY"
+      "❌ FINNHUB_KEY 未配置"
     );
 
     return null;
 
   }
 
+
+  // =================================================
+  // URL
+  // =================================================
 
   const url =
     "https://finnhub.io/api/v1/quote" +
@@ -277,25 +309,105 @@ export async function getFinnhubPrice(
 
   try {
 
+    // =================================================
+    // DEBUG
+    // =================================================
+
+    console.log(
+      "====================================="
+    );
+
+    console.log(
+      "Finnhub 请求:",
+      symbol
+    );
+
+    console.log(
+      "Finnhub URL:",
+      url.replace(
+        apiKey,
+        "***"
+      )
+    );
+
+
+    // =================================================
+    // Request
+    // =================================================
+
     const response =
       await fetch(
         url,
         {
+          method:
+            "GET",
+
           cache:
             "no-store",
+
+          headers: {
+
+            "Accept":
+              "application/json",
+
+            "User-Agent":
+              "AI-Wealth-OS",
+
+          },
 
         }
       );
 
+
+    // =================================================
+    // 先读取 RAW
+    //
+    // 不直接 response.json()
+    //
+    // 这样即使 Finnhub 返回错误文本，
+    // 我们也可以看到真实内容。
+    // =================================================
+
+    const text =
+      await response.text();
+
+
+    // =================================================
+    // HTTP 状态
+    // =================================================
+
+    console.log(
+      "Finnhub HTTP:",
+      symbol,
+      response.status,
+      response.statusText
+    );
+
+
+    // =================================================
+    // RAW
+    // =================================================
+
+    console.log(
+      "Finnhub RAW:",
+      symbol,
+      text
+    );
+
+
+    // =================================================
+    // HTTP Error
+    // =================================================
 
     if (
       !response.ok
     ) {
 
       console.error(
-        "Finnhub HTTP error:",
+        "❌ Finnhub HTTP error:",
+        symbol,
         response.status,
-        symbol
+        text
       );
 
       return null;
@@ -303,43 +415,200 @@ export async function getFinnhubPrice(
     }
 
 
-    const data =
-      await response.json();
+    // =================================================
+    // JSON
+    // =================================================
+
+    let data:
+      any;
 
 
-    const price =
+    try {
+
+      data =
+        JSON.parse(
+          text
+        );
+
+    } catch (
+      error
+    ) {
+
+      console.error(
+        "❌ Finnhub JSON parse failed:",
+        symbol,
+        text
+      );
+
+      return null;
+
+    }
+
+
+    // =================================================
+    // JSON DEBUG
+    // =================================================
+
+    console.log(
+      "Finnhub DATA:",
+      symbol,
+      data
+    );
+
+
+    // =================================================
+    // Finnhub Quote
+    //
+    // c
+    // = current price
+    //
+    // pc
+    // = previous close
+    //
+    // t
+    // = Unix timestamp
+    // =================================================
+
+    let price =
       toNumber(
         data?.c
       );
 
 
+    // =================================================
+    // 如果当前价格无效
+    //
+    // 使用 previous close
+    //
+    // 这样即使当前市场没有实时价格，
+    // 也能取得最近有效价格。
+    // =================================================
+
     if (
       price <= 0
     ) {
+
+      price =
+        toNumber(
+          data?.pc
+        );
+
+    }
+
+
+    // =================================================
+    // 仍然没有价格
+    // =================================================
+
+    if (
+      price <= 0
+    ) {
+
+      console.error(
+        "❌ Finnhub 没有有效价格:",
+        symbol,
+        data
+      );
 
       return null;
 
     }
 
 
+    // =================================================
+    // 日期
+    // =================================================
+
+    let date =
+      new Date()
+        .toISOString()
+        .slice(
+          0,
+          10
+        );
+
+
+    // =================================================
+    // 如果 Finnhub 有 timestamp
+    // 使用 Finnhub 时间
+    // =================================================
+
+    if (
+      data?.t
+    ) {
+
+      const timestamp =
+        Number(
+          data.t
+        );
+
+
+      if (
+        Number.isFinite(
+          timestamp
+        ) &&
+        timestamp > 0
+      ) {
+
+        date =
+          new Date(
+            timestamp * 1000
+          )
+            .toISOString()
+            .slice(
+              0,
+              10
+            );
+
+      }
+
+    }
+
+
+    // =================================================
+    // 成功日志
+    // =================================================
+
+    console.log(
+      "✅ Finnhub 成功:",
+      {
+        symbol,
+
+        price,
+
+        date,
+
+        current:
+          data?.c,
+
+        previousClose:
+          data?.pc,
+
+        timestamp:
+          data?.t,
+
+      }
+    );
+
+
+    // =================================================
+    // 返回
+    // =================================================
+
     return {
 
       price,
 
-      date:
-        new Date()
-          .toISOString()
-          .slice(
-            0,
-            10
-          ),
+      date,
 
     };
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     console.error(
-      "getFinnhubPrice error:",
+      "❌ getFinnhubPrice exception:",
       symbol,
       error
     );
@@ -531,7 +800,9 @@ export async function getStockEventsPrice(
 
     };
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     console.error(
       "getStockEventsPrice error:",
@@ -608,7 +879,9 @@ export async function getUsdCny(): Promise<number | null> {
 
     return rate;
 
-  } catch (error) {
+  } catch (
+    error
+  ) {
 
     console.error(
       "getUsdCny error:",
@@ -722,7 +995,7 @@ export function detectMarketSource(
   // =================================================
   // 其他
   //
-// 默认按照美股 / ETF
+  // 默认按照美股 / ETF
   // =================================================
 
   return "finnhub";
@@ -747,6 +1020,10 @@ export async function getMarketPrice(
     );
 
 
+  // =================================================
+  // 特殊资产
+  // =================================================
+
   if (
     source === "skip"
   ) {
@@ -762,6 +1039,10 @@ export async function getMarketPrice(
 
   }
 
+
+  // =================================================
+  // 中国基金
+  // =================================================
 
   if (
     source === "china"
@@ -781,6 +1062,10 @@ export async function getMarketPrice(
   }
 
 
+  // =================================================
+  // HK / LU
+  // =================================================
+
   if (
     source === "stockevents"
   ) {
@@ -799,10 +1084,13 @@ export async function getMarketPrice(
   }
 
 
+  // =================================================
+  // US / ETF
+  // =================================================
+
   return {
 
     source:
-
       "finnhub",
 
     data:
