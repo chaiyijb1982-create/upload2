@@ -66,7 +66,10 @@ export default function Home() {
   // Platform Allocation
   // =====================================================
 
-  const [platformAllocation, setPlatformAllocation] =
+  const [
+    platformAllocation,
+    setPlatformAllocation,
+  ] =
     useState<any[]>([]);
 
 
@@ -74,7 +77,10 @@ export default function Home() {
   // Fixed Income
   // =====================================================
 
-  const [fixedIncomeTotal, setFixedIncomeTotal] =
+  const [
+    fixedIncomeTotal,
+    setFixedIncomeTotal,
+  ] =
     useState(0);
 
 
@@ -82,7 +88,10 @@ export default function Home() {
   // Loading
   // =====================================================
 
-  const [loading, setLoading] =
+  const [
+    loading,
+    setLoading,
+  ] =
     useState(true);
 
 
@@ -97,7 +106,7 @@ export default function Home() {
       try {
 
         // =================================================
-        // Dashboard 数据
+        // Dashboard 基础数据
         // =================================================
 
         const [
@@ -106,49 +115,41 @@ export default function Home() {
           holdingsAllocation,
           holdingsData,
           platformData,
-        ] = await Promise.all([
+        ] =
+          await Promise.all([
 
-          getLatestAsset(),
+            getLatestAsset(),
 
-          getAssetHistory(),
+            getAssetHistory(),
 
-          getHoldingsAllocation(),
+            getHoldingsAllocation(),
 
-          getHoldings(),
+            getHoldings(),
 
-          getHoldingsPlatformAllocation(),
+            getHoldingsPlatformAllocation(),
 
-        ]);
+          ]);
 
 
         // =================================================
         // 固收资产
-        //
-        // 来源：
-        // fixed_income_assets
-        //
-        // 包括：
-        // 万能险
-        // 活期
-        // 理财
-        // 其他固收
-        //
-        // 注意：
-        // 不读取 insurance_policies
         // =================================================
 
         const {
-          data: fixedIncomeData,
-          error: fixedIncomeError,
-        } = await supabase
+          data:
+            fixedIncomeData,
+          error:
+            fixedIncomeError,
+        } =
+          await supabase
 
-          .from(
-            "fixed_income_assets"
-          )
+            .from(
+              "fixed_income_assets"
+            )
 
-          .select(
-            "amount"
-          );
+            .select(
+              "amount"
+            );
 
 
         if (
@@ -164,7 +165,7 @@ export default function Home() {
 
 
         // =================================================
-        // 计算固收资产总额
+        // 固收总额
         // =================================================
 
         const fixedIncomeSum = (
@@ -210,6 +211,438 @@ export default function Home() {
 
 
         // =================================================
+        // Holdings
+        //
+        // 只计算 active
+        // =================================================
+
+        const activeHoldings = (
+
+          Array.isArray(
+            holdingsData
+          )
+            ? holdingsData
+            : []
+
+        ).filter(
+
+          (
+            item: any
+          ) =>
+            item?.active !== false
+
+        );
+
+
+        // =================================================
+        // 工具函数
+        // =================================================
+
+        const numberValue = (
+          value: any
+        ): number => {
+
+          const n =
+            Number(
+              value ?? 0
+            );
+
+
+          return Number.isFinite(
+            n
+          )
+            ? n
+            : 0;
+
+        };
+
+
+        // =================================================
+        // Total Profit
+        //
+        // 所有 active Holdings 的 profit 汇总
+        // =================================================
+
+        const totalProfit =
+          activeHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // Total Cost
+        //
+        // 所有 active Holdings 的 cost 汇总
+        // =================================================
+
+        const totalCost =
+          activeHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.cost
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // Total Return
+        //
+        // Profit / Cost
+        // =================================================
+
+        const totalRate =
+          totalCost > 0
+
+            ? (
+                totalProfit /
+                totalCost
+              ) * 100
+
+            : 0;
+
+
+        // =================================================
+        // Mainland Holdings
+        //
+        // 与 asset_history 的逻辑保持一致：
+        //
+        // CN / CHINA → 大陆
+        // 其他 → 香港 / 海外
+        // =================================================
+
+        const mainlandHoldings =
+          activeHoldings.filter(
+
+            (
+              item: any
+            ) => {
+
+              const market =
+                String(
+                  item?.market ?? ""
+                )
+                  .trim()
+                  .toUpperCase();
+
+
+              return (
+                market === "CN" ||
+                market === "CHINA"
+              );
+
+            }
+
+          );
+
+
+        // =================================================
+        // Mainland Profit
+        // =================================================
+
+        const cnProfit =
+          mainlandHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // Mainland Cost
+        // =================================================
+
+        const cnCost =
+          mainlandHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.cost
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // Mainland Return
+        // =================================================
+
+        const cnRate =
+          cnCost > 0
+
+            ? (
+                cnProfit /
+                cnCost
+              ) * 100
+
+            : 0;
+
+
+        // =================================================
+        // Overseas / HK Holdings
+        //
+        // 保持与你现在 asset_history
+        // hk_asset 的定义一致
+        //
+        // 非 CN 全部归入这里
+        // =================================================
+
+        const overseasHoldings =
+          activeHoldings.filter(
+
+            (
+              item: any
+            ) => {
+
+              const market =
+                String(
+                  item?.market ?? ""
+                )
+                  .trim()
+                  .toUpperCase();
+
+
+              return !(
+                market === "CN" ||
+                market === "CHINA"
+              );
+
+            }
+
+          );
+
+
+        // =================================================
+        // HK Profit
+        // =================================================
+
+        const hkProfit =
+          overseasHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // HK Cost
+        // =================================================
+
+        const hkCost =
+          overseasHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.cost
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // HK Return
+        // =================================================
+
+        const hkRate =
+          hkCost > 0
+
+            ? (
+                hkProfit /
+                hkCost
+              ) * 100
+
+            : 0;
+
+
+        // =================================================
+        // 原始 Total Wealth
+        //
+        // 来自 asset_history
+        //
+        // 这里不改变原有逻辑
+        // =================================================
+
+        const originalTotalWealth =
+          numberValue(
+            latestAsset?.total_asset
+          );
+
+
+        // =================================================
+        // 最终 Total Wealth
+        //
+        // Holdings / Asset History
+        // +
+        // 固收资产
+        // =================================================
+
+        const totalWealth =
+          originalTotalWealth +
+          fixedIncomeSum;
+
+
+        // =================================================
+        // Dashboard Asset
+        //
+        // 把真正计算出来的：
+        //
+        // total_profit
+        // total_rate
+        // cn_profit
+        // cn_rate
+        // hk_profit
+        // hk_rate
+        //
+        // 全部传给 AssetSummary
+        // =================================================
+
+        const dashboardAsset = {
+
+          ...latestAsset,
+
+          // -----------------------------
+          // Wealth
+          // -----------------------------
+
+          total_asset:
+            totalWealth,
+
+          total_wealth:
+            totalWealth,
+
+          original_total_asset:
+            originalTotalWealth,
+
+          fixed_income:
+            fixedIncomeSum,
+
+          fixed_income_total:
+            fixedIncomeSum,
+
+
+          // -----------------------------
+          // Profit
+          // -----------------------------
+
+          total_profit:
+            totalProfit,
+
+          total_cost:
+            totalCost,
+
+          total_rate:
+            totalRate,
+
+
+          // -----------------------------
+          // Mainland
+          // -----------------------------
+
+          cn_profit:
+            cnProfit,
+
+          cn_cost:
+            cnCost,
+
+          cn_rate:
+            cnRate,
+
+
+          // -----------------------------
+          // Hong Kong / Overseas
+          // -----------------------------
+
+          hk_profit:
+            hkProfit,
+
+          hk_cost:
+            hkCost,
+
+          hk_rate:
+            hkRate,
+
+        };
+
+
+        // =================================================
         // Debug
         // =================================================
 
@@ -217,47 +650,65 @@ export default function Home() {
           "========================================"
         );
 
-
         console.log(
           "Dashboard Asset:",
           latestAsset
         );
 
-
         console.log(
-          "Dashboard Fixed Income:",
-          fixedIncomeData
+          "Active Holdings:",
+          activeHoldings
         );
 
+        console.log(
+          "Total Cost:",
+          totalCost
+        );
 
         console.log(
-          "Dashboard Fixed Income Total:",
+          "Total Profit:",
+          totalProfit
+        );
+
+        console.log(
+          "Total Return:",
+          totalRate
+        );
+
+        console.log(
+          "Mainland Profit:",
+          cnProfit
+        );
+
+        console.log(
+          "Mainland Return:",
+          cnRate
+        );
+
+        console.log(
+          "HK / Overseas Profit:",
+          hkProfit
+        );
+
+        console.log(
+          "HK / Overseas Return:",
+          hkRate
+        );
+
+        console.log(
+          "Fixed Income:",
           fixedIncomeSum
         );
 
-
         console.log(
-          "Dashboard Platform Allocation:",
-          platformData
+          "Total Wealth:",
+          totalWealth
         );
 
-
         console.log(
-          "Original Total Wealth:",
-          Number(
-            latestAsset?.total_asset ?? 0
-          )
+          "Dashboard Asset Final:",
+          dashboardAsset
         );
-
-
-        console.log(
-          "New Total Wealth:",
-          Number(
-            latestAsset?.total_asset ?? 0
-          ) +
-          fixedIncomeSum
-        );
-
 
         console.log(
           "========================================"
@@ -269,7 +720,7 @@ export default function Home() {
         // =================================================
 
         setAsset(
-          latestAsset
+          dashboardAsset
         );
 
 
@@ -370,52 +821,19 @@ export default function Home() {
 
 
   // =====================================================
-  // 原始 Total Wealth
+  // Total Wealth
   // =====================================================
 
   const originalTotalWealth =
     Number(
-      asset?.total_asset ?? 0
+      asset?.original_total_asset ?? 0
     );
 
 
-  // =====================================================
-  // 最终 Total Wealth
-  //
-  // 原有资产
-  // +
-  // 固收资产
-  // =====================================================
-
   const totalWealth =
-    originalTotalWealth +
-    fixedIncomeTotal;
-
-
-  // =====================================================
-  // Dashboard Asset
-  // =====================================================
-
-  const dashboardAsset = {
-
-    ...asset,
-
-    total_asset:
-      totalWealth,
-
-    total_wealth:
-      totalWealth,
-
-    fixed_income:
-      fixedIncomeTotal,
-
-    fixed_income_total:
-      fixedIncomeTotal,
-
-    original_total_asset:
-      originalTotalWealth,
-
-  };
+    Number(
+      asset?.total_asset ?? 0
+    );
 
 
   // =====================================================
@@ -428,7 +846,7 @@ export default function Home() {
 
       {/* =================================================
           TopBar
-          ================================================= */}
+      ================================================= */}
 
       <TopBar
         title="Dashboard"
@@ -454,7 +872,7 @@ export default function Home() {
 
         <AssetSummary
           asset={
-            dashboardAsset
+            asset
           }
         />
 
@@ -558,7 +976,7 @@ export default function Home() {
 
             {/* ==========================================
                 资产定位
-                ========================================== */}
+            ========================================== */}
 
             <div
               className="
@@ -593,7 +1011,7 @@ export default function Home() {
 
             {/* ==========================================
                 Total Wealth
-                ========================================== */}
+            ========================================== */}
 
             <div
               className="
@@ -628,7 +1046,7 @@ export default function Home() {
 
             {/* ==========================================
                 Insurance
-                ========================================== */}
+            ========================================== */}
 
             <div
               className="
@@ -693,7 +1111,7 @@ export default function Home() {
 
         <AIAdvisor
           asset={
-            dashboardAsset
+            asset
           }
           allocation={
             allocation
@@ -878,6 +1296,52 @@ export default function Home() {
               ¥
               {Math.round(
                 totalWealth
+              ).toLocaleString(
+                "zh-CN"
+              )}
+
+            </p>
+
+
+            <p>
+
+              <b>
+                Total Cost:
+              </b>
+
+              {" "}
+
+              ¥
+              {Math.round(
+                Number(
+                  asset.total_cost ?? 0
+                )
+              ).toLocaleString(
+                "zh-CN"
+              )}
+
+            </p>
+
+
+            <p>
+
+              <b>
+                Total Profit:
+              </b>
+
+              {" "}
+
+              {Number(
+                asset.total_profit ?? 0
+              ) >= 0
+                ? "+"
+                : ""}
+
+              ¥
+              {Math.round(
+                Number(
+                  asset.total_profit ?? 0
+                )
               ).toLocaleString(
                 "zh-CN"
               )}

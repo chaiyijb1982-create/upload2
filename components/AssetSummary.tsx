@@ -4,15 +4,25 @@ interface Props {
   asset: any;
 }
 
-
 export default function AssetSummary({
   asset,
 }: Props) {
+
+  // =====================================================
+  // Total Wealth
+  // =====================================================
 
   const total =
     Number(
       asset?.total_asset || 0
     );
+
+
+  // =====================================================
+  // Profit
+  //
+  // 现在由 Dashboard 根据 Holdings 实际汇总
+  // =====================================================
 
   const totalProfit =
     Number(
@@ -25,6 +35,7 @@ export default function AssetSummary({
       asset?.cn_asset || 0
     );
 
+
   const hk =
     Number(
       asset?.hk_asset || 0
@@ -35,6 +46,7 @@ export default function AssetSummary({
     Number(
       asset?.cn_profit || 0
     );
+
 
   const hkProfit =
     Number(
@@ -47,6 +59,7 @@ export default function AssetSummary({
       asset?.cn_rate || 0
     );
 
+
   const hkRate =
     Number(
       asset?.hk_rate || 0
@@ -54,35 +67,58 @@ export default function AssetSummary({
 
 
   const totalRate =
-    total - totalProfit > 0
-      ? (
-          totalProfit /
-          (total - totalProfit)
-        ) * 100
-      : 0;
+    Number(
+      asset?.total_rate || 0
+    );
 
+
+  // =====================================================
+  // Asset Percentage
+  // =====================================================
 
   const cnPercent =
     total > 0
-      ? (cn / total) * 100
+      ? (
+          cn /
+          total
+        ) * 100
       : 0;
 
 
   const hkPercent =
     total > 0
-      ? (hk / total) * 100
+      ? (
+          hk /
+          total
+        ) * 100
       : 0;
 
+
+  // =====================================================
+  // Money Format
+  // =====================================================
 
   const money = (
     value: number
   ) =>
-    value.toLocaleString(
-      "zh-CN",
-      {
-        maximumFractionDigits: 0,
-      }
+    Math.round(
+      Number(value) || 0
+    ).toLocaleString(
+      "zh-CN"
     );
+
+
+  // =====================================================
+  // Rate Format
+  // =====================================================
+
+  const rate =
+    (
+      value: number
+    ) =>
+      Number(
+        value || 0
+      ).toFixed(2);
 
 
   return (
@@ -97,7 +133,7 @@ export default function AssetSummary({
     >
 
       {/* =================================
-          Total
+          Total Wealth
       ================================= */}
 
       <div
@@ -145,6 +181,10 @@ export default function AssetSummary({
           "
         >
 
+          {/* =============================
+              Total Profit
+          ============================= */}
+
           <div>
 
             <p
@@ -157,6 +197,7 @@ export default function AssetSummary({
               Total Profit
             </p>
 
+
             <p
               className={`
                 text-lg
@@ -168,12 +209,21 @@ export default function AssetSummary({
                 }
               `}
             >
-              {totalProfit >= 0 ? "+" : ""}
+
+              {totalProfit >= 0
+                ? "+"
+                : ""}
+
               ¥{money(totalProfit)}
+
             </p>
 
           </div>
 
+
+          {/* =============================
+              Return
+          ============================= */}
 
           <div>
 
@@ -187,6 +237,7 @@ export default function AssetSummary({
               Return
             </p>
 
+
             <p
               className={`
                 text-lg
@@ -198,8 +249,13 @@ export default function AssetSummary({
                 }
               `}
             >
-              {totalRate >= 0 ? "+" : ""}
-              {totalRate.toFixed(2)}%
+
+              {totalRate >= 0
+                ? "+"
+                : ""}
+
+              {rate(totalRate)}%
+
             </p>
 
           </div>
@@ -265,7 +321,11 @@ export default function AssetSummary({
           "
         >
 
-          <p className="text-gray-500">
+          <p
+            className="
+              text-gray-500
+            "
+          >
             📊 占比：{cnPercent.toFixed(1)}%
           </p>
 
@@ -280,9 +340,15 @@ export default function AssetSummary({
               }
             `}
           >
+
             💰{" "}
-            {cnProfit >= 0 ? "+" : ""}
+
+            {cnProfit >= 0
+              ? "+"
+              : ""}
+
             ¥{money(cnProfit)}
+
           </p>
 
 
@@ -296,9 +362,15 @@ export default function AssetSummary({
               }
             `}
           >
+
             📈{" "}
-            {cnRate >= 0 ? "+" : ""}
-            {cnRate.toFixed(2)}%
+
+            {cnRate >= 0
+              ? "+"
+              : ""}
+
+            {rate(cnRate)}%
+
           </p>
 
         </div>
@@ -350,7 +422,11 @@ export default function AssetSummary({
           "
         >
 
-          <p className="text-gray-500">
+          <p
+            className="
+              text-gray-500
+            "
+          >
             📊 占比：{hkPercent.toFixed(1)}%
           </p>
 
@@ -365,9 +441,15 @@ export default function AssetSummary({
               }
             `}
           >
+
             💰{" "}
-            {hkProfit >= 0 ? "+" : ""}
+
+            {hkProfit >= 0
+              ? "+"
+              : ""}
+
             ¥{money(hkProfit)}
+
           </p>
 
 
@@ -381,9 +463,15 @@ export default function AssetSummary({
               }
             `}
           >
+
             📈{" "}
-            {hkRate >= 0 ? "+" : ""}
-            {hkRate.toFixed(2)}%
+
+            {hkRate >= 0
+              ? "+"
+              : ""}
+
+            {rate(hkRate)}%
+
           </p>
 
         </div>
@@ -393,4 +481,5 @@ export default function AssetSummary({
     </div>
 
   );
+
 }
