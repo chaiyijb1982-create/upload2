@@ -251,56 +251,53 @@ export default function FinancialFreedom({
                         "========================================"
                     );
 
-                    console.log(
-                        "保单数量:",
-                        summary?.policyCount ??
-                        summary?.count ??
-                        "-"
-                    );
+                   console.log(
+  "保单数量:",
+  summary?.count ?? "-"
+);
 
-                    console.log(
-                        "总保费:",
-                        summary?.premiumTotal
-                    );
+console.log(
+  "总保费:",
+  summary?.premiumTotal
+);
 
-                    console.log(
-                        "累计实际已缴:",
-                        summary?.paidPremium
-                    );
+console.log(
+  "累计实际已缴:",
+  summary?.paidPremium
+);
 
-                    console.log(
-                        "累计未缴:",
-                        summary?.unpaidPremium
-                    );
+console.log(
+  "累计未缴:",
+  summary?.unpaidPremium
+);
 
-                    console.log(
-                        "完成率:",
-                        summary?.premiumProgress
-                    );
+console.log(
+  "完成率:",
+  summary?.premiumProgress
+);
 
-                    console.log(
-                        "当前现金价值:",
-                        summary?.cashValue ??
-                        summary?.todayCashValue
-                    );
+console.log(
+  "当前现金价值:",
+  summary?.cashValue ??
+  summary?.todayCashValue
+);
 
-                    console.log(
-                        "家庭现金价值:",
-                        summary?.familyCashValue ??
-                        summary?.cashValueByOwner
-                    );
+console.log(
+  "家庭现金价值:",
+  summary?.cashValue
+);
 
-                    console.log(
-                        "年领取:",
-                        summary?.annualIncome ??
-                        summary?.totalAnnualPension
-                    );
+console.log(
+  "年领取:",
+  summary?.annualIncome ??
+  summary?.totalAnnualPension
+);
 
-                    console.log(
-                        "月领取:",
-                        summary?.monthlyIncome ??
-                        summary?.totalMonthlyPension
-                    );
+console.log(
+  "月领取:",
+  summary?.monthlyIncome ??
+  summary?.totalMonthlyPension
+);
 
                     console.log(
                         "========================================"

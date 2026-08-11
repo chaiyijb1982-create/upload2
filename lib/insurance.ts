@@ -2003,18 +2003,20 @@ export async function getInsuranceYearProjection(){
                 ){
 
 
-                    const policy =
+                    const policy: any =
                         policies.find(
-                            (p:any)=>
+                            (p: any) =>
                                 normalizeId(p.id)
                                 ===
                                 normalizeId(row.policy_id)
-                        );
+                                            );
 
 
                     if(
-                        policy &&
-                        String(policy.owner||"").trim()
+                         policy &&
+                        String(
+                            policy.owner ?? ""
+                        ).trim()
                         ===
                         "儿子"
                     ){

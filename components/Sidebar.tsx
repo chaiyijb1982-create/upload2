@@ -13,55 +13,62 @@ const menus = [
 
   {
     id: 2,
+    name: "资产管理",
+    href: "/asset-management",
+    icon: "📊",
+  },
+
+  {
+    id: 3,
     name: "投资Perf",
     href: "/performance",
     icon: "📈",
   },
 
   {
-    id: 3,
+    id: 4,
     name: "固收资产",
     href: "/fixed-income",
     icon: "🏦",
   },
 
   {
-    id: 4,
+    id: 5,
     name: "贷款",
     href: "/loan",
     icon: "💰",
   },
 
   {
-    id: 5,
+    id: 6,
     name: "保险",
     href: "/insurance",
     icon: "🛡️",
   },
 
   {
-    id: 6,
+    id: 7,
     name: "财务自由规划",
     href: "/financial-freedom",
     icon: "💎",
   },
 
   {
-    id: 7,
+    id: 8,
     name: "天天向上当前",
     href: "/tiantian-up",
     icon: "🚀",
   },
 
   {
-    id: 8,
+    id: 9,
     name: "天天向上年度详细",
     href: "/tiantian-up-detail",
     icon: "🚀",
   },
 
   {
-    id: 9,
+    id: 10,
     name: "退休规划",
     href: "/retirement",
     icon: "🎯",
