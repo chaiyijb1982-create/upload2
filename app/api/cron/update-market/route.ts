@@ -13,6 +13,7 @@
 // 7. holdings_history 按 snapshot_date + code 防止重复
 // 8. 更新 asset_history
 // 9. WELAB_GOLD / HK_CASH 跳过
+// 10. shares = 0 的资产允许正常更新，市值为 0
 //
 // 注意：
 // 本文件只能运行在服务器端
@@ -621,6 +622,10 @@ function getHoldingMarket(
 
 // =====================================================
 // USD → CNY
+//
+// 重要：
+// shares = 0 是合法状态。
+// 此时 amount = 0，不应该报错。
 // =====================================================
 
 function calculateAmountCny(
@@ -636,9 +641,30 @@ function calculateAmountCny(
     );
 
 
+  // ===================================================
+  // shares < 0 才是异常
+  // shares = 0 是合法状态
+  // ===================================================
+
   if (
-    shares <= 0 ||
+    shares < 0 ||
     nav <= 0
+  ) {
+
+    return 0;
+
+  }
+
+
+  // ===================================================
+  // 没有持仓
+  //
+  // 仍然允许更新 NAV。
+  // 市值 = 0
+  // ===================================================
+
+  if (
+    shares === 0
   ) {
 
     return 0;
@@ -715,11 +741,7 @@ function calculateProfitRate(
 // =====================================================
 // holdings_history
 //
-// 这里改成：
 // Service Role Client
-//
-// 原来的 supabase Client 很可能受到 RLS 限制。
-// Python 原来能写入，是因为使用了 Service Role Key。
 //
 // 今天已有：UPDATE
 // 今天没有：INSERT
@@ -1861,7 +1883,21 @@ export async function GET(
 
 
         // =================================================
+        // Shares
+        // =================================================
+
+        const shares =
+          toNumber(
+            holding.shares
+          );
+
+
+        // =================================================
         // CNY 市值
+        //
+        // shares = 0：
+        // 合法，不报错。
+        // amount = 0。
         // =================================================
 
         const amount =
@@ -1878,8 +1914,18 @@ export async function GET(
           );
 
 
+        // =================================================
+        // 真正异常：
+        //
+        // 1. shares < 0
+        // 2. nav <= 0
+        //
+        // shares = 0 不属于异常。
+        // =================================================
+
         if (
-          amount <= 0
+          shares < 0 ||
+          nav <= 0
         ) {
 
           failed++;
@@ -1903,7 +1949,7 @@ export async function GET(
               "failed",
 
             reason:
-              "无法计算人民币市值",
+              "持仓数量或市场价格无效",
 
           });
 
@@ -1943,6 +1989,12 @@ export async function GET(
 
         // =================================================
         // 更新 holdings
+        //
+        // 即使 shares = 0：
+        //
+        // amount = 0
+        // nav = 最新价格
+        // profit = 0 - cost
         // =================================================
 
         const {
@@ -2069,10 +2121,7 @@ export async function GET(
           currency:
             "CNY",
 
-          shares:
-            toNumber(
-              holding.shares
-            ),
+          shares,
 
           updated_at:
             new Date()
@@ -2166,9 +2215,8 @@ export async function GET(
     // ===================================================
     // holdings_history
     //
-    // 注意：
     // 保存全部 holdings
-    // 与你原来的 Python 行为保持一致。
+    // 与原来的 Python 行为保持一致。
     // ===================================================
 
     let holdingsHistoryInserted =
@@ -2307,6 +2355,9 @@ export async function GET(
 
     // ===================================================
     // 最终 Success
+    //
+    // 只有真正存在失败时才 false。
+    // shares = 0 不会造成 failed。
     // ===================================================
 
     const success =
