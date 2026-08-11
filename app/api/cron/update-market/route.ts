@@ -3,20 +3,39 @@
 //
 // 全球资产自动更新
 //
+// 运行方式：
+//
+// GET /api/cron/update-market
+//
 // Vercel Cron：
-// UTC 22:00
+// 每天 UTC 22:00
 // = 中国时间每天 06:00
 //
-// 核心逻辑：
+// 功能：
+// 1. 获取 USD/CNY
+// 2. 获取所有 active Holdings
+// 3. 中国基金 → 天天基金 / 东方财富
+// 4. 美股 / ETF → Finnhub
+// 5. HK / LU → StockEvents
+// 6. 计算人民币市值
+// 7. 更新 Holdings
+// 8. 创建 / 更新 holdings_history
+// 9. 创建 / 更新 asset_history
 //
-// 1. 每天 Cron 都运行
-// 2. 不同市场分别判断交易日
-// 3. 中国市场休市 → 中国资产跳过
-// 4. 美国市场休市 → 美国资产跳过
-// 5. 香港市场休市 → 香港资产跳过
-// 6. LU 基金按卢森堡工作日处理
-// 7. 只要有市场成功更新，就更新 asset_history
+// holdings_history 规则：
 //
+// - 当天至少有一个市场成功更新
+//   → 创建当天历史快照
+//
+// - 同一个 code + snapshot_date
+//   → 不重复 INSERT
+//   → UPDATE
+//
+// - 如果当天没有任何市场更新
+//   → 不创建 holdings_history
+//
+// 注意：
+// 当前 route 不依赖 CRON_SECRET
 // =====================================================
 
 import {
@@ -31,10 +50,6 @@ import {
 import type {
   MarketSource,
 } from "@/lib/market-data";
-
-import {
-  isTradingDay,
-} from "@/lib/trading-calendar";
 
 
 // =====================================================
@@ -104,7 +119,7 @@ function toNumber(
 
 
 // =====================================================
-// bigint
+// bigint 字段
 // =====================================================
 
 function toBigIntNumber(
@@ -130,41 +145,18 @@ function toBigIntNumber(
 
 
 // =====================================================
-// 日期工具
+// 中国日期
 //
-// 这里非常重要。
-//
-// Cron 在：
-// UTC 22:00
-//
-// 中国：
-// 次日 06:00
-//
-// 美国东部：
-// 当日 18:00（夏令时）
-//
-// 香港：
-// 次日 06:00
-//
-// 卢森堡：
-// 次日 00:00（夏令时）
-//
-// 所以不能统一使用：
-// new Date() - 24小时
-//
-// 必须按照市场自己的时区判断。
+// 所有历史记录统一使用中国日期
 // =====================================================
 
-function getDateStringInTimeZone(
-  date: Date,
-  timeZone: string
-): string {
+function getChinaDate(): string {
 
   return new Intl.DateTimeFormat(
     "en-CA",
     {
-
-      timeZone,
+      timeZone:
+        "Asia/Shanghai",
 
       year:
         "numeric",
@@ -176,342 +168,10 @@ function getDateStringInTimeZone(
         "2-digit",
 
     }
-  ).format(
-    date
-  );
-
-}
-
-
-// =====================================================
-// 根据 YYYY-MM-DD 创建 UTC Date
-// =====================================================
-
-function dateFromString(
-  value: string
-): Date {
-
-  const [
-    year,
-    month,
-    day,
-  ] =
-    value
-      .split("-")
-      .map(
-        Number
-      );
-
-  return new Date(
-    Date.UTC(
-      year,
-      month - 1,
-      day
-    )
-  );
-
-}
-
-
-// =====================================================
-// 前一天
-// =====================================================
-
-function previousDate(
-  value: string
-): string {
-
-  const date =
-    dateFromString(
-      value
+  )
+    .format(
+      new Date()
     );
-
-  date.setUTCDate(
-    date.getUTCDate() - 1
-  );
-
-  return date
-    .toISOString()
-    .slice(
-      0,
-      10
-    );
-
-}
-
-
-// =====================================================
-// 获取市场需要检查的交易日
-//
-// 中国 / 香港：
-// Cron 发生在当地早上
-// → 检查昨天
-//
-// 美国：
-// Cron 发生时美国还是前一天晚上
-// 但当天美股已经收盘
-// → 检查美国“当前日期”
-//
-// 卢森堡：
-// Cron 发生时当地已经进入第二天凌晨
-// → 检查当地昨天
-// =====================================================
-
-type TradingMarket =
-  | "china"
-  | "us"
-  | "hongkong"
-  | "luxembourg";
-
-
-function getMarketCheckDate(
-  market: TradingMarket
-): string {
-
-  const now =
-    new Date();
-
-
-  switch (
-    market
-  ) {
-
-    // ---------------------------------------------
-    // 中国
-    // ---------------------------------------------
-
-    case "china": {
-
-      const today =
-        getDateStringInTimeZone(
-          now,
-          "Asia/Shanghai"
-        );
-
-      return previousDate(
-        today
-      );
-
-    }
-
-
-    // ---------------------------------------------
-    // 香港
-    // ---------------------------------------------
-
-    case "hongkong": {
-
-      const today =
-        getDateStringInTimeZone(
-          now,
-          "Asia/Hong_Kong"
-        );
-
-      return previousDate(
-        today
-      );
-
-    }
-
-
-    // ---------------------------------------------
-    // 美国
-    //
-    // Cron 22:00 UTC：
-    //
-    // 夏令时：
-    // 18:00 New York
-    //
-    // 冬令时：
-    // 17:00 New York
-    //
-    // 都已经过正常收盘。
-    // ---------------------------------------------
-
-    case "us": {
-
-      return getDateStringInTimeZone(
-        now,
-        "America/New_York"
-      );
-
-    }
-
-
-    // ---------------------------------------------
-    // 卢森堡
-    // ---------------------------------------------
-
-    case "luxembourg": {
-
-      const today =
-        getDateStringInTimeZone(
-          now,
-          "Europe/Luxembourg"
-        );
-
-      return previousDate(
-        today
-      );
-
-    }
-
-
-    default:
-
-      return previousDate(
-        getDateStringInTimeZone(
-          now,
-          "Asia/Shanghai"
-        )
-      );
-
-  }
-
-}
-
-
-// =====================================================
-// 判断市场是否应该更新
-// =====================================================
-
-function shouldUpdateMarket(
-  market: TradingMarket
-): {
-
-  shouldUpdate: boolean;
-
-  date: string;
-
-} {
-
-  const date =
-    getMarketCheckDate(
-      market
-    );
-
-
-  const shouldUpdate =
-    isTradingDay(
-      market,
-      dateFromString(
-        date
-      )
-    );
-
-
-  return {
-
-    shouldUpdate,
-
-    date,
-
-  };
-
-}
-
-
-// =====================================================
-// 根据 Holding 判断市场
-//
-// 注意：
-//
-// 中国基金：
-// 6位数字
-//
-// Finnhub：
-// 美国资产
-//
-// StockEvents：
-// HK / LU
-//
-// 这里仍然以 code 为主。
-// 不修改 market-data.ts 的数据源逻辑。
-// =====================================================
-
-function getTradingMarket(
-  holding: Holding,
-  source: MarketSource
-): TradingMarket | null {
-
-  const code =
-    String(
-      holding.code ?? ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  // ---------------------------------------------
-  // 中国基金
-  // ---------------------------------------------
-
-  if (
-    source === "china"
-  ) {
-
-    return "china";
-
-  }
-
-
-  // ---------------------------------------------
-  // Finnhub
-  //
-  // 当前系统 Finnhub 默认就是美股 / ETF
-  // ---------------------------------------------
-
-  if (
-    source === "finnhub"
-  ) {
-
-    return "us";
-
-  }
-
-
-  // ---------------------------------------------
-  // StockEvents
-  //
-  // HKxxxxxxxxxx
-  // → 香港
-  //
-  // LUxxxxxxxxxx
-  // → 卢森堡
-  // ---------------------------------------------
-
-  if (
-    source === "stockevents"
-  ) {
-
-    if (
-      code.startsWith(
-        "HK"
-      )
-    ) {
-
-      return "hongkong";
-
-    }
-
-
-    if (
-      code.startsWith(
-        "LU"
-      )
-    ) {
-
-      return "luxembourg";
-
-    }
-
-
-    return null;
-
-  }
-
-
-  return null;
 
 }
 
@@ -533,10 +193,7 @@ function isUsdAsset(
       .toUpperCase();
 
 
-  // ---------------------------------------------
   // 明确 USD
-  // ---------------------------------------------
-
   if (
     curr === "USD"
   ) {
@@ -546,10 +203,7 @@ function isUsdAsset(
   }
 
 
-  // ---------------------------------------------
   // 明确 CNY
-  // ---------------------------------------------
-
   if (
     curr === "CNY" ||
     curr === "RMB"
@@ -560,10 +214,7 @@ function isUsdAsset(
   }
 
 
-  // ---------------------------------------------
   // Finnhub 默认 USD
-  // ---------------------------------------------
-
   if (
     source === "finnhub"
   ) {
@@ -573,10 +224,7 @@ function isUsdAsset(
   }
 
 
-  // ---------------------------------------------
   // StockEvents 当前返回 USD
-  // ---------------------------------------------
-
   if (
     source === "stockevents"
   ) {
@@ -586,10 +234,7 @@ function isUsdAsset(
   }
 
 
-  // ---------------------------------------------
   // 默认 CNY
-  // ---------------------------------------------
-
   return false;
 
 }
@@ -706,7 +351,7 @@ async function updateHolding(
 
 
   // ===================================================
-  // 获取市场数据源
+  // 获取市场数据
   // ===================================================
 
   const {
@@ -748,100 +393,6 @@ async function updateHolding(
 
 
   // ===================================================
-  // 判断所属市场
-  // ===================================================
-
-  const tradingMarket =
-    getTradingMarket(
-      holding,
-      source
-    );
-
-
-  // ===================================================
-  // 无法判断市场
-  // ===================================================
-
-  if (
-    !tradingMarket
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      status:
-        "failed",
-
-      reason:
-        "无法判断交易市场",
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 判断市场交易日
-  // ===================================================
-
-  const tradingStatus =
-    shouldUpdateMarket(
-      tradingMarket
-    );
-
-
-  console.log(
-    `📅 ${code} | market=${tradingMarket} | checkDate=${tradingStatus.date} | trading=${tradingStatus.shouldUpdate}`
-  );
-
-
-  // ===================================================
-  // 市场休市
-  //
-  // 只跳过这个 Holding。
-  //
-  // 不影响其他市场。
-  // ===================================================
-
-  if (
-    !tradingStatus.shouldUpdate
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      market:
-        tradingMarket,
-
-      status:
-        "skipped",
-
-      reason:
-        "该市场对应日期休市",
-
-      check_date:
-        tradingStatus.date,
-
-    };
-
-  }
-
-
-  // ===================================================
   // 市场价格获取失败
   // ===================================================
 
@@ -861,9 +412,6 @@ async function updateHolding(
 
       source,
 
-      market:
-        tradingMarket,
-
       status:
         "failed",
 
@@ -874,10 +422,6 @@ async function updateHolding(
 
   }
 
-
-  // ===================================================
-  // NAV / Price
-  // ===================================================
 
   const nav =
     toNumber(
@@ -908,9 +452,6 @@ async function updateHolding(
       name,
 
       source,
-
-      market:
-        tradingMarket,
 
       status:
         "failed",
@@ -1020,7 +561,7 @@ async function updateHolding(
 
 
   // ===================================================
-  // 更新 Supabase
+  // 更新 Holdings
   // ===================================================
 
   const {
@@ -1074,9 +615,6 @@ async function updateHolding(
 
       source,
 
-      market:
-        tradingMarket,
-
       status:
         "failed",
 
@@ -1093,7 +631,7 @@ async function updateHolding(
   // ===================================================
 
   console.log(
-    `✅ ${code} | ${source} | market=${tradingMarket} | NAV=${nav} | amount=${payload.amount}`
+    `✅ ${code} | ${source} | NAV=${nav} | amount=${payload.amount}`
   );
 
 
@@ -1107,9 +645,6 @@ async function updateHolding(
 
     source,
 
-    market:
-      tradingMarket,
-
     status:
       "updated",
 
@@ -1118,15 +653,481 @@ async function updateHolding(
     amount:
       payload.amount,
 
+    cost,
+
     profit:
       payload.profit,
 
     profit_rate:
       payload.profit_rate,
 
+    currency:
+      holding.currency ?? "CNY",
+
+    market:
+      holding.market ?? null,
+
+    category:
+      holding.category ?? null,
+
+    shares,
+
     updated_at:
       updated?.updated_at ??
       payload.updated_at,
+
+  };
+
+}
+
+
+// =====================================================
+// 创建 / 更新 Holdings History
+//
+// 重要：
+//
+// holdings_history 是真正的每日持仓历史
+//
+// 每天：
+// code + snapshot_date
+// 最多一条
+//
+// 如果当天已经存在：
+// UPDATE
+//
+// 如果不存在：
+// INSERT
+//
+// 只有当天至少有一个 Holding 成功更新
+// 才会执行这里
+// =====================================================
+
+async function createHoldingsHistory(
+  snapshotDate: string
+) {
+
+  // ===================================================
+  // 获取当前全部 active holdings
+  // ===================================================
+
+  const {
+    data,
+    error,
+  } =
+    await supabase
+
+      .from(
+        "holdings"
+      )
+
+      .select(
+        `
+        code,
+        name,
+        market,
+        category,
+        amount,
+        updated_at,
+        cost,
+        profit,
+        profit_rate,
+        currency,
+        nav,
+        shares,
+        snapshot_date
+        `
+      )
+
+      .eq(
+        "active",
+        true
+      );
+
+
+  if (
+    error
+  ) {
+
+    console.error(
+      "❌ 获取 Holdings History 数据失败:",
+      error
+    );
+
+    return {
+
+      success:
+        false,
+
+      inserted:
+        0,
+
+      updated:
+        0,
+
+      failed:
+        0,
+
+      error:
+        error.message,
+
+    };
+
+  }
+
+
+  const holdings =
+    data ?? [];
+
+
+  if (
+    holdings.length === 0
+  ) {
+
+    return {
+
+      success:
+        false,
+
+      inserted:
+        0,
+
+      updated:
+        0,
+
+      failed:
+        0,
+
+      error:
+        "没有 active holdings",
+
+    };
+
+  }
+
+
+  // ===================================================
+  // 统计
+  // ===================================================
+
+  let inserted =
+    0;
+
+  let updated =
+    0;
+
+  let failed =
+    0;
+
+
+  // ===================================================
+  // 逐个保存历史
+  // ===================================================
+
+  for (
+    const holding
+    of holdings
+  ) {
+
+    const code =
+      String(
+        holding.code ?? ""
+      )
+        .trim()
+        .toUpperCase();
+
+
+    if (
+      !code
+    ) {
+
+      failed++;
+
+      continue;
+
+    }
+
+
+    // =================================================
+    // 历史 Payload
+    // =================================================
+
+    const payload = {
+
+      code,
+
+      name:
+        holding.name ??
+        null,
+
+      market:
+        holding.market ??
+        null,
+
+      category:
+        holding.category ??
+        null,
+
+      amount:
+        toBigIntNumber(
+          holding.amount
+        ),
+
+      updated_at:
+        holding.updated_at ??
+        new Date()
+          .toISOString(),
+
+      cost:
+        toBigIntNumber(
+          holding.cost
+        ),
+
+      profit:
+        toBigIntNumber(
+          holding.profit
+        ),
+
+      profit_rate:
+        Number(
+          toNumber(
+            holding.profit_rate
+          ).toFixed(
+            4
+          )
+        ),
+
+      currency:
+        holding.currency ??
+        "CNY",
+
+      nav:
+        toNumber(
+          holding.nav
+        ),
+
+      shares:
+        toNumber(
+          holding.shares
+        ),
+
+      snapshot_date:
+        snapshotDate,
+
+    };
+
+
+    // =================================================
+    // 查询当天该 code 是否已经存在
+    // =================================================
+
+    const {
+      data:
+        existing,
+      error:
+        existingError,
+    } =
+      await supabase
+
+        .from(
+          "holdings_history"
+        )
+
+        .select(
+          "id"
+        )
+
+        .eq(
+          "code",
+          code
+        )
+
+        .eq(
+          "snapshot_date",
+          snapshotDate
+        )
+
+        .limit(
+          1
+        );
+
+
+    // =================================================
+    // 查询失败
+    // =================================================
+
+    if (
+      existingError
+    ) {
+
+      console.error(
+        `❌ Holdings History 查询失败 [${code}]:`,
+        existingError
+      );
+
+      failed++;
+
+      continue;
+
+    }
+
+
+    // =================================================
+    // 已存在 → UPDATE
+    // =================================================
+
+    if (
+      existing &&
+      existing.length > 0
+    ) {
+
+      const historyId =
+        existing[0].id;
+
+
+      const {
+        error:
+          updateError,
+      } =
+        await supabase
+
+          .from(
+            "holdings_history"
+          )
+
+          .update(
+            payload
+          )
+
+          .eq(
+            "id",
+            historyId
+          );
+
+
+      if (
+        updateError
+      ) {
+
+        console.error(
+          `❌ Holdings History 更新失败 [${code}]:`,
+          updateError
+        );
+
+        failed++;
+
+        continue;
+
+      }
+
+
+      updated++;
+
+      console.log(
+        `🔄 Holdings History 更新: ${code} | ${snapshotDate}`
+      );
+
+
+      continue;
+
+    }
+
+
+    // =================================================
+    // 不存在 → INSERT
+    // =================================================
+
+    const {
+      error:
+        insertError,
+    } =
+      await supabase
+
+        .from(
+          "holdings_history"
+        )
+
+        .insert(
+          payload
+        );
+
+
+    if (
+      insertError
+    ) {
+
+      console.error(
+        `❌ Holdings History 插入失败 [${code}]:`,
+        insertError
+      );
+
+      failed++;
+
+      continue;
+
+    }
+
+
+    inserted++;
+
+    console.log(
+      `📝 Holdings History 创建: ${code} | ${snapshotDate}`
+    );
+
+  }
+
+
+  // ===================================================
+  // 完成
+  // ===================================================
+
+  console.log(
+    "======================================="
+  );
+
+  console.log(
+    "Holdings History 完成"
+  );
+
+  console.log(
+    "日期:",
+    snapshotDate
+  );
+
+  console.log(
+    "INSERT:",
+    inserted
+  );
+
+  console.log(
+    "UPDATE:",
+    updated
+  );
+
+  console.log(
+    "FAILED:",
+    failed
+  );
+
+  console.log(
+    "======================================="
+  );
+
+
+  return {
+
+    success:
+      failed === 0,
+
+    inserted,
+
+    updated,
+
+    failed,
+
+    error:
+      failed > 0
+        ? "部分 Holdings History 写入失败"
+        : null,
 
   };
 
@@ -1206,10 +1207,8 @@ async function createAssetHistory(
   let totalAsset =
     0;
 
-
   let cnAsset =
     0;
-
 
   let hkAsset =
     0;
@@ -1242,7 +1241,8 @@ async function createAssetHistory(
 
 
       if (
-        market === "CN"
+        market === "CN" ||
+        market === "CHINA"
       ) {
 
         cnAsset +=
@@ -1264,10 +1264,7 @@ async function createAssetHistory(
   // ===================================================
 
   const snapshotDate =
-    getDateStringInTimeZone(
-      new Date(),
-      "Asia/Shanghai"
-    );
+    getChinaDate();
 
 
   // ===================================================
@@ -1333,10 +1330,6 @@ async function createAssetHistory(
         1
       );
 
-
-  // ===================================================
-  // 查询失败
-  // ===================================================
 
   if (
     existingError
@@ -1548,18 +1541,21 @@ export async function GET() {
 
 
   console.log();
+
   console.log(
     "======================================="
   );
+
   console.log(
     "开始自动更新全球资产"
   );
+
   console.log(
     "=======================================");
 
 
   // ===================================================
-  // 1. 获取 USD/CNY
+  // 1. USD/CNY
   // ===================================================
 
   const usdCny =
@@ -1602,7 +1598,7 @@ export async function GET() {
 
 
   // ===================================================
-  // 2. 获取 Active Holdings
+  // 2. Active Holdings
   // ===================================================
 
   const holdings =
@@ -1647,65 +1643,7 @@ export async function GET() {
 
 
   // ===================================================
-  // 3. 显示各市场交易状态
-  // ===================================================
-
-  const marketStatus = {
-
-    china:
-      shouldUpdateMarket(
-        "china"
-      ),
-
-    us:
-      shouldUpdateMarket(
-        "us"
-      ),
-
-    hongkong:
-      shouldUpdateMarket(
-        "hongkong"
-      ),
-
-    luxembourg:
-      shouldUpdateMarket(
-        "luxembourg"
-      ),
-
-  };
-
-
-  console.log(
-    "======================================="
-  );
-
-  console.log(
-    "市场交易状态:"
-  );
-
-  console.log(
-    "🇨🇳 China:",
-    marketStatus.china
-  );
-
-  console.log(
-    "🇺🇸 US:",
-    marketStatus.us
-  );
-
-  console.log(
-    "🇭🇰 Hong Kong:",
-    marketStatus.hongkong
-  );
-
-  console.log(
-    "🇱🇺 Luxembourg:",
-    marketStatus.luxembourg
-  );
-
-
-  // ===================================================
-  // 4. 更新全部资产
+  // 3. 更新全部资产
   // ===================================================
 
   const results:
@@ -1767,7 +1705,7 @@ export async function GET() {
 
 
   // ===================================================
-  // 5. 统计
+  // 4. 统计
   // ===================================================
 
   const updated =
@@ -1795,10 +1733,62 @@ export async function GET() {
 
 
   // ===================================================
-  // 6. Asset History
+  // 5. 中国日期
+  // ===================================================
+
+  const snapshotDate =
+    getChinaDate();
+
+
+  // ===================================================
+  // 6. Holdings History
   //
-  // 只要有至少一个市场成功更新
-  // 就更新当天历史。
+  // 只要当天至少有一个资产成功更新
+  // 就记录当天全部 active holdings
+  //
+  // 同一天重复执行：
+  // UPDATE
+  // 不重复 INSERT
+  // ===================================================
+
+  let holdingsHistory:
+    any = {
+
+      success:
+        false,
+
+      inserted:
+        0,
+
+      updated:
+        0,
+
+      failed:
+        0,
+
+      error:
+        null,
+
+    };
+
+
+  if (
+    updated > 0
+  ) {
+
+    holdingsHistory =
+      await createHoldingsHistory(
+        snapshotDate
+      );
+
+  }
+
+
+  // ===================================================
+  // 7. Asset History
+  //
+  // 只要有成功更新
+  // 创建 / 更新当天资产历史
   // ===================================================
 
   let assetHistory:
@@ -1838,7 +1828,7 @@ export async function GET() {
 
 
   // ===================================================
-  // 7. 完成
+  // 8. 完成
   // ===================================================
 
   const duration =
@@ -1847,6 +1837,7 @@ export async function GET() {
 
 
   console.log();
+
   console.log(
     "======================================="
   );
@@ -1856,8 +1847,7 @@ export async function GET() {
   );
 
   console.log(
-    "======================================="
-  );
+    "=======================================");
 
 
   console.log(
@@ -1865,30 +1855,42 @@ export async function GET() {
     holdings.length
   );
 
+
   console.log(
     "成功:",
     updated
   );
+
 
   console.log(
     "失败:",
     failed
   );
 
+
   console.log(
     "跳过:",
     skipped
   );
+
 
   console.log(
     "USD/CNY:",
     usdCny
   );
 
+
+  console.log(
+    "Holdings History:",
+    holdingsHistory
+  );
+
+
   console.log(
     "Asset History:",
     assetHistory
   );
+
 
   console.log(
     "耗时:",
@@ -1898,7 +1900,7 @@ export async function GET() {
 
 
   // ===================================================
-  // 8. 返回结果
+  // 9. 返回结果
   // ===================================================
 
   return Response.json({
@@ -1915,10 +1917,7 @@ export async function GET() {
       ),
 
     date:
-      getDateStringInTimeZone(
-        new Date(),
-        "Asia/Shanghai"
-      ),
+      snapshotDate,
 
     usd_cny:
       Number(
@@ -1936,8 +1935,20 @@ export async function GET() {
 
     skipped,
 
-    market_status:
-      marketStatus,
+    holdings_history:
+      holdingsHistory.success,
+
+    holdings_history_inserted:
+      holdingsHistory.inserted,
+
+    holdings_history_updated:
+      holdingsHistory.updated,
+
+    holdings_history_failed:
+      holdingsHistory.failed,
+
+    holdings_history_error:
+      holdingsHistory.error,
 
     asset_history:
       assetHistory.success,
