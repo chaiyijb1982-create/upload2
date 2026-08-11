@@ -21,6 +21,10 @@
 import { NextResponse } from "next/server";
 
 import {
+  createClient,
+} from "@supabase/supabase-js";
+
+import {
   supabase,
 } from "@/lib/supabase";
 
@@ -163,16 +167,69 @@ function isWeekend(
 
 
 // =====================================================
+// Service Role Supabase Client
+//
+// 专门用于服务器端历史数据写入。
+// 不要放到客户端。
+// =====================================================
+
+function getAdminSupabase() {
+
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ??
+    process.env.SUPABASE_URL;
+
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+
+  if (
+    !url
+  ) {
+
+    throw new Error(
+      "SUPABASE_URL 未配置"
+    );
+
+  }
+
+
+  if (
+    !serviceRoleKey
+  ) {
+
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY 未配置"
+    );
+
+  }
+
+
+  return createClient(
+    url,
+    serviceRoleKey,
+    {
+
+      auth: {
+
+        autoRefreshToken:
+          false,
+
+        persistSession:
+          false,
+
+      },
+
+    }
+  );
+
+}
+
+
+// =====================================================
 // 交易日 API
 //
-// 使用开放的交易日数据判断。
-// 如果 API 不可用，则至少保证周末不更新。
-//
-// 这里分别处理：
-// CN
-// US
-// HK
-// LU
+// 使用 Yahoo Finance chart 判断市场是否有当天数据。
 // =====================================================
 
 async function checkTradingDay(
@@ -181,6 +238,7 @@ async function checkTradingDay(
 
   const today =
     new Date();
+
 
   const todayStr =
     formatDate(today);
@@ -196,9 +254,11 @@ async function checkTradingDay(
 
     return {
 
-      shouldUpdate: false,
+      shouldUpdate:
+        false,
 
-      date: todayStr,
+      date:
+        todayStr,
 
     };
 
@@ -206,9 +266,7 @@ async function checkTradingDay(
 
 
   // ===================================================
-  // 使用 Yahoo Finance chart 判断市场是否有当天数据
-  //
-  // 不直接使用价格，只判断是否存在最近交易数据。
+  // 市场参考代码
   // ===================================================
 
   let symbol = "";
@@ -218,7 +276,6 @@ async function checkTradingDay(
     market === "china"
   ) {
 
-    // 中国市场使用上证指数
     symbol =
       "000001.SS";
 
@@ -243,8 +300,6 @@ async function checkTradingDay(
     market === "luxembourg"
   ) {
 
-    // 卢森堡基金没有统一指数，
-    // 使用欧洲市场 ETF 作为交易日参考。
     symbol =
       "VGK";
 
@@ -253,9 +308,11 @@ async function checkTradingDay(
 
     return {
 
-      shouldUpdate: false,
+      shouldUpdate:
+        false,
 
-      date: todayStr,
+      date:
+        todayStr,
 
     };
 
@@ -271,6 +328,7 @@ async function checkTradingDay(
         ).getTime() /
         1000
       );
+
 
     const end =
       Math.floor(
@@ -325,14 +383,10 @@ async function checkTradingDay(
       );
 
 
-      // API 出问题：
-      // 工作日允许继续尝试
       return {
 
         shouldUpdate:
-          !isWeekend(
-            today
-          ),
+          !isWeekend(today),
 
         date:
           todayStr,
@@ -394,15 +448,10 @@ async function checkTradingDay(
     );
 
 
-    // 网络检查失败时：
-    // 周末不更新
-    // 工作日继续尝试
     return {
 
       shouldUpdate:
-        !isWeekend(
-          today
-        ),
+        !isWeekend(today),
 
       date:
         todayStr,
@@ -572,12 +621,6 @@ function getHoldingMarket(
 
 // =====================================================
 // USD → CNY
-//
-// 中国资产：
-// amount = shares × NAV
-//
-// US / HK / LU：
-// amount = shares × NAV × USD/CNY
 // =====================================================
 
 function calculateAmountCny(
@@ -626,14 +669,7 @@ function calculateAmountCny(
 
 
 // =====================================================
-// 计算 Profit
-//
-// 注意：
-// cost 已经统一为 CNY
-// amount 也统一为 CNY
-//
-// 所以：
-// profit = amount - cost
+// Profit
 // =====================================================
 
 function calculateProfit(
@@ -679,14 +715,16 @@ function calculateProfitRate(
 // =====================================================
 // holdings_history
 //
-// 今天已经存在：
-// UPDATE
+// 这里改成：
+// Service Role Client
 //
-// 今天不存在：
-// INSERT
+// 原来的 supabase Client 很可能受到 RLS 限制。
+// Python 原来能写入，是因为使用了 Service Role Key。
 //
-// 唯一判断：
-// snapshot_date + code
+// 今天已有：UPDATE
+// 今天没有：INSERT
+//
+// 判断：snapshot_date + code
 // =====================================================
 
 async function saveHoldingsHistory(
@@ -700,6 +738,61 @@ async function saveHoldingsHistory(
 
   let failed = 0;
 
+
+  // ===================================================
+  // 获取后台 Client
+  // ===================================================
+
+  let adminSupabase;
+
+
+  try {
+
+    adminSupabase =
+      getAdminSupabase();
+
+  } catch (
+    error: any
+  ) {
+
+    return {
+
+      inserted:
+        0,
+
+      updated:
+        0,
+
+      failed:
+        holdings.length,
+
+      error: [
+
+        {
+
+          operation:
+            "config",
+
+          message:
+            error?.message ??
+            String(error),
+
+        },
+
+      ],
+
+    };
+
+  }
+
+
+  const errors:
+    any[] = [];
+
+
+  // ===================================================
+  // 一个一个处理
+  // ===================================================
 
   for (
     const holding of holdings
@@ -726,14 +819,14 @@ async function saveHoldingsHistory(
 
 
       // =================================================
-      // 查询今天是否已有记录
+      // 今天是否已经存在
       // =================================================
 
       const {
         data: existing,
         error: existingError,
       } =
-        await supabase
+        await adminSupabase
 
           .from(
             "holdings_history"
@@ -760,18 +853,30 @@ async function saveHoldingsHistory(
         existingError
       ) {
 
-        console.error(
-          "holdings_history lookup error:",
-          code,
-          existingError
-        );
-
         failed++;
+
+
+        errors.push({
+
+          operation:
+            "select",
+
+          code,
+
+          message:
+            existingError.message,
+
+        });
+
 
         continue;
 
       }
 
+
+      // =================================================
+      // 历史数据
+      // =================================================
 
       const historyData = {
 
@@ -818,6 +923,7 @@ async function saveHoldingsHistory(
           ),
 
         currency:
+          holding.currency ??
           "CNY",
 
         nav:
@@ -848,7 +954,7 @@ async function saveHoldingsHistory(
           error:
             updateError,
         } =
-          await supabase
+          await adminSupabase
 
             .from(
               "holdings_history"
@@ -868,13 +974,20 @@ async function saveHoldingsHistory(
           updateError
         ) {
 
-          console.error(
-            "holdings_history update error:",
-            code,
-            updateError
-          );
-
           failed++;
+
+
+          errors.push({
+
+            operation:
+              "update",
+
+            code,
+
+            message:
+              updateError.message,
+
+          });
 
         }
         else {
@@ -883,6 +996,9 @@ async function saveHoldingsHistory(
 
         }
 
+
+        continue;
+
       }
 
 
@@ -890,55 +1006,67 @@ async function saveHoldingsHistory(
       // INSERT
       // =================================================
 
-      else {
+      const {
+        error:
+          insertError,
+      } =
+        await adminSupabase
 
-        const {
-          error:
-            insertError,
-        } =
-          await supabase
+          .from(
+            "holdings_history"
+          )
 
-            .from(
-              "holdings_history"
-            )
-
-            .insert(
-              historyData
-            );
-
-
-        if (
-          insertError
-        ) {
-
-          console.error(
-            "holdings_history insert error:",
-            code,
-            insertError
+          .insert(
+            historyData
           );
 
-          failed++;
 
-        }
-        else {
+      if (
+        insertError
+      ) {
 
-          inserted++;
+        failed++;
 
-        }
+
+        errors.push({
+
+          operation:
+            "insert",
+
+          code,
+
+          message:
+            insertError.message,
+
+        });
+
+      }
+      else {
+
+        inserted++;
 
       }
 
     } catch (
-      error
+      error: any
     ) {
 
-      console.error(
-        "holdings_history save error:",
-        holding?.code,
-        error
-      );
-
       failed++;
+
+
+      errors.push({
+
+        operation:
+          "exception",
+
+        code:
+          holding?.code,
+
+        message:
+          error?.message ??
+          String(error),
+
+      });
 
     }
 
@@ -953,6 +1081,11 @@ async function saveHoldingsHistory(
 
     failed,
 
+    error:
+      errors.length > 0
+        ? errors
+        : null,
+
   };
 
 }
@@ -960,9 +1093,6 @@ async function saveHoldingsHistory(
 
 // =====================================================
 // Asset History
-//
-// 每个有效市场日记录一次。
-// 如果今天已有记录：UPDATE
 // =====================================================
 
 async function saveAssetHistory(
@@ -971,10 +1101,6 @@ async function saveAssetHistory(
 ) {
 
   try {
-
-    // ===================================================
-    // 获取当前 holdings
-    // ===================================================
 
     const {
       data: holdings,
@@ -1019,14 +1145,9 @@ async function saveAssetHistory(
         : [];
 
 
-    // ===================================================
-    // 计算 CN / HK
-    // ===================================================
-
     let cnAsset = 0;
 
     let hkAsset = 0;
-
 
     let totalProfit = 0;
 
@@ -1043,6 +1164,7 @@ async function saveAssetHistory(
         toNumber(
           item?.amount
         );
+
 
       const profit =
         toNumber(
@@ -1091,10 +1213,6 @@ async function saveAssetHistory(
       cnAsset +
       hkAsset;
 
-
-    // ===================================================
-    // Return
-    // ===================================================
 
     const totalCost =
       totalAsset -
@@ -1389,7 +1507,7 @@ export async function GET(
   try {
 
     // ===================================================
-    // 简单安全检查
+    // Cron Secret
     // ===================================================
 
     const cronSecret =
@@ -1424,6 +1542,7 @@ export async function GET(
           },
 
           {
+
             status:
               401,
 
@@ -1476,6 +1595,7 @@ export async function GET(
         },
 
         {
+
           status:
             500,
 
@@ -1532,6 +1652,7 @@ export async function GET(
         },
 
         {
+
           status:
             500,
 
@@ -1571,7 +1692,7 @@ export async function GET(
 
 
     // ===================================================
-    // 更新每一个 holding
+    // 更新 holdings
     // ===================================================
 
     for (
@@ -1600,6 +1721,7 @@ export async function GET(
 
         skipped++;
 
+
         results.push({
 
           id:
@@ -1621,10 +1743,15 @@ export async function GET(
 
         });
 
+
         continue;
 
       }
 
+
+      // =================================================
+      // 市场
+      // =================================================
 
       const market =
         getHoldingMarket(
@@ -1632,21 +1759,22 @@ export async function GET(
         );
 
 
-      // =================================================
-      // 判断这个市场今天是否应该更新
-      // =================================================
-
       const status =
         marketStatus[
           market as keyof typeof marketStatus
         ];
 
 
+      // =================================================
+      // 今天不交易
+      // =================================================
+
       if (
         !status?.shouldUpdate
       ) {
 
         skipped++;
+
 
         results.push({
 
@@ -1668,13 +1796,14 @@ export async function GET(
 
         });
 
+
         continue;
 
       }
 
 
       // =================================================
-      // 获取市场价格
+      // 获取价格
       // =================================================
 
       try {
@@ -1695,6 +1824,7 @@ export async function GET(
         ) {
 
           failed++;
+
 
           results.push({
 
@@ -1718,6 +1848,7 @@ export async function GET(
 
           });
 
+
           continue;
 
         }
@@ -1730,7 +1861,7 @@ export async function GET(
 
 
         // =================================================
-        // 统一人民币
+        // CNY 市值
         // =================================================
 
         const amount =
@@ -1752,6 +1883,7 @@ export async function GET(
         ) {
 
           failed++;
+
 
           results.push({
 
@@ -1775,16 +1907,25 @@ export async function GET(
 
           });
 
+
           continue;
 
         }
 
+
+        // =================================================
+        // 成本
+        // =================================================
 
         const cost =
           toNumber(
             holding.cost
           );
 
+
+        // =================================================
+        // 收益
+        // =================================================
 
         const profit =
           calculateProfit(
@@ -1852,6 +1993,7 @@ export async function GET(
 
           failed++;
 
+
           results.push({
 
             id:
@@ -1874,6 +2016,7 @@ export async function GET(
 
           });
 
+
           continue;
 
         }
@@ -1883,7 +2026,7 @@ export async function GET(
 
 
         // =================================================
-        // 保存到结果
+        // 结果
         // =================================================
 
         results.push({
@@ -1943,6 +2086,7 @@ export async function GET(
 
         failed++;
 
+
         results.push({
 
           id:
@@ -1969,13 +2113,9 @@ export async function GET(
     }
 
 
-    // =====================================================
+    // ===================================================
     // 重新读取 holdings
-    //
-    // 非常重要：
-    // 这里不能使用旧数据
-    // 必须读取更新后的数据
-    // =====================================================
+    // ===================================================
 
     const {
       data:
@@ -2023,11 +2163,13 @@ export async function GET(
         : [];
 
 
-    // =====================================================
+    // ===================================================
     // holdings_history
     //
-    // 只有真正有市场更新时才保存
-    // =====================================================
+    // 注意：
+    // 保存全部 holdings
+    // 与你原来的 Python 行为保持一致。
+    // ===================================================
 
     let holdingsHistoryInserted =
       0;
@@ -2039,8 +2181,7 @@ export async function GET(
       0;
 
     let holdingsHistoryError:
-      string | null =
-      null;
+      any = null;
 
 
     if (
@@ -2066,22 +2207,15 @@ export async function GET(
       holdingsHistoryFailed =
         historyResult.failed;
 
-
-      if (
-        holdingsHistoryFailed > 0
-      ) {
-
-        holdingsHistoryError =
-          "部分 holdings_history 写入失败";
-
-      }
+      holdingsHistoryError =
+        historyResult.error ?? null;
 
     }
 
 
-    // =====================================================
+    // ===================================================
     // Asset History
-    // =====================================================
+    // ===================================================
 
     let assetHistoryResult:
       any = {
@@ -2114,9 +2248,9 @@ export async function GET(
     }
 
 
-    // =====================================================
+    // ===================================================
     // 最终资产
-    // =====================================================
+    // ===================================================
 
     let totalAsset =
       0;
@@ -2171,13 +2305,14 @@ export async function GET(
     }
 
 
-    // =====================================================
-    // Success
-    // =====================================================
+    // ===================================================
+    // 最终 Success
+    // ===================================================
 
     const success =
       failed === 0 &&
-      holdingsHistoryFailed === 0;
+      holdingsHistoryFailed === 0 &&
+      assetHistoryResult.success;
 
 
     return NextResponse.json({
@@ -2199,15 +2334,16 @@ export async function GET(
 
       skipped,
 
-      market_status:
-        marketStatus,
-
       // =================================================
       // Holdings History
       // =================================================
 
       holdings_history:
         updated > 0,
+
+      holdings_history_saved:
+        holdingsHistoryInserted +
+        holdingsHistoryUpdated,
 
       holdings_history_inserted:
         holdingsHistoryInserted,
