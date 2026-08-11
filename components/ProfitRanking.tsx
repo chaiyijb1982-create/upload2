@@ -170,17 +170,27 @@ text-green-600
 
 >
 
-+
+{
 
-{(
+Number(item.profit_rate || 0) >= 0
 
-Number(item.profit_rate || 0)
+?
 
-*
+"+"
 
-100
+:
 
-).toFixed(2)}
+""
+
+}
+
+
+
+{
+
+Number(item.profit_rate || 0).toFixed(2)
+
+}
 
 %
 
@@ -307,7 +317,7 @@ font-bold
 
 ${
 
-Number(item.profit_rate)>=0
+Number(item.profit_rate) >= 0
 
 ?
 
@@ -328,7 +338,7 @@ Number(item.profit_rate)>=0
 
 {
 
-Number(item.profit_rate)>=0
+Number(item.profit_rate) >= 0
 
 ?
 
@@ -344,15 +354,7 @@ Number(item.profit_rate)>=0
 
 {
 
-(
-
-Number(item.profit_rate || 0)
-
-*
-
-100
-
-).toFixed(2)
+Number(item.profit_rate || 0).toFixed(2)
 
 }
 
