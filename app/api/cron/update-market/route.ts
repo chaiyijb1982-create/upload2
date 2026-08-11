@@ -3,40 +3,22 @@
 //
 // 全球资产自动更新
 //
-// 运行方式：
-//
-// GET /api/cron/update-market
-//
-// Vercel Cron：
-// 每天 UTC 22:00
-// = 中国时间每天 06:00
-//
 // 功能：
-// 1. 获取 USD/CNY
-// 2. 获取所有 active Holdings
-// 3. 中国基金 → 天天基金 / 东方财富
-// 4. 美股 / ETF → Finnhub
-// 5. HK / LU → StockEvents
-// 6. 计算人民币市值
-// 7. 更新 Holdings
-// 8. 创建 / 更新 holdings_history
-// 9. 创建 / 更新 asset_history
-//
-// holdings_history 规则：
-//
-// - 当天至少有一个市场成功更新
-//   → 创建当天历史快照
-//
-// - 同一个 code + snapshot_date
-//   → 不重复 INSERT
-//   → UPDATE
-//
-// - 如果当天没有任何市场更新
-//   → 不创建 holdings_history
+// 1. 判断中国 / 美国 / 香港 / 卢森堡各自交易日
+// 2. 只在对应市场有新交易数据时更新
+// 3. 中国基金 → CNY
+// 4. US / HK / LU → USD × USD/CNY → CNY
+// 5. 更新 holdings
+// 6. 每次成功更新后写入 holdings_history
+// 7. holdings_history 按 snapshot_date + code 防止重复
+// 8. 更新 asset_history
+// 9. WELAB_GOLD / HK_CASH 跳过
 //
 // 注意：
-// 当前 route 不依赖 CRON_SECRET
+// 本文件只能运行在服务器端
 // =====================================================
+
+import { NextResponse } from "next/server";
 
 import {
   supabase,
@@ -47,20 +29,19 @@ import {
   getUsdCny,
 } from "@/lib/market-data";
 
-import type {
-  MarketSource,
-} from "@/lib/market-data";
+
+// =====================================================
+// Runtime
+// =====================================================
+
+export const runtime = "nodejs";
 
 
 // =====================================================
-// Next.js
+// 防止 GET 被缓存
 // =====================================================
 
-export const dynamic =
-  "force-dynamic";
-
-export const runtime =
-  "nodejs";
+export const dynamic = "force-dynamic";
 
 
 // =====================================================
@@ -71,9 +52,9 @@ type Holding = {
 
   id: number;
 
-  code?: string | null;
+  code: string;
 
-  name?: string | null;
+  name: string;
 
   market?: string | null;
 
@@ -93,9 +74,18 @@ type Holding = {
 
   shares?: number | null;
 
-  platform?: string | null;
+  updated_at?: string | null;
 
-  active?: boolean | null;
+  snapshot_date?: string | null;
+
+};
+
+
+type MarketStatus = {
+
+  shouldUpdate: boolean;
+
+  date: string;
 
 };
 
@@ -119,874 +109,629 @@ function toNumber(
 
 
 // =====================================================
-// bigint 字段
+// 日期
 // =====================================================
 
-function toBigIntNumber(
-  value: any
-): number {
+function formatDate(
+  date: Date
+): string {
 
-  const n =
-    toNumber(value);
+  return date
+    .toISOString()
+    .slice(0, 10);
+
+}
+
+
+// =====================================================
+// YYYY-MM-DD
+// =====================================================
+
+function parseDate(
+  value: string
+): Date {
+
+  const parts =
+    value.split("-");
+
+  return new Date(
+    Number(parts[0]),
+    Number(parts[1]) - 1,
+    Number(parts[2])
+  );
+
+}
+
+
+// =====================================================
+// 工作日
+// =====================================================
+
+function isWeekend(
+  date: Date
+): boolean {
+
+  const day =
+    date.getDay();
+
+  return (
+    day === 0 ||
+    day === 6
+  );
+
+}
+
+
+// =====================================================
+// 交易日 API
+//
+// 使用开放的交易日数据判断。
+// 如果 API 不可用，则至少保证周末不更新。
+//
+// 这里分别处理：
+// CN
+// US
+// HK
+// LU
+// =====================================================
+
+async function checkTradingDay(
+  market: string
+): Promise<MarketStatus> {
+
+  const today =
+    new Date();
+
+  const todayStr =
+    formatDate(today);
+
+
+  // ===================================================
+  // 周末
+  // ===================================================
 
   if (
-    !Number.isFinite(n)
+    isWeekend(today)
+  ) {
+
+    return {
+
+      shouldUpdate: false,
+
+      date: todayStr,
+
+    };
+
+  }
+
+
+  // ===================================================
+  // 使用 Yahoo Finance chart 判断市场是否有当天数据
+  //
+  // 不直接使用价格，只判断是否存在最近交易数据。
+  // ===================================================
+
+  let symbol = "";
+
+
+  if (
+    market === "china"
+  ) {
+
+    // 中国市场使用上证指数
+    symbol =
+      "000001.SS";
+
+  }
+  else if (
+    market === "us"
+  ) {
+
+    symbol =
+      "SPY";
+
+  }
+  else if (
+    market === "hongkong"
+  ) {
+
+    symbol =
+      "^HSI";
+
+  }
+  else if (
+    market === "luxembourg"
+  ) {
+
+    // 卢森堡基金没有统一指数，
+    // 使用欧洲市场 ETF 作为交易日参考。
+    symbol =
+      "VGK";
+
+  }
+  else {
+
+    return {
+
+      shouldUpdate: false,
+
+      date: todayStr,
+
+    };
+
+  }
+
+
+  try {
+
+    const start =
+      Math.floor(
+        new Date(
+          todayStr
+        ).getTime() /
+        1000
+      );
+
+    const end =
+      Math.floor(
+        (
+          new Date(
+            todayStr
+          ).getTime() +
+          24 *
+          60 *
+          60 *
+          1000
+        ) /
+        1000
+      );
+
+
+    const url =
+      "https://query1.finance.yahoo.com/v8/finance/chart/" +
+      encodeURIComponent(symbol) +
+      `?period1=${start}` +
+      `&period2=${end}` +
+      "&interval=1d";
+
+
+    const response =
+      await fetch(
+        url,
+        {
+
+          cache:
+            "no-store",
+
+          headers: {
+
+            "User-Agent":
+              "Mozilla/5.0",
+
+          },
+
+        }
+      );
+
+
+    if (
+      !response.ok
+    ) {
+
+      console.warn(
+        "Trading day check HTTP error:",
+        market,
+        response.status
+      );
+
+
+      // API 出问题：
+      // 工作日允许继续尝试
+      return {
+
+        shouldUpdate:
+          !isWeekend(
+            today
+          ),
+
+        date:
+          todayStr,
+
+      };
+
+    }
+
+
+    const data =
+      await response.json();
+
+
+    const timestamps =
+      data
+        ?.chart
+        ?.result?.[0]
+        ?.timestamp;
+
+
+    if (
+      Array.isArray(
+        timestamps
+      ) &&
+      timestamps.length > 0
+    ) {
+
+      return {
+
+        shouldUpdate:
+          true,
+
+        date:
+          todayStr,
+
+      };
+
+    }
+
+
+    return {
+
+      shouldUpdate:
+        false,
+
+      date:
+        todayStr,
+
+    };
+
+  } catch (
+    error
+  ) {
+
+    console.warn(
+      "Trading day check error:",
+      market,
+      error
+    );
+
+
+    // 网络检查失败时：
+    // 周末不更新
+    // 工作日继续尝试
+    return {
+
+      shouldUpdate:
+        !isWeekend(
+          today
+        ),
+
+      date:
+        todayStr,
+
+    };
+
+  }
+
+}
+
+
+// =====================================================
+// 获取市场交易状态
+// =====================================================
+
+async function getMarketStatuses() {
+
+  const [
+    china,
+    us,
+    hongkong,
+    luxembourg,
+  ] =
+    await Promise.all([
+
+      checkTradingDay(
+        "china"
+      ),
+
+      checkTradingDay(
+        "us"
+      ),
+
+      checkTradingDay(
+        "hongkong"
+      ),
+
+      checkTradingDay(
+        "luxembourg"
+      ),
+
+    ]);
+
+
+  return {
+
+    china,
+
+    us,
+
+    hongkong,
+
+    luxembourg,
+
+  };
+
+}
+
+
+// =====================================================
+// 根据 holdings.market 判断所属市场
+// =====================================================
+
+function getHoldingMarket(
+  holding: Holding
+): string {
+
+  const market =
+    String(
+      holding?.market ??
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+
+  if (
+    market === "CN" ||
+    market === "CHINA"
+  ) {
+
+    return "china";
+
+  }
+
+
+  if (
+    market === "HK" ||
+    market === "HONGKONG"
+  ) {
+
+    return "hongkong";
+
+  }
+
+
+  if (
+    market === "US" ||
+    market === "USA"
+  ) {
+
+    return "us";
+
+  }
+
+
+  if (
+    market === "LU" ||
+    market === "LUXEMBOURG"
+  ) {
+
+    return "luxembourg";
+
+  }
+
+
+  // ===================================================
+  // 根据 code 再判断
+  // ===================================================
+
+  const code =
+    String(
+      holding?.code ??
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+
+  if (
+    code.startsWith(
+      "HK"
+    )
+  ) {
+
+    return "hongkong";
+
+  }
+
+
+  if (
+    code.startsWith(
+      "LU"
+    )
+  ) {
+
+    return "luxembourg";
+
+  }
+
+
+  if (
+    /^\d{6}$/.test(
+      code
+    )
+  ) {
+
+    return "china";
+
+  }
+
+
+  return "us";
+
+}
+
+
+// =====================================================
+// USD → CNY
+//
+// 中国资产：
+// amount = shares × NAV
+//
+// US / HK / LU：
+// amount = shares × NAV × USD/CNY
+// =====================================================
+
+function calculateAmountCny(
+  holding: Holding,
+  nav: number,
+  usdCny: number,
+  market: string
+): number {
+
+  const shares =
+    toNumber(
+      holding?.shares
+    );
+
+
+  if (
+    shares <= 0 ||
+    nav <= 0
   ) {
 
     return 0;
 
   }
 
-  return Math.round(
-    n
-  );
 
-}
-
-
-// =====================================================
-// 中国日期
-//
-// 所有历史记录统一使用中国日期
-// =====================================================
-
-function getChinaDate(): string {
-
-  return new Intl.DateTimeFormat(
-    "en-CA",
-    {
-      timeZone:
-        "Asia/Shanghai",
-
-      year:
-        "numeric",
-
-      month:
-        "2-digit",
-
-      day:
-        "2-digit",
-
-    }
-  )
-    .format(
-      new Date()
-    );
-
-}
-
-
-// =====================================================
-// 判断 USD
-// =====================================================
-
-function isUsdAsset(
-  source: MarketSource,
-  currency?: string | null
-): boolean {
-
-  const curr =
-    String(
-      currency ?? ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  // 明确 USD
-  if (
-    curr === "USD"
-  ) {
-
-    return true;
-
-  }
-
-
-  // 明确 CNY
-  if (
-    curr === "CNY" ||
-    curr === "RMB"
-  ) {
-
-    return false;
-
-  }
-
-
-  // Finnhub 默认 USD
-  if (
-    source === "finnhub"
-  ) {
-
-    return true;
-
-  }
-
-
-  // StockEvents 当前返回 USD
-  if (
-    source === "stockevents"
-  ) {
-
-    return true;
-
-  }
-
-
-  // 默认 CNY
-  return false;
-
-}
-
-
-// =====================================================
-// 获取 Active Holdings
-// =====================================================
-
-async function getActiveHoldings(): Promise<Holding[]> {
-
-  const {
-    data,
-    error,
-  } =
-    await supabase
-
-      .from(
-        "holdings"
-      )
-
-      .select(
-        "*"
-      )
-
-      .eq(
-        "active",
-        true
-      )
-
-      .order(
-        "id",
-        {
-          ascending:
-            true,
-        }
-      );
+  const rawAmount =
+    shares *
+    nav;
 
 
   if (
-    error
+    market === "china"
   ) {
 
-    console.error(
-      "❌ 获取 Holdings 失败:",
-      error
-    );
-
-    return [];
+    return rawAmount;
 
   }
 
 
   return (
-    data ?? []
-  ) as Holding[];
-
-}
-
-
-// =====================================================
-// 更新单个 Holding
-// =====================================================
-
-async function updateHolding(
-  holding: Holding,
-  usdCny: number
-) {
-
-  const id =
-    holding.id;
-
-
-  const code =
-    String(
-      holding.code ?? ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  const name =
-    String(
-      holding.name ?? ""
-    )
-      .trim();
-
-
-  // ===================================================
-  // 代码检查
-  // ===================================================
-
-  if (
-    !code
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      status:
-        "failed",
-
-      reason:
-        "代码为空",
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 获取市场数据
-  // ===================================================
-
-  const {
-    source,
-    data,
-  } =
-    await getMarketPrice(
-      code
-    );
-
-
-  // ===================================================
-  // 特殊资产
-  // ===================================================
-
-  if (
-    source === "skip"
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      status:
-        "skipped",
-
-      reason:
-        "特殊资产，不自动更新",
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 市场价格获取失败
-  // ===================================================
-
-  if (
-    !data ||
-    !data.price ||
-    data.price <= 0
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      status:
-        "failed",
-
-      reason:
-        "市场价格获取失败",
-
-    };
-
-  }
-
-
-  const nav =
-    toNumber(
-      data.price
-    );
-
-
-  // ===================================================
-  // Shares
-  // ===================================================
-
-  const shares =
-    toNumber(
-      holding.shares
-    );
-
-
-  if (
-    shares <= 0
-  ) {
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      status:
-        "failed",
-
-      reason:
-        "shares <= 0，无法计算市值",
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 原始金额
-  // ===================================================
-
-  const rawAmount =
-    nav *
-    shares;
-
-
-  // ===================================================
-  // 转人民币
-  // ===================================================
-
-  const amountCny =
-    isUsdAsset(
-      source,
-      holding.currency
-    )
-
-      ? rawAmount *
-        usdCny
-
-      : rawAmount;
-
-
-  // ===================================================
-  // 成本
-  // ===================================================
-
-  const cost =
-    toNumber(
-      holding.cost
-    );
-
-
-  // ===================================================
-  // 利润
-  // ===================================================
-
-  const profit =
-    amountCny -
-    cost;
-
-
-  // ===================================================
-  // 收益率
-  // ===================================================
-
-  const profitRate =
-    cost !== 0
-
-      ? (
-          profit /
-          cost
-        ) * 100
-
-      : 0;
-
-
-  // ===================================================
-  // Supabase Payload
-  // ===================================================
-
-  const payload = {
-
-    nav:
-      Number(
-        nav.toFixed(
-          8
-        )
-      ),
-
-    amount:
-      toBigIntNumber(
-        amountCny
-      ),
-
-    profit:
-      toBigIntNumber(
-        profit
-      ),
-
-    profit_rate:
-      Number(
-        profitRate.toFixed(
-          4
-        )
-      ),
-
-    updated_at:
-      new Date()
-        .toISOString(),
-
-  };
-
-
-  // ===================================================
-  // 更新 Holdings
-  // ===================================================
-
-  const {
-    data:
-      updated,
-    error,
-  } =
-    await supabase
-
-      .from(
-        "holdings"
-      )
-
-      .update(
-        payload
-      )
-
-      .eq(
-        "id",
-        id
-      )
-
-      .select(
-        "*"
-      )
-
-      .single();
-
-
-  // ===================================================
-  // 更新失败
-  // ===================================================
-
-  if (
-    error
-  ) {
-
-    console.error(
-      `❌ 更新失败 [${code}]:`,
-      error
-    );
-
-
-    return {
-
-      id,
-
-      code,
-
-      name,
-
-      source,
-
-      status:
-        "failed",
-
-      reason:
-        error.message,
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 成功
-  // ===================================================
-
-  console.log(
-    `✅ ${code} | ${source} | NAV=${nav} | amount=${payload.amount}`
+    rawAmount *
+    usdCny
   );
 
+}
 
-  return {
 
-    id,
+// =====================================================
+// 计算 Profit
+//
+// 注意：
+// cost 已经统一为 CNY
+// amount 也统一为 CNY
+//
+// 所以：
+// profit = amount - cost
+// =====================================================
 
-    code,
+function calculateProfit(
+  amount: number,
+  cost: number
+): number {
 
-    name,
-
-    source,
-
-    status:
-      "updated",
-
-    nav,
-
-    amount:
-      payload.amount,
-
-    cost,
-
-    profit:
-      payload.profit,
-
-    profit_rate:
-      payload.profit_rate,
-
-    currency:
-      holding.currency ?? "CNY",
-
-    market:
-      holding.market ?? null,
-
-    category:
-      holding.category ?? null,
-
-    shares,
-
-    updated_at:
-      updated?.updated_at ??
-      payload.updated_at,
-
-  };
+  return (
+    amount -
+    cost
+  );
 
 }
 
 
 // =====================================================
-// 创建 / 更新 Holdings History
-//
-// 重要：
-//
-// holdings_history 是真正的每日持仓历史
-//
-// 每天：
-// code + snapshot_date
-// 最多一条
-//
-// 如果当天已经存在：
-// UPDATE
-//
-// 如果不存在：
-// INSERT
-//
-// 只有当天至少有一个 Holding 成功更新
-// 才会执行这里
+// Profit Rate
 // =====================================================
 
-async function createHoldingsHistory(
+function calculateProfitRate(
+  profit: number,
+  cost: number
+): number {
+
+  if (
+    cost === 0
+  ) {
+
+    return 0;
+
+  }
+
+
+  return (
+    profit /
+    cost
+  ) *
+  100;
+
+}
+
+
+// =====================================================
+// holdings_history
+//
+// 今天已经存在：
+// UPDATE
+//
+// 今天不存在：
+// INSERT
+//
+// 唯一判断：
+// snapshot_date + code
+// =====================================================
+
+async function saveHoldingsHistory(
+  holdings: Holding[],
   snapshotDate: string
 ) {
 
-  // ===================================================
-  // 获取当前全部 active holdings
-  // ===================================================
+  let inserted = 0;
 
-  const {
-    data,
-    error,
-  } =
-    await supabase
+  let updated = 0;
 
-      .from(
-        "holdings"
-      )
+  let failed = 0;
 
-      .select(
-        `
-        code,
-        name,
-        market,
-        category,
-        amount,
-        updated_at,
-        cost,
-        profit,
-        profit_rate,
-        currency,
-        nav,
-        shares,
-        snapshot_date
-        `
-      )
-
-      .eq(
-        "active",
-        true
-      );
-
-
-  if (
-    error
-  ) {
-
-    console.error(
-      "❌ 获取 Holdings History 数据失败:",
-      error
-    );
-
-    return {
-
-      success:
-        false,
-
-      inserted:
-        0,
-
-      updated:
-        0,
-
-      failed:
-        0,
-
-      error:
-        error.message,
-
-    };
-
-  }
-
-
-  const holdings =
-    data ?? [];
-
-
-  if (
-    holdings.length === 0
-  ) {
-
-    return {
-
-      success:
-        false,
-
-      inserted:
-        0,
-
-      updated:
-        0,
-
-      failed:
-        0,
-
-      error:
-        "没有 active holdings",
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 统计
-  // ===================================================
-
-  let inserted =
-    0;
-
-  let updated =
-    0;
-
-  let failed =
-    0;
-
-
-  // ===================================================
-  // 逐个保存历史
-  // ===================================================
 
   for (
-    const holding
-    of holdings
+    const holding of holdings
   ) {
 
-    const code =
-      String(
-        holding.code ?? ""
-      )
-        .trim()
-        .toUpperCase();
+    try {
 
-
-    if (
-      !code
-    ) {
-
-      failed++;
-
-      continue;
-
-    }
-
-
-    // =================================================
-    // 历史 Payload
-    // =================================================
-
-    const payload = {
-
-      code,
-
-      name:
-        holding.name ??
-        null,
-
-      market:
-        holding.market ??
-        null,
-
-      category:
-        holding.category ??
-        null,
-
-      amount:
-        toBigIntNumber(
-          holding.amount
-        ),
-
-      updated_at:
-        holding.updated_at ??
-        new Date()
-          .toISOString(),
-
-      cost:
-        toBigIntNumber(
-          holding.cost
-        ),
-
-      profit:
-        toBigIntNumber(
-          holding.profit
-        ),
-
-      profit_rate:
-        Number(
-          toNumber(
-            holding.profit_rate
-          ).toFixed(
-            4
-          )
-        ),
-
-      currency:
-        holding.currency ??
-        "CNY",
-
-      nav:
-        toNumber(
-          holding.nav
-        ),
-
-      shares:
-        toNumber(
-          holding.shares
-        ),
-
-      snapshot_date:
-        snapshotDate,
-
-    };
-
-
-    // =================================================
-    // 查询当天该 code 是否已经存在
-    // =================================================
-
-    const {
-      data:
-        existing,
-      error:
-        existingError,
-    } =
-      await supabase
-
-        .from(
-          "holdings_history"
+      const code =
+        String(
+          holding?.code ??
+          ""
         )
-
-        .select(
-          "id"
-        )
-
-        .eq(
-          "code",
-          code
-        )
-
-        .eq(
-          "snapshot_date",
-          snapshotDate
-        )
-
-        .limit(
-          1
-        );
+          .trim()
+          .toUpperCase();
 
 
-    // =================================================
-    // 查询失败
-    // =================================================
+      if (
+        !code
+      ) {
 
-    if (
-      existingError
-    ) {
+        continue;
 
-      console.error(
-        `❌ Holdings History 查询失败 [${code}]:`,
-        existingError
-      );
-
-      failed++;
-
-      continue;
-
-    }
+      }
 
 
-    // =================================================
-    // 已存在 → UPDATE
-    // =================================================
-
-    if (
-      existing &&
-      existing.length > 0
-    ) {
-
-      const historyId =
-        existing[0].id;
-
+      // =================================================
+      // 查询今天是否已有记录
+      // =================================================
 
       const {
-        error:
-          updateError,
+        data: existing,
+        error: existingError,
       } =
         await supabase
 
@@ -994,23 +739,31 @@ async function createHoldingsHistory(
             "holdings_history"
           )
 
-          .update(
-            payload
+          .select(
+            "id"
           )
 
           .eq(
-            "id",
-            historyId
-          );
+            "code",
+            code
+          )
+
+          .eq(
+            "snapshot_date",
+            snapshotDate
+          )
+
+          .maybeSingle();
 
 
       if (
-        updateError
+        existingError
       ) {
 
         console.error(
-          `❌ Holdings History 更新失败 [${code}]:`,
-          updateError
+          "holdings_history lookup error:",
+          code,
+          existingError
         );
 
         failed++;
@@ -1020,21 +773,535 @@ async function createHoldingsHistory(
       }
 
 
-      updated++;
+      const historyData = {
 
-      console.log(
-        `🔄 Holdings History 更新: ${code} | ${snapshotDate}`
+        code,
+
+        name:
+          holding.name ??
+          null,
+
+        market:
+          holding.market ??
+          null,
+
+        category:
+          holding.category ??
+          null,
+
+        amount:
+          toNumber(
+            holding.amount
+          ),
+
+        updated_at:
+          new Date()
+            .toISOString(),
+
+        cost:
+          Math.round(
+            toNumber(
+              holding.cost
+            )
+          ),
+
+        profit:
+          Math.round(
+            toNumber(
+              holding.profit
+            )
+          ),
+
+        profit_rate:
+          toNumber(
+            holding.profit_rate
+          ),
+
+        currency:
+          "CNY",
+
+        nav:
+          toNumber(
+            holding.nav
+          ),
+
+        shares:
+          toNumber(
+            holding.shares
+          ),
+
+        snapshot_date:
+          snapshotDate,
+
+      };
+
+
+      // =================================================
+      // UPDATE
+      // =================================================
+
+      if (
+        existing?.id
+      ) {
+
+        const {
+          error:
+            updateError,
+        } =
+          await supabase
+
+            .from(
+              "holdings_history"
+            )
+
+            .update(
+              historyData
+            )
+
+            .eq(
+              "id",
+              existing.id
+            );
+
+
+        if (
+          updateError
+        ) {
+
+          console.error(
+            "holdings_history update error:",
+            code,
+            updateError
+          );
+
+          failed++;
+
+        }
+        else {
+
+          updated++;
+
+        }
+
+      }
+
+
+      // =================================================
+      // INSERT
+      // =================================================
+
+      else {
+
+        const {
+          error:
+            insertError,
+        } =
+          await supabase
+
+            .from(
+              "holdings_history"
+            )
+
+            .insert(
+              historyData
+            );
+
+
+        if (
+          insertError
+        ) {
+
+          console.error(
+            "holdings_history insert error:",
+            code,
+            insertError
+          );
+
+          failed++;
+
+        }
+        else {
+
+          inserted++;
+
+        }
+
+      }
+
+    } catch (
+      error
+    ) {
+
+      console.error(
+        "holdings_history save error:",
+        holding?.code,
+        error
       );
 
+      failed++;
 
-      continue;
+    }
+
+  }
+
+
+  return {
+
+    inserted,
+
+    updated,
+
+    failed,
+
+  };
+
+}
+
+
+// =====================================================
+// Asset History
+//
+// 每个有效市场日记录一次。
+// 如果今天已有记录：UPDATE
+// =====================================================
+
+async function saveAssetHistory(
+  snapshotDate: string,
+  usdCny: number
+) {
+
+  try {
+
+    // ===================================================
+    // 获取当前 holdings
+    // ===================================================
+
+    const {
+      data: holdings,
+      error,
+    } =
+      await supabase
+
+        .from(
+          "holdings"
+        )
+
+        .select(
+          "*"
+        );
+
+
+    if (
+      error
+    ) {
+
+      return {
+
+        success:
+          false,
+
+        action:
+          "failed",
+
+        error:
+          error.message,
+
+      };
 
     }
 
 
-    // =================================================
-    // 不存在 → INSERT
-    // =================================================
+    const list =
+      Array.isArray(
+        holdings
+      )
+        ? holdings
+        : [];
+
+
+    // ===================================================
+    // 计算 CN / HK
+    // ===================================================
+
+    let cnAsset = 0;
+
+    let hkAsset = 0;
+
+
+    let totalProfit = 0;
+
+    let cnProfit = 0;
+
+    let hkProfit = 0;
+
+
+    for (
+      const item of list
+    ) {
+
+      const amount =
+        toNumber(
+          item?.amount
+        );
+
+      const profit =
+        toNumber(
+          item?.profit
+        );
+
+
+      const market =
+        String(
+          item?.market ??
+          ""
+        )
+          .trim()
+          .toUpperCase();
+
+
+      if (
+        market === "CN"
+      ) {
+
+        cnAsset +=
+          amount;
+
+        cnProfit +=
+          profit;
+
+      }
+      else {
+
+        hkAsset +=
+          amount;
+
+        hkProfit +=
+          profit;
+
+      }
+
+
+      totalProfit +=
+        profit;
+
+    }
+
+
+    const totalAsset =
+      cnAsset +
+      hkAsset;
+
+
+    // ===================================================
+    // Return
+    // ===================================================
+
+    const totalCost =
+      totalAsset -
+      totalProfit;
+
+
+    const totalRate =
+      totalCost > 0
+        ? (
+            totalProfit /
+            totalCost
+          ) *
+          100
+        : 0;
+
+
+    const cnCost =
+      cnAsset -
+      cnProfit;
+
+
+    const hkCost =
+      hkAsset -
+      hkProfit;
+
+
+    const cnRate =
+      cnCost > 0
+        ? (
+            cnProfit /
+            cnCost
+          ) *
+          100
+        : 0;
+
+
+    const hkRate =
+      hkCost > 0
+        ? (
+            hkProfit /
+            hkCost
+          ) *
+          100
+        : 0;
+
+
+    const record = {
+
+      snapshot_date:
+        snapshotDate,
+
+      usd_cny:
+        usdCny,
+
+      cn_asset:
+        Math.round(
+          cnAsset
+        ),
+
+      cn_rate:
+        cnRate,
+
+      cn_profit:
+        Math.round(
+          cnProfit
+        ),
+
+      hk_asset:
+        Math.round(
+          hkAsset
+        ),
+
+      hk_rate:
+        hkRate,
+
+      hk_profit:
+        Math.round(
+          hkProfit
+        ),
+
+      total_asset:
+        Math.round(
+          totalAsset
+        ),
+
+      total_profit:
+        Math.round(
+          totalProfit
+        ),
+
+    };
+
+
+    // ===================================================
+    // 查询今天
+    // ===================================================
+
+    const {
+      data: existing,
+      error:
+        existingError,
+    } =
+      await supabase
+
+        .from(
+          "asset_history"
+        )
+
+        .select(
+          "id"
+        )
+
+        .eq(
+          "snapshot_date",
+          snapshotDate
+        )
+
+        .maybeSingle();
+
+
+    if (
+      existingError
+    ) {
+
+      return {
+
+        success:
+          false,
+
+        action:
+          "failed",
+
+        error:
+          existingError.message,
+
+      };
+
+    }
+
+
+    // ===================================================
+    // UPDATE
+    // ===================================================
+
+    if (
+      existing?.id
+    ) {
+
+      const {
+        error:
+          updateError,
+      } =
+        await supabase
+
+          .from(
+            "asset_history"
+          )
+
+          .update(
+            record
+          )
+
+          .eq(
+            "id",
+            existing.id
+          );
+
+
+      if (
+        updateError
+      ) {
+
+        return {
+
+          success:
+            false,
+
+          action:
+            "update",
+
+          error:
+            updateError.message,
+
+        };
+
+      }
+
+
+      return {
+
+        success:
+          true,
+
+        action:
+          "update",
+
+        error:
+          null,
+
+      };
+
+    }
+
+
+    // ===================================================
+    // INSERT
+    // ===================================================
 
     const {
       error:
@@ -1043,11 +1310,11 @@ async function createHoldingsHistory(
       await supabase
 
         .from(
-          "holdings_history"
+          "asset_history"
         )
 
         .insert(
-          payload
+          record
         );
 
 
@@ -1055,125 +1322,38 @@ async function createHoldingsHistory(
       insertError
     ) {
 
-      console.error(
-        `❌ Holdings History 插入失败 [${code}]:`,
-        insertError
-      );
+      return {
 
-      failed++;
+        success:
+          false,
 
-      continue;
+        action:
+          "insert",
+
+        error:
+          insertError.message,
+
+      };
 
     }
 
 
-    inserted++;
+    return {
 
-    console.log(
-      `📝 Holdings History 创建: ${code} | ${snapshotDate}`
-    );
+      success:
+        true,
 
-  }
+      action:
+        "insert",
 
+      error:
+        null,
 
-  // ===================================================
-  // 完成
-  // ===================================================
+    };
 
-  console.log(
-    "======================================="
-  );
-
-  console.log(
-    "Holdings History 完成"
-  );
-
-  console.log(
-    "日期:",
-    snapshotDate
-  );
-
-  console.log(
-    "INSERT:",
-    inserted
-  );
-
-  console.log(
-    "UPDATE:",
-    updated
-  );
-
-  console.log(
-    "FAILED:",
-    failed
-  );
-
-  console.log(
-    "======================================="
-  );
-
-
-  return {
-
-    success:
-      failed === 0,
-
-    inserted,
-
-    updated,
-
-    failed,
-
-    error:
-      failed > 0
-        ? "部分 Holdings History 写入失败"
-        : null,
-
-  };
-
-}
-
-
-// =====================================================
-// 创建 / 更新 Asset History
-// =====================================================
-
-async function createAssetHistory(
-  usdCny: number
-) {
-
-  // ===================================================
-  // 获取当前 active Holdings
-  // ===================================================
-
-  const {
-    data,
-    error,
-  } =
-    await supabase
-
-      .from(
-        "holdings"
-      )
-
-      .select(
-        "amount, market, code, active"
-      )
-
-      .eq(
-        "active",
-        true
-      );
-
-
-  if (
-    error
+  } catch (
+    error: any
   ) {
-
-    console.error(
-      "❌ 获取 Holdings 历史数据失败:",
-      error
-    );
 
     return {
 
@@ -1181,49 +1361,781 @@ async function createAssetHistory(
         false,
 
       action:
-        null,
+        "failed",
 
       error:
-        error.message,
-
-      totalAsset:
-        null,
-
-      cnAsset:
-        null,
-
-      hkAsset:
-        null,
+        error?.message ??
+        String(error),
 
     };
 
   }
 
-
-  // ===================================================
-  // 计算资产
-  // ===================================================
-
-  let totalAsset =
-    0;
-
-  let cnAsset =
-    0;
-
-  let hkAsset =
-    0;
+}
 
 
-  (
-    data ?? []
-  ).forEach(
-    (
-      item: any
-    ) => {
+// =====================================================
+// GET
+// =====================================================
+
+export async function GET(
+  request: Request
+) {
+
+  const startedAt =
+    Date.now();
+
+
+  try {
+
+    // ===================================================
+    // 简单安全检查
+    // ===================================================
+
+    const cronSecret =
+      process.env.CRON_SECRET;
+
+
+    if (
+      cronSecret
+    ) {
+
+      const auth =
+        request.headers.get(
+          "authorization"
+        );
+
+
+      if (
+        auth !==
+        `Bearer ${cronSecret}`
+      ) {
+
+        return NextResponse.json(
+
+          {
+
+            success:
+              false,
+
+            error:
+              "Unauthorized",
+
+          },
+
+          {
+            status:
+              401,
+
+          }
+
+        );
+
+      }
+
+    }
+
+
+    // ===================================================
+    // 今天
+    // ===================================================
+
+    const today =
+      new Date();
+
+
+    const snapshotDate =
+      formatDate(
+        today
+      );
+
+
+    // ===================================================
+    // USD/CNY
+    // ===================================================
+
+    const usdCny =
+      await getUsdCny();
+
+
+    if (
+      !usdCny ||
+      usdCny <= 0
+    ) {
+
+      return NextResponse.json(
+
+        {
+
+          success:
+            false,
+
+          error:
+            "USD/CNY 获取失败",
+
+        },
+
+        {
+          status:
+            500,
+
+        }
+
+      );
+
+    }
+
+
+    // ===================================================
+    // 市场状态
+    // ===================================================
+
+    const marketStatus =
+      await getMarketStatuses();
+
+
+    // ===================================================
+    // 获取 holdings
+    // ===================================================
+
+    const {
+      data:
+        holdingsData,
+      error:
+        holdingsError,
+    } =
+      await supabase
+
+        .from(
+          "holdings"
+        )
+
+        .select(
+          "*"
+        );
+
+
+    if (
+      holdingsError
+    ) {
+
+      return NextResponse.json(
+
+        {
+
+          success:
+            false,
+
+          error:
+            holdingsError.message,
+
+        },
+
+        {
+          status:
+            500,
+
+        }
+
+      );
+
+    }
+
+
+    const holdings =
+      Array.isArray(
+        holdingsData
+      )
+        ? (
+            holdingsData as Holding[]
+          )
+        : [];
+
+
+    // ===================================================
+    // 统计
+    // ===================================================
+
+    let updated =
+      0;
+
+    let failed =
+      0;
+
+    let skipped =
+      0;
+
+
+    const results:
+      any[] = [];
+
+
+    // ===================================================
+    // 更新每一个 holding
+    // ===================================================
+
+    for (
+      const holding of holdings
+    ) {
+
+      const code =
+        String(
+          holding?.code ??
+          ""
+        )
+          .trim()
+          .toUpperCase();
+
+
+      // =================================================
+      // 特殊资产
+      // =================================================
+
+      if (
+        code ===
+        "WELAB_GOLD" ||
+        code ===
+        "HK_CASH"
+      ) {
+
+        skipped++;
+
+        results.push({
+
+          id:
+            holding.id,
+
+          code,
+
+          name:
+            holding.name,
+
+          source:
+            "skip",
+
+          status:
+            "skipped",
+
+          reason:
+            "特殊资产，不自动更新",
+
+        });
+
+        continue;
+
+      }
+
+
+      const market =
+        getHoldingMarket(
+          holding
+        );
+
+
+      // =================================================
+      // 判断这个市场今天是否应该更新
+      // =================================================
+
+      const status =
+        marketStatus[
+          market as keyof typeof marketStatus
+        ];
+
+
+      if (
+        !status?.shouldUpdate
+      ) {
+
+        skipped++;
+
+        results.push({
+
+          id:
+            holding.id,
+
+          code,
+
+          name:
+            holding.name,
+
+          market,
+
+          status:
+            "skipped",
+
+          reason:
+            "今天不是该市场交易日",
+
+        });
+
+        continue;
+
+      }
+
+
+      // =================================================
+      // 获取市场价格
+      // =================================================
+
+      try {
+
+        const {
+          source,
+          data,
+        } =
+          await getMarketPrice(
+            code
+          );
+
+
+        if (
+          !data ||
+          !data.price ||
+          data.price <= 0
+        ) {
+
+          failed++;
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              "市场价格获取失败",
+
+          });
+
+          continue;
+
+        }
+
+
+        const nav =
+          toNumber(
+            data.price
+          );
+
+
+        // =================================================
+        // 统一人民币
+        // =================================================
+
+        const amount =
+          calculateAmountCny(
+
+            holding,
+
+            nav,
+
+            usdCny,
+
+            market
+
+          );
+
+
+        if (
+          amount <= 0
+        ) {
+
+          failed++;
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              "无法计算人民币市值",
+
+          });
+
+          continue;
+
+        }
+
+
+        const cost =
+          toNumber(
+            holding.cost
+          );
+
+
+        const profit =
+          calculateProfit(
+            amount,
+            cost
+          );
+
+
+        const profitRate =
+          calculateProfitRate(
+            profit,
+            cost
+          );
+
+
+        // =================================================
+        // 更新 holdings
+        // =================================================
+
+        const {
+          error:
+            updateError,
+        } =
+          await supabase
+
+            .from(
+              "holdings"
+            )
+
+            .update({
+
+              amount:
+                Math.round(
+                  amount
+                ),
+
+              profit:
+                Math.round(
+                  profit
+                ),
+
+              profit_rate:
+                profitRate,
+
+              nav,
+
+              currency:
+                "CNY",
+
+              updated_at:
+                new Date()
+                  .toISOString(),
+
+            })
+
+            .eq(
+              "id",
+              holding.id
+            );
+
+
+        if (
+          updateError
+        ) {
+
+          failed++;
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              updateError.message,
+
+          });
+
+          continue;
+
+        }
+
+
+        updated++;
+
+
+        // =================================================
+        // 保存到结果
+        // =================================================
+
+        results.push({
+
+          id:
+            holding.id,
+
+          code,
+
+          name:
+            holding.name,
+
+          source,
+
+          market,
+
+          status:
+            "updated",
+
+          nav,
+
+          amount:
+            Math.round(
+              amount
+            ),
+
+          cost:
+            Math.round(
+              cost
+            ),
+
+          profit:
+            Math.round(
+              profit
+            ),
+
+          profit_rate:
+            profitRate,
+
+          currency:
+            "CNY",
+
+          shares:
+            toNumber(
+              holding.shares
+            ),
+
+          updated_at:
+            new Date()
+              .toISOString(),
+
+        });
+
+      } catch (
+        error: any
+      ) {
+
+        failed++;
+
+        results.push({
+
+          id:
+            holding.id,
+
+          code,
+
+          name:
+            holding.name,
+
+          market,
+
+          status:
+            "failed",
+
+          reason:
+            error?.message ??
+            String(error),
+
+        });
+
+      }
+
+    }
+
+
+    // =====================================================
+    // 重新读取 holdings
+    //
+    // 非常重要：
+    // 这里不能使用旧数据
+    // 必须读取更新后的数据
+    // =====================================================
+
+    const {
+      data:
+        updatedHoldingsData,
+      error:
+        updatedHoldingsError,
+    } =
+      await supabase
+
+        .from(
+          "holdings"
+        )
+
+        .select(
+          "*"
+        );
+
+
+    if (
+      updatedHoldingsError
+    ) {
+
+      return NextResponse.json({
+
+        success:
+          false,
+
+        error:
+          updatedHoldingsError.message,
+
+        results,
+
+      });
+
+    }
+
+
+    const updatedHoldings =
+      Array.isArray(
+        updatedHoldingsData
+      )
+        ? (
+            updatedHoldingsData as Holding[]
+          )
+        : [];
+
+
+    // =====================================================
+    // holdings_history
+    //
+    // 只有真正有市场更新时才保存
+    // =====================================================
+
+    let holdingsHistoryInserted =
+      0;
+
+    let holdingsHistoryUpdated =
+      0;
+
+    let holdingsHistoryFailed =
+      0;
+
+    let holdingsHistoryError:
+      string | null =
+      null;
+
+
+    if (
+      updated > 0
+    ) {
+
+      const historyResult =
+        await saveHoldingsHistory(
+
+          updatedHoldings,
+
+          snapshotDate
+
+        );
+
+
+      holdingsHistoryInserted =
+        historyResult.inserted;
+
+      holdingsHistoryUpdated =
+        historyResult.updated;
+
+      holdingsHistoryFailed =
+        historyResult.failed;
+
+
+      if (
+        holdingsHistoryFailed > 0
+      ) {
+
+        holdingsHistoryError =
+          "部分 holdings_history 写入失败";
+
+      }
+
+    }
+
+
+    // =====================================================
+    // Asset History
+    // =====================================================
+
+    let assetHistoryResult:
+      any = {
+
+        success:
+          false,
+
+        action:
+          "skip",
+
+        error:
+          null,
+
+      };
+
+
+    if (
+      updated > 0
+    ) {
+
+      assetHistoryResult =
+        await saveAssetHistory(
+
+          snapshotDate,
+
+          usdCny
+
+        );
+
+    }
+
+
+    // =====================================================
+    // 最终资产
+    // =====================================================
+
+    let totalAsset =
+      0;
+
+    let cnAsset =
+      0;
+
+    let hkAsset =
+      0;
+
+
+    for (
+      const item of
+      updatedHoldings
+    ) {
 
       const amount =
         toNumber(
-          item.amount
+          item?.amount
         );
 
 
@@ -1233,7 +2145,7 @@ async function createAssetHistory(
 
       const market =
         String(
-          item.market ??
+          item?.market ??
           ""
         )
           .trim()
@@ -1241,14 +2153,15 @@ async function createAssetHistory(
 
 
       if (
-        market === "CN" ||
-        market === "CHINA"
+        market ===
+        "CN"
       ) {
 
         cnAsset +=
           amount;
 
-      } else {
+      }
+      else {
 
         hkAsset +=
           amount;
@@ -1256,326 +2169,122 @@ async function createAssetHistory(
       }
 
     }
-  );
 
 
-  // ===================================================
-  // 中国日期
-  // ===================================================
+    // =====================================================
+    // Success
+    // =====================================================
 
-  const snapshotDate =
-    getChinaDate();
-
-
-  // ===================================================
-  // Payload
-  // ===================================================
-
-  const payload = {
-
-    snapshot_date:
-      snapshotDate,
-
-    total_asset:
-      toBigIntNumber(
-        totalAsset
-      ),
-
-    cn_asset:
-      toBigIntNumber(
-        cnAsset
-      ),
-
-    hk_asset:
-      toBigIntNumber(
-        hkAsset
-      ),
-
-    usd_cny:
-      Number(
-        usdCny.toFixed(
-          4
-        )
-      ),
-
-  };
+    const success =
+      failed === 0 &&
+      holdingsHistoryFailed === 0;
 
 
-  // ===================================================
-  // 检查当天是否已经存在
-  // ===================================================
+    return NextResponse.json({
 
-  const {
-    data:
-      existing,
-    error:
-      existingError,
-  } =
-    await supabase
+      success,
 
-      .from(
-        "asset_history"
-      )
+      date:
+        snapshotDate,
 
-      .select(
-        "id"
-      )
+      usd_cny:
+        usdCny,
 
-      .eq(
-        "snapshot_date",
-        snapshotDate
-      )
+      total:
+        holdings.length,
 
-      .limit(
-        1
-      );
+      updated,
 
+      failed,
 
-  if (
-    existingError
+      skipped,
+
+      market_status:
+        marketStatus,
+
+      // =================================================
+      // Holdings History
+      // =================================================
+
+      holdings_history:
+        updated > 0,
+
+      holdings_history_inserted:
+        holdingsHistoryInserted,
+
+      holdings_history_updated:
+        holdingsHistoryUpdated,
+
+      holdings_history_failed:
+        holdingsHistoryFailed,
+
+      holdings_history_error:
+        holdingsHistoryError,
+
+      // =================================================
+      // Asset History
+      // =================================================
+
+      asset_history:
+        assetHistoryResult.success,
+
+      asset_history_action:
+        assetHistoryResult.action,
+
+      asset_history_error:
+        assetHistoryResult.error,
+
+      // =================================================
+      // Assets
+      // =================================================
+
+      total_asset:
+        Math.round(
+          totalAsset
+        ),
+
+      cn_asset:
+        Math.round(
+          cnAsset
+        ),
+
+      hk_asset:
+        Math.round(
+          hkAsset
+        ),
+
+      duration_ms:
+        Date.now() -
+        startedAt,
+
+      results,
+
+    });
+
+  } catch (
+    error: any
   ) {
 
     console.error(
-      "❌ 检查 asset_history 失败:",
-      existingError
-    );
-
-    return {
-
-      success:
-        false,
-
-      action:
-        null,
-
-      error:
-        existingError.message,
-
-      totalAsset,
-
-      cnAsset,
-
-      hkAsset,
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 已存在 → UPDATE
-  // ===================================================
-
-  if (
-    existing &&
-    existing.length > 0
-  ) {
-
-    const historyId =
-      existing[0].id;
-
-
-    const {
-      error:
-        updateError,
-    } =
-      await supabase
-
-        .from(
-          "asset_history"
-        )
-
-        .update(
-          payload
-        )
-
-        .eq(
-          "id",
-          historyId
-        );
-
-
-    if (
-      updateError
-    ) {
-
-      console.error(
-        "❌ 更新 asset_history 失败:",
-        updateError
-      );
-
-      return {
-
-        success:
-          false,
-
-        action:
-          "update",
-
-        error:
-          updateError.message,
-
-        totalAsset,
-
-        cnAsset,
-
-        hkAsset,
-
-      };
-
-    }
-
-
-    console.log(
-      "✅ asset_history 今日记录已更新"
+      "update-market fatal error:",
+      error
     );
 
 
-    return {
-
-      success:
-        true,
-
-      action:
-        "update",
-
-      error:
-        null,
-
-      totalAsset,
-
-      cnAsset,
-
-      hkAsset,
-
-    };
-
-  }
-
-
-  // ===================================================
-  // 不存在 → INSERT
-  // ===================================================
-
-  const {
-    error:
-      insertError,
-  } =
-    await supabase
-
-      .from(
-        "asset_history"
-      )
-
-      .insert(
-        payload
-      );
-
-
-  if (
-    insertError
-  ) {
-
-    console.error(
-      "❌ 插入 asset_history 失败:",
-      insertError
-    );
-
-    return {
-
-      success:
-        false,
-
-      action:
-        "insert",
-
-      error:
-        insertError.message,
-
-      totalAsset,
-
-      cnAsset,
-
-      hkAsset,
-
-    };
-
-  }
-
-
-  console.log(
-    "✅ asset_history 今日记录已创建"
-  );
-
-
-  return {
-
-    success:
-      true,
-
-    action:
-      "insert",
-
-    error:
-      null,
-
-    totalAsset,
-
-    cnAsset,
-
-    hkAsset,
-
-  };
-
-}
-
-
-// =====================================================
-// GET
-// =====================================================
-
-export async function GET() {
-
-  const startTime =
-    Date.now();
-
-
-  console.log();
-
-  console.log(
-    "======================================="
-  );
-
-  console.log(
-    "开始自动更新全球资产"
-  );
-
-  console.log(
-    "=======================================");
-
-
-  // ===================================================
-  // 1. USD/CNY
-  // ===================================================
-
-  const usdCny =
-    await getUsdCny();
-
-
-  if (
-    !usdCny ||
-    usdCny <= 0
-  ) {
-
-    return Response.json(
+    return NextResponse.json(
 
       {
 
         success:
           false,
 
-        message:
-          "USD/CNY 获取失败，本次停止更新",
+        error:
+          error?.message ??
+          String(error),
+
+        duration_ms:
+          Date.now() -
+          startedAt,
 
       },
 
@@ -1589,390 +2298,5 @@ export async function GET() {
     );
 
   }
-
-
-  console.log(
-    "USD/CNY:",
-    usdCny
-  );
-
-
-  // ===================================================
-  // 2. Active Holdings
-  // ===================================================
-
-  const holdings =
-    await getActiveHoldings();
-
-
-  if (
-    holdings.length === 0
-  ) {
-
-    return Response.json(
-
-      {
-
-        success:
-          false,
-
-        message:
-          "没有找到 active holdings",
-
-        usd_cny:
-          usdCny,
-
-      },
-
-      {
-
-        status:
-          404,
-
-      }
-
-    );
-
-  }
-
-
-  console.log(
-    "Active Holdings:",
-    holdings.length
-  );
-
-
-  // ===================================================
-  // 3. 更新全部资产
-  // ===================================================
-
-  const results:
-    any[] =
-    [];
-
-
-  for (
-    const holding
-    of holdings
-  ) {
-
-    try {
-
-      const result =
-        await updateHolding(
-          holding,
-          usdCny
-        );
-
-
-      results.push(
-        result
-      );
-
-    } catch (
-      error: any
-    ) {
-
-      console.error(
-        `❌ ${holding.code} 未知错误:`,
-        error
-      );
-
-
-      results.push({
-
-        id:
-          holding.id,
-
-        code:
-          holding.code,
-
-        name:
-          holding.name,
-
-        status:
-          "failed",
-
-        reason:
-          error?.message ??
-          "未知错误",
-
-      });
-
-    }
-
-  }
-
-
-  // ===================================================
-  // 4. 统计
-  // ===================================================
-
-  const updated =
-    results.filter(
-      item =>
-        item.status ===
-        "updated"
-    ).length;
-
-
-  const failed =
-    results.filter(
-      item =>
-        item.status ===
-        "failed"
-    ).length;
-
-
-  const skipped =
-    results.filter(
-      item =>
-        item.status ===
-        "skipped"
-    ).length;
-
-
-  // ===================================================
-  // 5. 中国日期
-  // ===================================================
-
-  const snapshotDate =
-    getChinaDate();
-
-
-  // ===================================================
-  // 6. Holdings History
-  //
-  // 只要当天至少有一个资产成功更新
-  // 就记录当天全部 active holdings
-  //
-  // 同一天重复执行：
-  // UPDATE
-  // 不重复 INSERT
-  // ===================================================
-
-  let holdingsHistory:
-    any = {
-
-      success:
-        false,
-
-      inserted:
-        0,
-
-      updated:
-        0,
-
-      failed:
-        0,
-
-      error:
-        null,
-
-    };
-
-
-  if (
-    updated > 0
-  ) {
-
-    holdingsHistory =
-      await createHoldingsHistory(
-        snapshotDate
-      );
-
-  }
-
-
-  // ===================================================
-  // 7. Asset History
-  //
-  // 只要有成功更新
-  // 创建 / 更新当天资产历史
-  // ===================================================
-
-  let assetHistory:
-    any = {
-
-      success:
-        false,
-
-      action:
-        null,
-
-      error:
-        null,
-
-      totalAsset:
-        null,
-
-      cnAsset:
-        null,
-
-      hkAsset:
-        null,
-
-    };
-
-
-  if (
-    updated > 0
-  ) {
-
-    assetHistory =
-      await createAssetHistory(
-        usdCny
-      );
-
-  }
-
-
-  // ===================================================
-  // 8. 完成
-  // ===================================================
-
-  const duration =
-    Date.now() -
-    startTime;
-
-
-  console.log();
-
-  console.log(
-    "======================================="
-  );
-
-  console.log(
-    "全球资产自动更新完成"
-  );
-
-  console.log(
-    "=======================================");
-
-
-  console.log(
-    "总资产:",
-    holdings.length
-  );
-
-
-  console.log(
-    "成功:",
-    updated
-  );
-
-
-  console.log(
-    "失败:",
-    failed
-  );
-
-
-  console.log(
-    "跳过:",
-    skipped
-  );
-
-
-  console.log(
-    "USD/CNY:",
-    usdCny
-  );
-
-
-  console.log(
-    "Holdings History:",
-    holdingsHistory
-  );
-
-
-  console.log(
-    "Asset History:",
-    assetHistory
-  );
-
-
-  console.log(
-    "耗时:",
-    duration,
-    "ms"
-  );
-
-
-  // ===================================================
-  // 9. 返回结果
-  // ===================================================
-
-  return Response.json({
-
-    success:
-      failed === 0 &&
-      (
-        updated > 0 ||
-        skipped > 0
-      ) &&
-      (
-        assetHistory.success ||
-        updated === 0
-      ),
-
-    date:
-      snapshotDate,
-
-    usd_cny:
-      Number(
-        usdCny.toFixed(
-          4
-        )
-      ),
-
-    total:
-      holdings.length,
-
-    updated,
-
-    failed,
-
-    skipped,
-
-    holdings_history:
-      holdingsHistory.success,
-
-    holdings_history_inserted:
-      holdingsHistory.inserted,
-
-    holdings_history_updated:
-      holdingsHistory.updated,
-
-    holdings_history_failed:
-      holdingsHistory.failed,
-
-    holdings_history_error:
-      holdingsHistory.error,
-
-    asset_history:
-      assetHistory.success,
-
-    asset_history_action:
-      assetHistory.action,
-
-    asset_history_error:
-      assetHistory.error,
-
-    total_asset:
-      assetHistory.totalAsset,
-
-    cn_asset:
-      assetHistory.cnAsset,
-
-    hk_asset:
-      assetHistory.hkAsset,
-
-    duration_ms:
-      duration,
-
-    results,
-
-  });
 
 }
