@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useState,
+} from "react";
 
 import TopBar from "@/components/TopBar";
 
@@ -8,169 +11,230 @@ import {
   getLatestAsset,
   getAssetHistory,
   getHoldings,
+  getHoldingsHistoryComparison,
 } from "@/lib/asset";
 
 import PerformanceSummary from "@/components/PerformanceSummary";
 import ProfitTrend from "@/components/ProfitTrend";
 import ProfitRanking from "@/components/ProfitRanking";
+import TodayPerformanceTable from "@/components/TodayPerformanceTable";
 
 
-export default function Performance(){
+// =====================================================
+// Performance Page
+// =====================================================
 
+export default function Performance() {
 
-const [asset,setAsset]=useState<any>(null);
+  const [
+    asset,
+    setAsset,
+  ] =
+    useState<any>(null);
 
-const [history,setHistory]=useState<any[]>([]);
 
-const [holdings,setHoldings]=useState<any[]>([]);
+  const [
+    history,
+    setHistory,
+  ] =
+    useState<any[]>([]);
 
 
+  const [
+    holdings,
+    setHoldings,
+  ] =
+    useState<any[]>([]);
 
-useEffect(()=>{
 
+  const [
+    comparison,
+    setComparison,
+  ] =
+    useState<any>(null);
 
-async function load(){
 
+  // ===================================================
+  // Load
+  // ===================================================
 
-const [
+  useEffect(
+    () => {
 
-latest,
+      async function load() {
 
-historyData,
+        const [
 
-holdingsData
+          latest,
 
-]=await Promise.all([
+          historyData,
 
-getLatestAsset(),
+          holdingsData,
 
-getAssetHistory(),
+          comparisonData,
 
-getHoldings()
+        ] =
+          await Promise.all([
 
-]);
+            getLatestAsset(),
 
+            getAssetHistory(),
 
+            getHoldings(),
 
-setAsset(latest);
+            getHoldingsHistoryComparison(),
 
-setHistory(historyData);
+          ]);
 
-setHoldings(holdingsData);
 
+        setAsset(
+          latest
+        );
 
-}
 
+        setHistory(
+          historyData
+        );
 
 
-load();
+        setHoldings(
+          holdingsData
+        );
 
 
+        setComparison(
+          comparisonData
+        );
 
-},[]);
+      }
 
 
+      load();
 
+    },
+    []
+  );
 
 
+  // ===================================================
+  // Loading
+  // ===================================================
 
+  if (!asset) {
 
-if(!asset){
+    return (
 
-return (
+      <>
 
-<>
+        <TopBar
+          title="Performance"
+        />
 
-<TopBar
 
-title="Performance"
+        <div
+          className="
+            p-10
+          "
+        >
 
-/>
+          Loading...
 
+        </div>
 
-<div className="p-10">
+      </>
 
-Loading...
+    );
 
-</div>
+  }
 
 
-</>
+  // ===================================================
+  // Render
+  // ===================================================
 
-);
+  return (
 
+    <>
 
-}
+      {/* =================================================
+          TopBar
+      ================================================= */}
 
+      <TopBar
+        title="Performance"
+        lastUpdate={
+          asset.snapshot_date
+        }
+        usdCny={
+          asset.usd_cny
+        }
+      />
 
 
+      <main
+        className="
+          p-10
+          space-y-10
+        "
+      >
 
+        {/* =================================================
+            Performance Summary
+        ================================================= */}
 
+        <PerformanceSummary
+          asset={
+            asset
+          }
+        />
 
 
-return (
+        {/* =================================================
+            今日资产表现
+           
+            唯一的今日涨跌表格
+           
+            数据来源：
+            holdings_history
+           
+            自动比较：
+            最近交易日
+            vs
+            前一个交易日
+        ================================================= */}
 
-<>
+        <TodayPerformanceTable
+          comparison={
+            comparison
+          }
+        />
 
 
-<TopBar
+        {/* =================================================
+            Profit Trend
+        ================================================= */}
 
-title="Performance"
+        <ProfitTrend
+          history={
+            history
+          }
+        />
 
-lastUpdate={asset.snapshot_date}
 
-usdCny={asset.usd_cny}
+        {/* =================================================
+            Profit Ranking
+        ================================================= */}
 
-/>
+        <ProfitRanking
+          holdings={
+            holdings
+          }
+        />
 
+      </main>
 
+    </>
 
-<main
-
-className="
-p-10
-space-y-10
-"
-
->
-
-
-
-<PerformanceSummary
-
-asset={asset}
-
-/>
-
-
-
-
-<ProfitTrend
-
-history={history}
-
-/>
-
-
-
-
-<ProfitRanking
-
-holdings={holdings}
-
-/>
-
-
-
-
-
-</main>
-
-
-</>
-
-
-);
-
+  );
 
 }
