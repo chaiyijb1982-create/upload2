@@ -14,6 +14,9 @@
 // 8. 更新 asset_history
 // 9. WELAB_GOLD / HK_CASH 跳过
 // 10. shares = 0 的资产允许正常更新
+// 11. 每次 Cron 执行写入 cron_logs
+// 12. 记录 running / success / failed
+// 13. 记录更新数量、失败数量、跳过数量、耗时、错误
 //
 // 注意：
 // 本文件只能运行在服务器端
@@ -170,7 +173,9 @@ function isWeekend(
 // =====================================================
 // Service Role Supabase Client
 //
-// 专门用于服务器端历史数据写入。
+// 专门用于服务器端历史数据写入
+// 以及 Cron 日志写入。
+//
 // 不要放到客户端。
 // =====================================================
 
@@ -228,6 +233,211 @@ function getAdminSupabase() {
 
 
 // =====================================================
+// Cron Log
+//
+// 用于确认 Vercel Cron 是否真正执行。
+// =====================================================
+
+async function startCronLog() {
+
+  try {
+
+    const adminSupabase =
+      getAdminSupabase();
+
+
+    const {
+      data,
+      error,
+    } =
+      await adminSupabase
+
+        .from(
+          "cron_logs"
+        )
+
+        .insert({
+
+          job_name:
+            "update-market",
+
+          status:
+            "running",
+
+          started_at:
+            new Date().toISOString(),
+
+        })
+
+        .select(
+          "id"
+        )
+
+        .single();
+
+
+    if (
+      error
+    ) {
+
+      console.error(
+        "Cron log start failed:",
+        error
+      );
+
+      return null;
+
+    }
+
+
+    return data?.id ?? null;
+
+  } catch (
+    error
+  ) {
+
+    console.error(
+      "Cron log start exception:",
+      error
+    );
+
+    return null;
+
+  }
+
+}
+
+
+// =====================================================
+// 完成 Cron Log
+// =====================================================
+
+async function finishCronLog(
+  logId: number | null,
+  data: {
+
+    status:
+      "success" |
+      "failed";
+
+    startedAt:
+      number;
+
+    updated?:
+      number;
+
+    failed?:
+      number;
+
+    skipped?:
+      number;
+
+    message?:
+      string;
+
+    error?:
+      string | null;
+
+    details?:
+      any;
+
+  }
+) {
+
+  if (
+    !logId
+  ) {
+
+    return;
+
+  }
+
+
+  try {
+
+    const adminSupabase =
+      getAdminSupabase();
+
+
+    const {
+      error,
+    } =
+      await adminSupabase
+
+        .from(
+          "cron_logs"
+        )
+
+        .update({
+
+          status:
+            data.status,
+
+          finished_at:
+            new Date().toISOString(),
+
+          duration_ms:
+            Date.now() -
+            data.startedAt,
+
+          message:
+            data.message ??
+            null,
+
+          updated_count:
+            data.updated ??
+            0,
+
+          failed_count:
+            data.failed ??
+            0,
+
+          skipped_count:
+            data.skipped ??
+            0,
+
+          error:
+            data.error ??
+            null,
+
+          details:
+            data.details ??
+            null,
+
+        })
+
+        .eq(
+          "id",
+          logId
+        );
+
+
+    if (
+      error
+    ) {
+
+      console.error(
+        "Cron log finish failed:",
+        error
+      );
+
+    }
+
+  } catch (
+    error
+  ) {
+
+    console.error(
+      "Cron log finish exception:",
+      error
+    );
+
+  }
+
+}
+
+
+// =====================================================
 // 交易日 API
 //
 // 使用 Yahoo Finance chart 判断市场是否有当天数据。
@@ -242,7 +452,9 @@ async function checkTradingDay(
 
 
   const todayStr =
-    formatDate(today);
+    formatDate(
+      today
+    );
 
 
   // ===================================================
@@ -250,7 +462,9 @@ async function checkTradingDay(
   // ===================================================
 
   if (
-    isWeekend(today)
+    isWeekend(
+      today
+    )
   ) {
 
     return {
@@ -348,7 +562,9 @@ async function checkTradingDay(
 
     const url =
       "https://query1.finance.yahoo.com/v8/finance/chart/" +
-      encodeURIComponent(symbol) +
+      encodeURIComponent(
+        symbol
+      ) +
       `?period1=${start}` +
       `&period2=${end}` +
       "&interval=1d";
@@ -387,7 +603,9 @@ async function checkTradingDay(
       return {
 
         shouldUpdate:
-          !isWeekend(today),
+          !isWeekend(
+            today
+          ),
 
         date:
           todayStr,
@@ -452,7 +670,9 @@ async function checkTradingDay(
     return {
 
       shouldUpdate:
-        !isWeekend(today),
+        !isWeekend(
+          today
+        ),
 
       date:
         todayStr,
@@ -651,7 +871,7 @@ function calculateAmountCny(
   // ===================================================
   // 非法 shares
   //
-// shares < 0 才是非法。
+  // shares < 0 才是非法。
 // shares = 0 是合法的。
 // ===================================================
 
@@ -680,7 +900,7 @@ function calculateAmountCny(
   // ===================================================
   // 没有持仓
   //
-// 这是合法状态。
+  // 这是合法状态。
 // 返回 0。
 // 上层不会再因为 amount = 0 判定失败。
 // ===================================================
@@ -706,7 +926,7 @@ function calculateAmountCny(
   // ===================================================
   // 中国资产
   //
-// NAV 本身就是 CNY。
+  // NAV 本身就是 CNY。
 // ===================================================
 
   if (
@@ -720,9 +940,9 @@ function calculateAmountCny(
 
   // ===================================================
   // 海外资产
-//
-// USD × USD/CNY
-// ===================================================
+  //
+  // USD × USD/CNY
+  // ===================================================
 
   return (
     rawAmount *
@@ -1572,6 +1792,10 @@ export async function GET(
     Date.now();
 
 
+  let cronLogId:
+    number | null = null;
+
+
   try {
 
     // ===================================================
@@ -1624,6 +1848,14 @@ export async function GET(
 
 
     // ===================================================
+    // 开始记录 Cron
+    // ===================================================
+
+    cronLogId =
+      await startCronLog();
+
+
+    // ===================================================
     // 今天
     // ===================================================
 
@@ -1649,6 +1881,28 @@ export async function GET(
       !usdCny ||
       usdCny <= 0
     ) {
+
+      await finishCronLog(
+
+        cronLogId,
+
+        {
+
+          status:
+            "failed",
+
+          startedAt,
+
+          message:
+            "USD/CNY 获取失败",
+
+          error:
+            "USD/CNY 获取失败",
+
+        }
+
+      );
+
 
       return NextResponse.json(
 
@@ -1706,6 +1960,28 @@ export async function GET(
     if (
       holdingsError
     ) {
+
+      await finishCronLog(
+
+        cronLogId,
+
+        {
+
+          status:
+            "failed",
+
+          startedAt,
+
+          message:
+            "获取 holdings 失败",
+
+          error:
+            holdingsError.message,
+
+        }
+
+      );
+
 
       return NextResponse.json(
 
@@ -2237,6 +2513,37 @@ export async function GET(
       updatedHoldingsError
     ) {
 
+      await finishCronLog(
+
+        cronLogId,
+
+        {
+
+          status:
+            "failed",
+
+          startedAt,
+
+          updated,
+
+          failed,
+
+          skipped,
+
+          message:
+            "重新读取 holdings 失败",
+
+          error:
+            updatedHoldingsError.message,
+
+          details:
+            results,
+
+        }
+
+      );
+
+
       return NextResponse.json({
 
         success:
@@ -2265,9 +2572,9 @@ export async function GET(
     // ===================================================
     // holdings_history
     //
-// 保存全部 holdings。
-// 与原来的 Python 行为保持一致。
-// ===================================================
+    // 保存全部 holdings。
+    // 与原来的 Python 行为保持一致。
+    // ===================================================
 
     let holdingsHistoryInserted =
       0;
@@ -2306,7 +2613,8 @@ export async function GET(
         historyResult.failed;
 
       holdingsHistoryError =
-        historyResult.error ?? null;
+        historyResult.error ??
+        null;
 
     }
 
@@ -2419,6 +2727,113 @@ export async function GET(
       assetHistoryResult.success;
 
 
+    // ===================================================
+    // Cron Log
+    //
+    // 正常结束后写入最终结果。
+    // ===================================================
+
+    await finishCronLog(
+
+      cronLogId,
+
+      {
+
+        status:
+          success
+            ? "success"
+            : "failed",
+
+        startedAt,
+
+        updated,
+
+        failed:
+          failed +
+          holdingsHistoryFailed,
+
+        skipped,
+
+        message:
+          success
+            ? "全球资产自动更新成功"
+            : "全球资产自动更新存在失败",
+
+        error:
+          success
+            ? null
+            : (
+                assetHistoryResult.error ??
+                (
+                  holdingsHistoryError
+                    ? JSON.stringify(
+                        holdingsHistoryError
+                      )
+                    : null
+                ) ??
+                null
+              ),
+
+        details: {
+
+          date:
+            snapshotDate,
+
+          usd_cny:
+            usdCny,
+
+          total:
+            holdings.length,
+
+          updated,
+
+          failed,
+
+          skipped,
+
+          holdings_history_inserted:
+            holdingsHistoryInserted,
+
+          holdings_history_updated:
+            holdingsHistoryUpdated,
+
+          holdings_history_failed:
+            holdingsHistoryFailed,
+
+          asset_history_action:
+            assetHistoryResult.action,
+
+          asset_history_success:
+            assetHistoryResult.success,
+
+          total_asset:
+            Math.round(
+              totalAsset
+            ),
+
+          cn_asset:
+            Math.round(
+              cnAsset
+            ),
+
+          hk_asset:
+            Math.round(
+              hkAsset
+            ),
+
+          results,
+
+        },
+
+      }
+
+    );
+
+
+    // ===================================================
+    // 最终 Response
+    // ===================================================
+
     return NextResponse.json({
 
       success,
@@ -2493,6 +2908,18 @@ export async function GET(
           hkAsset
         ),
 
+      // =================================================
+      // Cron Log
+      // =================================================
+
+      cron_log:
+        cronLogId
+          ? true
+          : false,
+
+      cron_log_id:
+        cronLogId,
+
       duration_ms:
         Date.now() -
         startedAt,
@@ -2511,6 +2938,33 @@ export async function GET(
     );
 
 
+    // ===================================================
+    // Fatal Error → Cron Log
+    // ===================================================
+
+    await finishCronLog(
+
+      cronLogId,
+
+      {
+
+        status:
+          "failed",
+
+        startedAt,
+
+        message:
+          "update-market 发生致命错误",
+
+        error:
+          error?.message ??
+          String(error),
+
+      }
+
+    );
+
+
     return NextResponse.json(
 
       {
@@ -2521,6 +2975,14 @@ export async function GET(
         error:
           error?.message ??
           String(error),
+
+        cron_log:
+          cronLogId
+            ? true
+            : false,
+
+        cron_log_id:
+          cronLogId,
 
         duration_ms:
           Date.now() -
