@@ -106,7 +106,7 @@ export default function Home() {
       try {
 
         // =================================================
-        // Dashboard 基础数据
+        // 基础数据
         // =================================================
 
         const [
@@ -188,11 +188,8 @@ export default function Home() {
                 item?.amount ?? 0
               );
 
-
             return (
-
               sum +
-
               (
                 Number.isFinite(
                   amount
@@ -200,7 +197,6 @@ export default function Home() {
                   ? amount
                   : 0
               )
-
             );
 
           },
@@ -211,9 +207,29 @@ export default function Home() {
 
 
         // =================================================
-        // Holdings
-        //
-        // 只计算 active
+        // 工具函数
+        // =================================================
+
+        const numberValue = (
+          value: any
+        ): number => {
+
+          const n =
+            Number(
+              value ?? 0
+            );
+
+          return Number.isFinite(
+            n
+          )
+            ? n
+            : 0;
+
+        };
+
+
+        // =================================================
+        // Active Holdings
         // =================================================
 
         const activeHoldings = (
@@ -235,60 +251,7 @@ export default function Home() {
 
 
         // =================================================
-        // 工具函数
-        // =================================================
-
-        const numberValue = (
-          value: any
-        ): number => {
-
-          const n =
-            Number(
-              value ?? 0
-            );
-
-
-          return Number.isFinite(
-            n
-          )
-            ? n
-            : 0;
-
-        };
-
-
-        // =================================================
-        // Total Profit
-        //
-        // 所有 active Holdings 的 profit 汇总
-        // =================================================
-
-        const totalProfit =
-          activeHoldings.reduce(
-
-            (
-              sum: number,
-              item: any
-            ) => {
-
-              return (
-                sum +
-                numberValue(
-                  item?.profit
-                )
-              );
-
-            },
-
-            0
-
-          );
-
-
-        // =================================================
         // Total Cost
-        //
-        // 所有 active Holdings 的 cost 汇总
         // =================================================
 
         const totalCost =
@@ -314,9 +277,33 @@ export default function Home() {
 
 
         // =================================================
+        // Total Profit
+        // =================================================
+
+        const totalProfit =
+          activeHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
         // Total Return
-        //
-        // Profit / Cost
         // =================================================
 
         const totalRate =
@@ -332,11 +319,6 @@ export default function Home() {
 
         // =================================================
         // Mainland Holdings
-        //
-        // 与 asset_history 的逻辑保持一致：
-        //
-        // CN / CHINA → 大陆
-        // 其他 → 香港 / 海外
         // =================================================
 
         const mainlandHoldings =
@@ -353,7 +335,6 @@ export default function Home() {
                   .trim()
                   .toUpperCase();
 
-
               return (
                 market === "CN" ||
                 market === "CHINA"
@@ -365,10 +346,10 @@ export default function Home() {
 
 
         // =================================================
-        // Mainland Profit
+        // Mainland Asset
         // =================================================
 
-        const cnProfit =
+        const cnAsset =
           mainlandHoldings.reduce(
 
             (
@@ -379,7 +360,7 @@ export default function Home() {
               return (
                 sum +
                 numberValue(
-                  item?.profit
+                  item?.amount
                 )
               );
 
@@ -417,7 +398,33 @@ export default function Home() {
 
 
         // =================================================
-        // Mainland Return
+        // Mainland Profit
+        // =================================================
+
+        const cnProfit =
+          mainlandHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // Mainland Rate
         // =================================================
 
         const cnRate =
@@ -432,12 +439,7 @@ export default function Home() {
 
 
         // =================================================
-        // Overseas / HK Holdings
-        //
-        // 保持与你现在 asset_history
-        // hk_asset 的定义一致
-        //
-        // 非 CN 全部归入这里
+        // HK / Overseas Holdings
         // =================================================
 
         const overseasHoldings =
@@ -454,7 +456,6 @@ export default function Home() {
                   .trim()
                   .toUpperCase();
 
-
               return !(
                 market === "CN" ||
                 market === "CHINA"
@@ -466,10 +467,10 @@ export default function Home() {
 
 
         // =================================================
-        // HK Profit
+        // HK Asset
         // =================================================
 
-        const hkProfit =
+        const hkAsset =
           overseasHoldings.reduce(
 
             (
@@ -480,7 +481,7 @@ export default function Home() {
               return (
                 sum +
                 numberValue(
-                  item?.profit
+                  item?.amount
                 )
               );
 
@@ -518,7 +519,33 @@ export default function Home() {
 
 
         // =================================================
-        // HK Return
+        // HK Profit
+        // =================================================
+
+        const hkProfit =
+          overseasHoldings.reduce(
+
+            (
+              sum: number,
+              item: any
+            ) => {
+
+              return (
+                sum +
+                numberValue(
+                  item?.profit
+                )
+              );
+
+            },
+
+            0
+
+          );
+
+
+        // =================================================
+        // HK Rate
         // =================================================
 
         const hkRate =
@@ -533,11 +560,16 @@ export default function Home() {
 
 
         // =================================================
-        // 原始 Total Wealth
-        //
-        // 来自 asset_history
-        //
-        // 这里不改变原有逻辑
+        // Investment Total
+        // =================================================
+
+        const investmentTotal =
+          cnAsset +
+          hkAsset;
+
+
+        // =================================================
+        // 原始投资资产
         // =================================================
 
         const originalTotalWealth =
@@ -547,40 +579,749 @@ export default function Home() {
 
 
         // =================================================
-        // 最终 Total Wealth
+        // TOTAL WEALTH
         //
-        // Holdings / Asset History
-        // +
-        // 固收资产
+        // 投资资产 + 固收资产
         // =================================================
 
         const totalWealth =
-          originalTotalWealth +
+          investmentTotal +
           fixedIncomeSum;
 
 
         // =================================================
+        // 历史数据排序
+        // =================================================
+
+        const sortedHistory =
+          (
+            Array.isArray(
+              assetHistory
+            )
+              ? assetHistory
+              : []
+          )
+            .filter(
+              (
+                item: any
+              ) =>
+                item?.snapshot_date
+            )
+            .sort(
+              (
+                a: any,
+                b: any
+              ) =>
+                new Date(
+                  a.snapshot_date
+                ).getTime() -
+                new Date(
+                  b.snapshot_date
+                ).getTime()
+            );
+
+
+        // =================================================
+        // 本地日期解析
+        // 避免 UTC 导致日期错一天
+        // =================================================
+
+        const parseLocalDate = (
+          value: string
+        ) => {
+
+          const parts =
+            String(
+              value
+            ).split("-");
+
+          return new Date(
+
+            Number(
+              parts[0]
+            ),
+
+            Number(
+              parts[1]
+            ) - 1,
+
+            Number(
+              parts[2]
+            )
+
+          );
+
+        };
+
+
+        // =================================================
+        // 找目标日期之前最近一条数据
+        //
+        // 周末 / 节假日 / 缺数据
+        // 自动向前寻找最近交易日
+        //
+        // 如果历史不足：
+        // 使用数据库最早记录
+        // =================================================
+
+        const findPreviousHistory = (
+          targetDate: Date
+        ) => {
+
+          const targetTime =
+            targetDate.getTime();
+
+          let result =
+            null;
+
+          for (
+            const item of sortedHistory
+          ) {
+
+            const itemDate =
+              parseLocalDate(
+                item.snapshot_date ?? ""
+              );
+
+            if (
+              itemDate.getTime() <=
+              targetTime
+            ) {
+
+              result =
+                item;
+
+            } else {
+
+              break;
+
+            }
+
+          }
+
+
+          // -----------------------------------------------
+          // 历史不足
+          // -----------------------------------------------
+
+          return (
+            result ??
+            sortedHistory[0] ??
+            null
+          );
+
+        };
+
+
+        // =================================================
+        // 当前 Snapshot
+        // =================================================
+
+        const currentSnapshot =
+          latestAsset ??
+          sortedHistory[
+            sortedHistory.length - 1
+          ] ??
+          null;
+
+
+        const currentDate =
+          currentSnapshot?.snapshot_date
+
+            ? parseLocalDate(
+                currentSnapshot.snapshot_date
+              )
+
+            : new Date();
+
+
+        // =================================================
+        // 历史投资资产
+        //
+        // asset_history.total_asset
+        // = 历史投资资产
+        // =================================================
+
+        const getHistoryInvestment =
+          (
+            item: any
+          ) => {
+
+            return numberValue(
+              item?.total_asset
+            );
+
+          };
+
+
+        // =================================================
+        // 历史大陆投资资产
+        // =================================================
+
+        const getHistoryCN =
+          (
+            item: any
+          ) => {
+
+            // 优先使用历史 cn_asset
+            if (
+              item?.cn_asset !==
+              undefined &&
+              item?.cn_asset !==
+              null
+            ) {
+
+              return numberValue(
+                item?.cn_asset
+              );
+
+            }
+
+
+            // 如果历史没有 cn_asset，
+            // 使用 total_asset 作为兜底
+            return 0;
+
+          };
+
+
+        // =================================================
+        // 历史香港投资资产
+        // =================================================
+
+        const getHistoryHK =
+          (
+            item: any
+          ) => {
+
+            if (
+              item?.hk_asset !==
+              undefined &&
+              item?.hk_asset !==
+              null
+            ) {
+
+              return numberValue(
+                item?.hk_asset
+              );
+
+            }
+
+            return 0;
+
+          };
+
+
+        // =================================================
+        // 历史 TOTAL WEALTH
+        //
+        // 关键：
+        //
+        // 历史 Total Wealth
+        // =
+        // 历史投资资产
+        // +
+        // 当前固收资产
+        //
+        // 避免因为固收没有历史 snapshot，
+        // 导致 TOTAL WEALTH 出现虚假大幅变化。
+        // =================================================
+
+        const getHistoryTotalWealth =
+          (
+            item: any
+          ) => {
+
+            return (
+              getHistoryInvestment(
+                item
+              ) +
+              fixedIncomeSum
+            );
+
+          };
+
+
+        // =================================================
+        // 日期目标
+        // =================================================
+
+        const yesterdayDate =
+          new Date(
+            currentDate
+          );
+
+        yesterdayDate.setDate(
+          yesterdayDate.getDate() - 1
+        );
+
+
+        const lastWeekDate =
+          new Date(
+            currentDate
+          );
+
+        lastWeekDate.setDate(
+          lastWeekDate.getDate() - 7
+        );
+
+
+        const lastMonthDate =
+          new Date(
+            currentDate
+          );
+
+        lastMonthDate.setMonth(
+          lastMonthDate.getMonth() - 1
+        );
+
+
+        const lastYearDate =
+          new Date(
+            currentDate
+          );
+
+        lastYearDate.setFullYear(
+          lastYearDate.getFullYear() - 1
+        );
+
+
+        // =================================================
+        // 历史记录
+        // =================================================
+
+        const yesterdayHistory =
+          findPreviousHistory(
+            yesterdayDate
+          );
+
+
+        const lastWeekHistory =
+          findPreviousHistory(
+            lastWeekDate
+          );
+
+
+        const lastMonthHistory =
+          findPreviousHistory(
+            lastMonthDate
+          );
+
+
+        const lastYearHistory =
+          findPreviousHistory(
+            lastYearDate
+          );
+
+
+        // =================================================
+        // YTD
+        //
+        // 今年不再显示在 AssetSummary，
+        // 但保留数据给后续系统使用。
+        // =================================================
+
+        const yearStartDate =
+          new Date(
+            currentDate.getFullYear(),
+            0,
+            1
+          );
+
+
+        const ytdBase =
+          findPreviousHistory(
+            yearStartDate
+          );
+
+
+        // =================================================
+        // 通用比较函数
+        // =================================================
+
+        const makeComparison =
+          (
+            currentValue: number,
+            previousValue: number,
+            previous: any
+          ) => {
+
+            if (
+              !previous
+            ) {
+
+              return {
+
+                available:
+                  false,
+
+                snapshot_date:
+                  null,
+
+                previous:
+                  null,
+
+                change:
+                  null,
+
+                change_rate:
+                  null,
+
+              };
+
+            }
+
+
+            const change =
+              currentValue -
+              previousValue;
+
+
+            const changeRate =
+              previousValue !== 0
+
+                ? (
+                    change /
+                    previousValue
+                  ) * 100
+
+                : 0;
+
+
+            return {
+
+              available:
+                true,
+
+              snapshot_date:
+                previous.snapshot_date,
+
+              previous:
+                previousValue,
+
+              change,
+
+              change_rate:
+                changeRate,
+
+            };
+
+          };
+
+
+        // =================================================
+        // TOTAL WEALTH 比较
+        // =================================================
+
+        const totalWealthYesterday =
+          yesterdayHistory
+            ? getHistoryTotalWealth(
+                yesterdayHistory
+              )
+            : totalWealth;
+
+
+        const totalWealthLastWeek =
+          lastWeekHistory
+            ? getHistoryTotalWealth(
+                lastWeekHistory
+              )
+            : totalWealth;
+
+
+        const totalWealthLastMonth =
+          lastMonthHistory
+            ? getHistoryTotalWealth(
+                lastMonthHistory
+              )
+            : totalWealth;
+
+
+        const totalWealthLastYear =
+          lastYearHistory
+            ? getHistoryTotalWealth(
+                lastYearHistory
+              )
+            : totalWealth;
+
+
+        // =================================================
+        // 投资总资产比较
+        // =================================================
+
+        const investmentYesterday =
+          yesterdayHistory
+            ? getHistoryInvestment(
+                yesterdayHistory
+              )
+            : investmentTotal;
+
+
+        const investmentLastWeek =
+          lastWeekHistory
+            ? getHistoryInvestment(
+                lastWeekHistory
+              )
+            : investmentTotal;
+
+
+        const investmentLastMonth =
+          lastMonthHistory
+            ? getHistoryInvestment(
+                lastMonthHistory
+              )
+            : investmentTotal;
+
+
+        const investmentLastYear =
+          lastYearHistory
+            ? getHistoryInvestment(
+                lastYearHistory
+              )
+            : investmentTotal;
+
+
+        // =================================================
+        // 大陆投资资产比较
+        // =================================================
+
+        const cnYesterday =
+          yesterdayHistory
+            ? getHistoryCN(
+                yesterdayHistory
+              )
+            : cnAsset;
+
+
+        const cnLastWeek =
+          lastWeekHistory
+            ? getHistoryCN(
+                lastWeekHistory
+              )
+            : cnAsset;
+
+
+        const cnLastMonth =
+          lastMonthHistory
+            ? getHistoryCN(
+                lastMonthHistory
+              )
+            : cnAsset;
+
+
+        const cnLastYear =
+          lastYearHistory
+            ? getHistoryCN(
+                lastYearHistory
+              )
+            : cnAsset;
+
+
+        // =================================================
+        // 香港投资资产比较
+        // =================================================
+
+        const hkYesterday =
+          yesterdayHistory
+            ? getHistoryHK(
+                yesterdayHistory
+              )
+            : hkAsset;
+
+
+        const hkLastWeek =
+          lastWeekHistory
+            ? getHistoryHK(
+                lastWeekHistory
+              )
+            : hkAsset;
+
+
+        const hkLastMonth =
+          lastMonthHistory
+            ? getHistoryHK(
+                lastMonthHistory
+              )
+            : hkAsset;
+
+
+        const hkLastYear =
+          lastYearHistory
+            ? getHistoryHK(
+                lastYearHistory
+              )
+            : hkAsset;
+
+
+        // =================================================
+        // 四组完整比较数据
+        // =================================================
+
+        const totalWealthComparisons = {
+
+          yesterday:
+            makeComparison(
+              totalWealth,
+              totalWealthYesterday,
+              yesterdayHistory
+            ),
+
+          last_week:
+            makeComparison(
+              totalWealth,
+              totalWealthLastWeek,
+              lastWeekHistory
+            ),
+
+          last_month:
+            makeComparison(
+              totalWealth,
+              totalWealthLastMonth,
+              lastMonthHistory
+            ),
+
+          last_year:
+            makeComparison(
+              totalWealth,
+              totalWealthLastYear,
+              lastYearHistory
+            ),
+
+        };
+
+
+        const investmentComparisons = {
+
+          yesterday:
+            makeComparison(
+              investmentTotal,
+              investmentYesterday,
+              yesterdayHistory
+            ),
+
+          last_week:
+            makeComparison(
+              investmentTotal,
+              investmentLastWeek,
+              lastWeekHistory
+            ),
+
+          last_month:
+            makeComparison(
+              investmentTotal,
+              investmentLastMonth,
+              lastMonthHistory
+            ),
+
+          last_year:
+            makeComparison(
+              investmentTotal,
+              investmentLastYear,
+              lastYearHistory
+            ),
+
+        };
+
+
+        const cnComparisons = {
+
+          yesterday:
+            makeComparison(
+              cnAsset,
+              cnYesterday,
+              yesterdayHistory
+            ),
+
+          last_week:
+            makeComparison(
+              cnAsset,
+              cnLastWeek,
+              lastWeekHistory
+            ),
+
+          last_month:
+            makeComparison(
+              cnAsset,
+              cnLastMonth,
+              lastMonthHistory
+            ),
+
+          last_year:
+            makeComparison(
+              cnAsset,
+              cnLastYear,
+              lastYearHistory
+            ),
+
+        };
+
+
+        const hkComparisons = {
+
+          yesterday:
+            makeComparison(
+              hkAsset,
+              hkYesterday,
+              yesterdayHistory
+            ),
+
+          last_week:
+            makeComparison(
+              hkAsset,
+              hkLastWeek,
+              lastWeekHistory
+            ),
+
+          last_month:
+            makeComparison(
+              hkAsset,
+              hkLastMonth,
+              lastMonthHistory
+            ),
+
+          last_year:
+            makeComparison(
+              hkAsset,
+              hkLastYear,
+              lastYearHistory
+            ),
+
+        };
+
+
+        // =================================================
+        // YTD 数据
+        // 保留，但 AssetSummary 不显示
+        // =================================================
+
+        const ytdTotalWealth =
+          ytdBase
+            ? getHistoryTotalWealth(
+                ytdBase
+              )
+            : totalWealth;
+
+
+        const ytdComparison =
+          makeComparison(
+            totalWealth,
+            ytdTotalWealth,
+            ytdBase
+          );
+
+
+        // =================================================
         // Dashboard Asset
-        //
-        // 把真正计算出来的：
-        //
-        // total_profit
-        // total_rate
-        // cn_profit
-        // cn_rate
-        // hk_profit
-        // hk_rate
-        //
-        // 全部传给 AssetSummary
         // =================================================
 
         const dashboardAsset = {
 
           ...latestAsset,
 
-          // -----------------------------
-          // Wealth
-          // -----------------------------
+
+          // =================================================
+          // TOTAL WEALTH
+          // =================================================
 
           total_asset:
             totalWealth,
@@ -588,8 +1329,32 @@ export default function Home() {
           total_wealth:
             totalWealth,
 
+
           original_total_asset:
             originalTotalWealth,
+
+
+          // =================================================
+          // Investment Assets
+          // =================================================
+
+          investment_total:
+            investmentTotal,
+
+          investment_total_asset:
+            investmentTotal,
+
+
+          cn_asset:
+            cnAsset,
+
+          hk_asset:
+            hkAsset,
+
+
+          // =================================================
+          // Fixed Income
+          // =================================================
 
           fixed_income:
             fixedIncomeSum,
@@ -598,9 +1363,9 @@ export default function Home() {
             fixedIncomeSum,
 
 
-          // -----------------------------
+          // =================================================
           // Profit
-          // -----------------------------
+          // =================================================
 
           total_profit:
             totalProfit,
@@ -612,9 +1377,9 @@ export default function Home() {
             totalRate,
 
 
-          // -----------------------------
-          // Mainland
-          // -----------------------------
+          // =================================================
+          // Mainland Profit
+          // =================================================
 
           cn_profit:
             cnProfit,
@@ -626,9 +1391,9 @@ export default function Home() {
             cnRate,
 
 
-          // -----------------------------
-          // Hong Kong / Overseas
-          // -----------------------------
+          // =================================================
+          // HK Profit
+          // =================================================
 
           hk_profit:
             hkProfit,
@@ -638,6 +1403,31 @@ export default function Home() {
 
           hk_rate:
             hkRate,
+
+
+          // =================================================
+          // 四组比较
+          // =================================================
+
+          comparisons: {
+
+            total_wealth:
+              totalWealthComparisons,
+
+            investment:
+              investmentComparisons,
+
+            mainland:
+              cnComparisons,
+
+            hong_kong:
+              hkComparisons,
+
+            // 保留今年数据，但 UI 不显示
+            ytd:
+              ytdComparison,
+
+          },
 
         };
 
@@ -651,48 +1441,18 @@ export default function Home() {
         );
 
         console.log(
-          "Dashboard Asset:",
-          latestAsset
+          "Investment Total:",
+          investmentTotal
         );
 
         console.log(
-          "Active Holdings:",
-          activeHoldings
+          "Mainland Investment:",
+          cnAsset
         );
 
         console.log(
-          "Total Cost:",
-          totalCost
-        );
-
-        console.log(
-          "Total Profit:",
-          totalProfit
-        );
-
-        console.log(
-          "Total Return:",
-          totalRate
-        );
-
-        console.log(
-          "Mainland Profit:",
-          cnProfit
-        );
-
-        console.log(
-          "Mainland Return:",
-          cnRate
-        );
-
-        console.log(
-          "HK / Overseas Profit:",
-          hkProfit
-        );
-
-        console.log(
-          "HK / Overseas Return:",
-          hkRate
+          "HK Investment:",
+          hkAsset
         );
 
         console.log(
@@ -701,13 +1461,28 @@ export default function Home() {
         );
 
         console.log(
-          "Total Wealth:",
+          "TOTAL WEALTH:",
           totalWealth
         );
 
         console.log(
-          "Dashboard Asset Final:",
-          dashboardAsset
+          "TOTAL WEALTH Comparisons:",
+          totalWealthComparisons
+        );
+
+        console.log(
+          "Investment Comparisons:",
+          investmentComparisons
+        );
+
+        console.log(
+          "Mainland Comparisons:",
+          cnComparisons
+        );
+
+        console.log(
+          "HK Comparisons:",
+          hkComparisons
         );
 
         console.log(
@@ -716,7 +1491,7 @@ export default function Home() {
 
 
         // =================================================
-        // 保存数据
+        // 保存
         // =================================================
 
         setAsset(
@@ -824,12 +1599,6 @@ export default function Home() {
   // Total Wealth
   // =====================================================
 
-  const originalTotalWealth =
-    Number(
-      asset?.original_total_asset ?? 0
-    );
-
-
   const totalWealth =
     Number(
       asset?.total_asset ?? 0
@@ -843,10 +1612,6 @@ export default function Home() {
   return (
 
     <>
-
-      {/* =================================================
-          TopBar
-      ================================================= */}
 
       <TopBar
         title="Dashboard"
@@ -867,7 +1632,7 @@ export default function Home() {
       >
 
         {/* =================================================
-            1. Total Wealth
+            1. Asset Summary
             ================================================= */}
 
         <AssetSummary
@@ -974,10 +1739,6 @@ export default function Home() {
             "
           >
 
-            {/* ==========================================
-                资产定位
-            ========================================== */}
-
             <div
               className="
                 rounded-xl
@@ -1009,10 +1770,6 @@ export default function Home() {
             </div>
 
 
-            {/* ==========================================
-                Total Wealth
-            ========================================== */}
-
             <div
               className="
                 rounded-xl
@@ -1027,7 +1784,7 @@ export default function Home() {
                   text-gray-500
                 "
               >
-                纳入 Total Wealth
+                纳入 TOTAL WEALTH
               </p>
 
 
@@ -1043,10 +1800,6 @@ export default function Home() {
 
             </div>
 
-
-            {/* ==========================================
-                Insurance
-            ========================================== */}
 
             <div
               className="
@@ -1211,106 +1964,81 @@ export default function Home() {
           >
 
             <p>
-
               <b>
                 Data Source:
               </b>
-
               {" "}
-
               Supabase
-
             </p>
 
 
             <p>
-
               <b>
                 Pipeline:
               </b>
-
               {" "}
-
               Excel → Python → Supabase
-
             </p>
 
 
             <p>
-
               <b>
                 Snapshot:
               </b>
-
               {" "}
-
               {asset.snapshot_date}
-
             </p>
 
 
             <p>
-
               <b>
-                Original Total Wealth:
+                Investment Total:
               </b>
-
               {" "}
-
               ¥
               {Math.round(
-                originalTotalWealth
+                Number(
+                  asset.investment_total ?? 0
+                )
               ).toLocaleString(
                 "zh-CN"
               )}
-
             </p>
 
 
             <p>
-
               <b>
                 Fixed Income:
               </b>
-
               {" "}
-
               ¥
               {Math.round(
                 fixedIncomeTotal
               ).toLocaleString(
                 "zh-CN"
               )}
-
             </p>
 
 
             <p>
-
               <b>
-                Total Wealth:
+                TOTAL WEALTH:
               </b>
-
               {" "}
-
               ¥
               {Math.round(
                 totalWealth
               ).toLocaleString(
                 "zh-CN"
               )}
-
             </p>
 
 
             <p>
-
               <b>
                 Total Cost:
               </b>
-
               {" "}
-
               ¥
               {Math.round(
                 Number(
@@ -1319,16 +2047,13 @@ export default function Home() {
               ).toLocaleString(
                 "zh-CN"
               )}
-
             </p>
 
 
             <p>
-
               <b>
                 Total Profit:
               </b>
-
               {" "}
 
               {Number(
