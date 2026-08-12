@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
 const menus = [
   {
@@ -78,6 +79,84 @@ const menus = [
 export default function Sidebar() {
   const pathname = usePathname();
 
+  const [updating, setUpdating] =
+    useState(false);
+
+  const [updateMessage, setUpdateMessage] =
+    useState("");
+
+  const [updateSuccess, setUpdateSuccess] =
+    useState<boolean | null>(null);
+
+  // =====================================================
+  // 手动更新全球资产
+  // =====================================================
+
+  async function handleManualUpdate() {
+    if (updating) {
+      return;
+    }
+
+    setUpdating(true);
+    setUpdateMessage("正在更新...");
+    setUpdateSuccess(null);
+
+    try {
+      const response =
+        await fetch(
+          "/api/cron/update-market",
+          {
+            method: "GET",
+            cache: "no-store",
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (
+        response.ok &&
+        data?.success
+      ) {
+        setUpdateSuccess(true);
+
+        setUpdateMessage(
+          `更新完成 · ${data.updated ?? 0} 项`
+        );
+
+        // 更新完成后刷新当前页面
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+
+        return;
+      }
+
+      setUpdateSuccess(false);
+
+      setUpdateMessage(
+        data?.error ||
+          `更新失败${data?.failed ? ` · ${data.failed} 项失败` : ""}`
+      );
+
+    } catch (error: any) {
+      console.error(
+        "Manual update error:",
+        error
+      );
+
+      setUpdateSuccess(false);
+
+      setUpdateMessage(
+        error?.message ||
+          "更新失败"
+      );
+
+    } finally {
+      setUpdating(false);
+    }
+  }
+
   return (
     <aside
       className="
@@ -95,7 +174,9 @@ export default function Sidebar() {
         flex-col
       "
     >
-      {/* Logo */}
+      {/* =================================================
+          Logo
+      ================================================= */}
 
       <div className="mb-10">
         <h1
@@ -118,7 +199,9 @@ export default function Sidebar() {
         </p>
       </div>
 
-      {/* Menu */}
+      {/* =================================================
+          Menu
+      ================================================= */}
 
       <nav className="space-y-3">
         {menus.map((menu) => (
@@ -158,9 +241,74 @@ export default function Sidebar() {
             </span>
           </Link>
         ))}
+
+        {/* =================================================
+            手动更新
+        ================================================= */}
+
+        <button
+          type="button"
+          onClick={handleManualUpdate}
+          disabled={updating}
+          className={`
+            w-full
+            flex
+            items-center
+            gap-4
+            px-4
+            py-3
+            rounded-xl
+            transition
+            text-left
+
+            ${
+              updating
+                ? "bg-gray-100 text-gray-400 cursor-wait"
+                : "text-gray-700 hover:bg-gray-100"
+            }
+          `}
+        >
+          <span className="text-xl">
+            {updating
+              ? "⏳"
+              : "🔄"}
+          </span>
+
+          <span className="font-medium">
+            {updating
+              ? "正在更新..."
+              : "手动更新"}
+          </span>
+        </button>
+
+        {/* =================================================
+            更新结果
+        ================================================= */}
+
+        {updateMessage && (
+          <div
+            className={`
+              px-4
+              text-xs
+              leading-5
+
+              ${
+                updateSuccess === true
+                  ? "text-green-600"
+                  : updateSuccess === false
+                  ? "text-red-500"
+                  : "text-gray-500"
+              }
+            `}
+          >
+            {updateMessage}
+          </div>
+        )}
       </nav>
 
-      {/* Bottom */}
+      {/* =================================================
+          Bottom
+      ================================================= */}
 
       <div
         className="
