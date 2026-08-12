@@ -45,6 +45,15 @@ type Holding = {
 
   active: boolean;
 
+  // ===================================================
+  // 是否停止自动更新
+  //
+  // false = 正常每天更新
+  // true  = 每天跳过
+  // ===================================================
+
+  skip_update: boolean;
+
 };
 
 
@@ -320,6 +329,19 @@ export default function AssetManagementPage() {
 
 
   // ===================================================
+  // 单独保存停止更新状态时
+  // 防止重复点击
+  // ===================================================
+
+  const [
+    updatingSkipId,
+    setUpdatingSkipId,
+  ] = useState<number | null>(
+    null
+  );
+
+
+  // ===================================================
   // 加载 Holdings
   // ===================================================
 
@@ -392,6 +414,163 @@ export default function AssetManagementPage() {
     loadHoldings();
 
   }, []);
+
+
+  // ===================================================
+  // 切换停止更新
+  //
+  // false：
+  // 正常每天 UPDATE
+  //
+  // true：
+  // 每天 UPDATE 跳过
+  // ===================================================
+
+  async function toggleSkipUpdate(
+    item: Holding
+  ) {
+
+    if (
+      updatingSkipId !== null
+    ) {
+
+      return;
+
+    }
+
+
+    const newValue =
+      !Boolean(
+        item.skip_update
+      );
+
+
+    setUpdatingSkipId(
+      item.id
+    );
+
+    setError("");
+
+    setSuccess("");
+
+
+    // =================================================
+    // 先更新页面状态
+    // =================================================
+
+    setHoldings(
+      previous =>
+        previous.map(
+          holding =>
+            holding.id === item.id
+
+              ? {
+                  ...holding,
+
+                  skip_update:
+                    newValue,
+                }
+
+              : holding
+        )
+    );
+
+
+    // =================================================
+    // 保存 Supabase
+    // =================================================
+
+    const {
+      error,
+    } = await supabase
+
+      .from("holdings")
+
+      .update({
+
+        skip_update:
+          newValue,
+
+        updated_at:
+          new Date()
+            .toISOString(),
+
+      })
+
+      .eq(
+        "id",
+        item.id
+      );
+
+
+    // =================================================
+    // 保存失败
+    //
+    // 回滚页面状态
+    // =================================================
+
+    if (error) {
+
+      console.error(
+        "toggle skip_update error:",
+        error
+      );
+
+
+      setHoldings(
+        previous =>
+          previous.map(
+            holding =>
+              holding.id === item.id
+
+                ? {
+                    ...holding,
+
+                    skip_update:
+                      Boolean(
+                        item.skip_update
+                      ),
+                  }
+
+                : holding
+          )
+      );
+
+
+      setError(
+        `停止更新设置失败：${error.message}`
+      );
+
+
+      setUpdatingSkipId(
+        null
+      );
+
+      return;
+
+    }
+
+
+    // =================================================
+    // 成功提示
+    // =================================================
+
+    setSuccess(
+
+      newValue
+
+        ? `${item.name} 已设置为停止自动更新`
+
+        : `${item.name} 已恢复自动更新`
+
+    );
+
+
+    setUpdatingSkipId(
+      null
+    );
+
+  }
 
 
   // ===================================================
@@ -508,6 +687,7 @@ export default function AssetManagementPage() {
               .includes(keyword);
 
           }
+
         );
 
     }, [
@@ -897,6 +1077,12 @@ export default function AssetManagementPage() {
             ...payload,
 
             active: true,
+
+            // =========================================
+            // 新资产默认正常自动更新
+            // =========================================
+
+            skip_update: false,
 
             updated_at:
               new Date()
@@ -1565,7 +1751,7 @@ export default function AssetManagementPage() {
 
               <table
                 className="
-                  min-w-[1350px]
+                  min-w-[1450px]
                   w-full
                   text-sm
                 "
@@ -1621,6 +1807,14 @@ export default function AssetManagementPage() {
 
                     <th className="px-4 py-3 text-right font-medium">
                       Profit %
+                    </th>
+
+                    {/* =================================================
+                        停止更新
+                    ================================================= */}
+
+                    <th className="px-4 py-3 text-center font-medium">
+                      停止更新
                     </th>
 
                     <th className="px-5 py-3 text-right font-medium">
@@ -1770,6 +1964,71 @@ export default function AssetManagementPage() {
                           `}
                         >
                           {formatPercent(item.profit_rate)}
+                        </td>
+
+
+                        {/* =================================================
+                            停止更新 Checkbox
+                        ================================================= */}
+
+                        <td
+                          className="
+                            px-4
+                            py-4
+                            text-center
+                          "
+                        >
+
+                          <label
+                            className="
+                              inline-flex
+                              cursor-pointer
+                              items-center
+                              justify-center
+                            "
+                            title={
+                              item.skip_update
+                                ? "已停止自动更新，点击恢复"
+                                : "当前正常自动更新，点击停止"
+                            }
+                          >
+
+                            <input
+                              type="checkbox"
+
+                              checked={
+                                Boolean(
+                                  item.skip_update
+                                )
+                              }
+
+                              disabled={
+                                updatingSkipId ===
+                                item.id
+                              }
+
+                              onChange={() =>
+                                toggleSkipUpdate(
+                                  item
+                                )
+                              }
+
+                              className="
+                                h-4
+                                w-4
+                                cursor-pointer
+                                rounded
+                                border-gray-300
+                                text-gray-900
+                                focus:ring-2
+                                focus:ring-gray-300
+                                disabled:cursor-not-allowed
+                                disabled:opacity-50
+                              "
+                            />
+
+                          </label>
+
                         </td>
 
 
@@ -1939,7 +2198,7 @@ export default function AssetManagementPage() {
 
               <table
                 className="
-                  min-w-[1100px]
+                  min-w-[1250px]
                   w-full
                   text-sm
                 "
@@ -1979,6 +2238,10 @@ export default function AssetManagementPage() {
 
                     <th className="px-4 py-3 text-right font-medium">
                       Profit
+                    </th>
+
+                    <th className="px-4 py-3 text-center font-medium">
+                      停止更新
                     </th>
 
                     <th className="px-5 py-3 text-right font-medium">
@@ -2081,6 +2344,55 @@ export default function AssetManagementPage() {
                           `}
                         >
                           ¥{formatMoney(item.profit)}
+                        </td>
+
+
+                        {/* =================================================
+                            停止更新
+                        ================================================= */}
+
+                        <td
+                          className="
+                            px-4
+                            py-4
+                            text-center
+                          "
+                        >
+
+                          <input
+                            type="checkbox"
+
+                            checked={
+                              Boolean(
+                                item.skip_update
+                              )
+                            }
+
+                            disabled={
+                              updatingSkipId ===
+                              item.id
+                            }
+
+                            onChange={() =>
+                              toggleSkipUpdate(
+                                item
+                              )
+                            }
+
+                            className="
+                              h-4
+                              w-4
+                              cursor-pointer
+                              rounded
+                              border-gray-300
+                              text-gray-900
+                              focus:ring-2
+                              focus:ring-gray-300
+                              disabled:cursor-not-allowed
+                              disabled:opacity-50
+                            "
+                          />
+
                         </td>
 
 
@@ -2364,8 +2676,6 @@ export default function AssetManagementPage() {
                   />
 
 
-                  {/* Market 下拉 */}
-
                   <FormInput
                     label="Market"
                     value={form.market}
@@ -2380,8 +2690,6 @@ export default function AssetManagementPage() {
                     required
                   />
 
-
-                  {/* Category 下拉 */}
 
                   <FormInput
                     label="Category"
@@ -2398,8 +2706,6 @@ export default function AssetManagementPage() {
                   />
 
 
-                  {/* Currency 下拉 */}
-
                   <FormInput
                     label="Currency"
                     value={form.currency}
@@ -2414,8 +2720,6 @@ export default function AssetManagementPage() {
                     required
                   />
 
-
-                  {/* Platform 手动输入 */}
 
                   <FormInput
                     label="Platform"
