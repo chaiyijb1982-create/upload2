@@ -1618,3 +1618,300 @@ export async function holdingExists(
   );
 
 }
+// =====================================================
+// 获取 Holdings 历史比较
+//
+// 用于：
+// 投资Perf
+// TodayPerformanceTable
+//
+// 返回最近两个不同 snapshot_date 的持仓快照
+// =====================================================
+
+export async function getHoldingsHistoryComparison() {
+
+  console.log(
+    "===== getHoldingsHistoryComparison START ====="
+  );
+
+
+  const {
+    data,
+    error,
+  } = await supabase
+
+    .from("holdings_history")
+
+    .select(
+      `
+        code,
+        name,
+        market,
+        category,
+        amount,
+        cost,
+        profit,
+        profit_rate,
+        currency,
+        nav,
+        shares,
+        snapshot_date
+      `
+    )
+
+    .order(
+      "snapshot_date",
+      {
+        ascending: false,
+      }
+    )
+
+    .order(
+      "code",
+      {
+        ascending: true,
+      }
+    );
+
+
+  // ===================================================
+  // Supabase 查询错误
+  // ===================================================
+
+  if (error) {
+
+    console.error(
+      "===== holdings_history QUERY ERROR =====",
+      error
+    );
+
+    return {
+
+      latestDate:
+        null,
+
+      previousDate:
+        null,
+
+      latest:
+        [],
+
+      previous:
+        [],
+
+    };
+
+  }
+
+
+  // ===================================================
+  // 原始数据
+  // ===================================================
+
+  const rows =
+    data ?? [];
+
+
+  console.log(
+    "===== holdings_history ROW COUNT =====",
+    rows.length
+  );
+
+
+  console.log(
+    "===== holdings_history FIRST ROW =====",
+    rows[0]
+  );
+
+
+  console.log(
+    "===== holdings_history SNAPSHOT DATES =====",
+    rows.map(
+      (row: any) =>
+        row?.snapshot_date
+    )
+  );
+
+
+  // ===================================================
+  // 没有数据
+  // ===================================================
+
+  if (
+    rows.length === 0
+  ) {
+
+    console.error(
+      "===== holdings_history EMPTY ====="
+    );
+
+    return {
+
+      latestDate:
+        null,
+
+      previousDate:
+        null,
+
+      latest:
+        [],
+
+      previous:
+        [],
+
+    };
+
+  }
+
+
+  // ===================================================
+  // 找出所有不同 snapshot_date
+  // ===================================================
+
+  const dates =
+    Array.from(
+
+      new Set(
+
+        rows
+
+          .map(
+            (row: any) => {
+
+              const value =
+                row?.snapshot_date;
+
+              if (
+                value === null ||
+                value === undefined
+              ) {
+
+                return null;
+
+              }
+
+              return String(
+                value
+              ).trim();
+
+            }
+          )
+
+          .filter(
+            (
+              value
+            ) =>
+              Boolean(value)
+          )
+
+      )
+
+    );
+
+
+  // ===================================================
+  // 日期排序
+  // ===================================================
+
+  dates.sort(
+    (
+      a,
+      b
+    ) =>
+      String(b).localeCompare(
+        String(a)
+      )
+  );
+
+
+  console.log(
+    "===== holdings_history DISTINCT DATES =====",
+    dates
+  );
+
+
+  // ===================================================
+  // 最近两个日期
+  // ===================================================
+
+  const latestDate =
+    dates[0] ??
+    null;
+
+
+  const previousDate =
+    dates[1] ??
+    null;
+
+
+  console.log(
+    "===== holdings_history COMPARISON DATES =====",
+    {
+      latestDate,
+      previousDate,
+    }
+  );
+
+
+  // ===================================================
+  // 最新快照
+  // ===================================================
+
+  const latest =
+    latestDate
+
+      ? rows.filter(
+          (row: any) =>
+            String(
+              row?.snapshot_date ?? ""
+            ).trim() ===
+            latestDate
+        )
+
+      : [];
+
+
+  // ===================================================
+  // 上一个快照
+  // ===================================================
+
+  const previous =
+    previousDate
+
+      ? rows.filter(
+          (row: any) =>
+            String(
+              row?.snapshot_date ?? ""
+            ).trim() ===
+            previousDate
+        )
+
+      : [];
+
+
+  console.log(
+    "===== holdings_history FINAL =====",
+    {
+      latestDate,
+      previousDate,
+      latestCount:
+        latest.length,
+      previousCount:
+        previous.length,
+    }
+  );
+
+
+  return {
+
+    latestDate,
+
+    previousDate,
+
+    latest,
+
+    previous,
+
+  };
+
+}

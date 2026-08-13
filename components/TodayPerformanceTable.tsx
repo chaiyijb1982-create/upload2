@@ -5,7 +5,6 @@ import {
   useState,
 } from "react";
 
-
 // =====================================================
 // 类型
 // =====================================================
@@ -17,11 +16,9 @@ type SortKey =
   | "change"
   | "changeRate";
 
-
 type SortDirection =
   | "asc"
   | "desc";
-
 
 type PerformanceRow = {
 
@@ -41,7 +38,6 @@ type PerformanceRow = {
 
 };
 
-
 // =====================================================
 // Props
 // =====================================================
@@ -50,10 +46,15 @@ interface Props {
 
   holdings: any[];
 
-  history: any[];
+  latest: any[];
+
+  previous: any[];
+
+  latestDate: string | null;
+
+  previousDate: string | null;
 
 }
-
 
 // =====================================================
 // 数字
@@ -72,7 +73,6 @@ function toNumber(
 
 }
 
-
 // =====================================================
 // 金额
 // =====================================================
@@ -89,7 +89,6 @@ function formatMoney(
 
 }
 
-
 // =====================================================
 // 涨跌金额
 // =====================================================
@@ -101,7 +100,6 @@ function formatChange(
   const rounded =
     Math.round(value);
 
-
   if (
     rounded > 0
   ) {
@@ -111,7 +109,6 @@ function formatChange(
     )}`;
 
   }
-
 
   if (
     rounded < 0
@@ -123,11 +120,9 @@ function formatChange(
 
   }
 
-
   return "¥0";
 
 }
-
 
 // =====================================================
 // 涨跌幅
@@ -145,7 +140,6 @@ function formatChangeRate(
 
   }
 
-
   if (
     value < 0
   ) {
@@ -154,61 +148,27 @@ function formatChangeRate(
 
   }
 
-
   return "0.00%";
 
 }
 
-
 // =====================================================
-// 日期
-// =====================================================
-
-function getDate(
-  item: any
-): string | null {
-
-  if (
-    !item
-  ) {
-
-    return null;
-
-  }
-
-
-  const value =
-    item.snapshot_date ??
-    item.date ??
-    item.trade_date ??
-    null;
-
-
-  if (
-    !value
-  ) {
-
-    return null;
-
-  }
-
-
-  return String(
-    value
-  );
-
-}
-
-
-// =====================================================
-// Today Performance Table
+// 单个市场表格
 // =====================================================
 
-export default function TodayPerformanceTable({
-  holdings,
-  history,
-}: Props) {
+function MarketTable({
 
+  rows,
+
+  market,
+
+}: {
+
+  rows: PerformanceRow[];
+
+  market: "CN" | "HK";
+
+}) {
 
   const [
     sortKey,
@@ -218,7 +178,6 @@ export default function TodayPerformanceTable({
       "change"
     );
 
-
   const [
     sortDirection,
     setSortDirection,
@@ -226,364 +185,6 @@ export default function TodayPerformanceTable({
     useState<SortDirection>(
       "desc"
     );
-
-
-  // ===================================================
-  // 找最近两个历史日期
-  // ===================================================
-
-  const dates =
-    useMemo(
-      () => {
-
-        const set =
-          new Set<string>();
-
-
-        (
-          history ?? []
-        ).forEach(
-          (
-            item: any
-          ) => {
-
-            const date =
-              getDate(item);
-
-
-            if (
-              date
-            ) {
-
-              set.add(
-                date
-              );
-
-            }
-
-          }
-        );
-
-
-        return Array.from(
-          set
-        ).sort(
-          (
-            a,
-            b
-          ) =>
-            b.localeCompare(
-              a
-            )
-        );
-
-      },
-      [
-        history,
-      ]
-    );
-
-
-  const latestDate =
-    dates[0] ??
-    null;
-
-
-  const previousDate =
-    dates[1] ??
-    null;
-
-
-  // ===================================================
-  // 根据历史数据建立 map
-  //
-  // 注意：
-  // code + platform 才是唯一标识
-  // 防止不同平台相同 code 相互覆盖
-  // ===================================================
-
-  const rows =
-    useMemo(
-      () => {
-
-        if (
-          !latestDate ||
-          !previousDate
-        ) {
-
-          return [];
-
-        }
-
-
-        const latestMap =
-          new Map<
-            string,
-            any
-          >();
-
-
-        const previousMap =
-          new Map<
-            string,
-            any
-          >();
-
-
-        (
-          history ?? []
-        ).forEach(
-          (
-            item: any
-          ) => {
-
-            const date =
-              getDate(item);
-
-
-            if (
-              date !== latestDate &&
-              date !== previousDate
-            ) {
-
-              return;
-
-            }
-
-
-            const code =
-              String(
-                item?.code ??
-                ""
-              )
-                .trim()
-                .toUpperCase();
-
-
-            const platform =
-              String(
-                item?.platform ??
-                ""
-              )
-                .trim()
-                .toUpperCase();
-
-
-            if (
-              !code
-            ) {
-
-              return;
-
-            }
-
-
-            const key =
-              `${code}__${platform}`;
-
-
-            if (
-              date === latestDate
-            ) {
-
-              latestMap.set(
-                key,
-                item
-              );
-
-            }
-
-
-            if (
-              date === previousDate
-            ) {
-
-              previousMap.set(
-                key,
-                item
-              );
-
-            }
-
-          }
-        );
-
-
-        // =================================================
-        // 当前 active holdings
-        //
-        // 用于确定现在应该显示哪些资产
-        // =================================================
-
-        const activeMap =
-          new Map<
-            string,
-            any
-          >();
-
-
-        (
-          holdings ?? []
-        ).forEach(
-          (
-            item: any
-          ) => {
-
-            if (
-              item?.active === false
-            ) {
-
-              return;
-
-            }
-
-
-            const code =
-              String(
-                item?.code ??
-                ""
-              )
-                .trim()
-                .toUpperCase();
-
-
-            const platform =
-              String(
-                item?.platform ??
-                ""
-              )
-                .trim()
-                .toUpperCase();
-
-
-            if (
-              !code
-            ) {
-
-              return;
-
-            }
-
-
-            const key =
-              `${code}__${platform}`;
-
-
-            activeMap.set(
-              key,
-              item
-            );
-
-          }
-        );
-
-
-        const result:
-          PerformanceRow[] = [];
-
-
-        // =================================================
-        // 以最新历史数据为主
-        // =================================================
-
-        latestMap.forEach(
-          (
-            latestItem,
-            key
-          ) => {
-
-            const previousItem =
-              previousMap.get(
-                key
-              );
-
-
-            const latest =
-              toNumber(
-                latestItem?.amount
-              );
-
-
-            const previous =
-              toNumber(
-                previousItem?.amount
-              );
-
-
-            const change =
-              latest -
-              previous;
-
-
-            const changeRate =
-              previous !== 0
-                ? (
-                    change /
-                    previous
-                  ) *
-                  100
-                : latest !== 0
-                  ? 100
-                  : 0;
-
-
-            const activeItem =
-              activeMap.get(
-                key
-              );
-
-
-            result.push({
-
-              code:
-                String(
-                  latestItem?.code ??
-                  activeItem?.code ??
-                  ""
-                ),
-
-              name:
-                String(
-                  latestItem?.name ??
-                  activeItem?.name ??
-                  latestItem?.code ??
-                  ""
-                ),
-
-              market:
-                String(
-                  latestItem?.market ??
-                  activeItem?.market ??
-                  ""
-                )
-                  .trim()
-                  .toUpperCase(),
-
-              previous,
-
-              latest,
-
-              change,
-
-              changeRate,
-
-            });
-
-          }
-        );
-
-
-        return result;
-
-      },
-      [
-        history,
-        holdings,
-        latestDate,
-        previousDate,
-      ]
-    );
-
 
   // ===================================================
   // 排序
@@ -598,7 +199,6 @@ export default function TodayPerformanceTable({
             ...rows,
           ];
 
-
         result.sort(
           (
             a,
@@ -607,7 +207,6 @@ export default function TodayPerformanceTable({
 
             let comparison =
               0;
-
 
             if (
               sortKey ===
@@ -633,7 +232,6 @@ export default function TodayPerformanceTable({
 
             }
 
-
             return sortDirection ===
               "asc"
               ? -comparison
@@ -641,7 +239,6 @@ export default function TodayPerformanceTable({
 
           }
         );
-
 
         return result;
 
@@ -652,7 +249,6 @@ export default function TodayPerformanceTable({
         sortDirection,
       ]
     );
-
 
   // ===================================================
   // 点击排序
@@ -677,11 +273,9 @@ export default function TodayPerformanceTable({
 
     }
 
-
     setSortKey(
       key
     );
-
 
     setSortDirection(
       key === "name"
@@ -690,7 +284,6 @@ export default function TodayPerformanceTable({
     );
 
   }
-
 
   // ===================================================
   // 排序箭头
@@ -721,7 +314,6 @@ export default function TodayPerformanceTable({
 
     }
 
-
     return (
 
       <span
@@ -730,19 +322,877 @@ export default function TodayPerformanceTable({
           text-gray-500
         "
       >
-        {sortDirection ===
-        "asc"
-          ? "↑"
-          : "↓"}
+
+        {
+          sortDirection ===
+          "asc"
+            ? "↑"
+            : "↓"
+        }
+
       </span>
 
     );
 
   }
 
+  // ===================================================
+  // 空数据
+  // ===================================================
+
+  if (
+    sortedRows.length === 0
+  ) {
+
+    return (
+
+      <div
+        className="
+          px-6
+          py-8
+          text-center
+          text-gray-400
+        "
+      >
+        暂无数据
+      </div>
+
+    );
+
+  }
 
   // ===================================================
-  // Loading / 数据不足
+  // 表格
+  // ===================================================
+
+  return (
+
+    <div
+      className="
+        overflow-x-auto
+      "
+    >
+
+      <table
+        className="
+          w-full
+          text-sm
+        "
+      >
+
+        <thead>
+
+          <tr
+            className="
+              bg-gray-50
+              border-b
+              border-gray-200
+            "
+          >
+
+            <th
+              className="
+                px-6
+                py-3
+                text-left
+                font-medium
+                text-gray-500
+                w-16
+              "
+            >
+              #
+            </th>
+
+            <th
+              onClick={() =>
+                handleSort(
+                  "name"
+                )
+              }
+              className="
+                px-4
+                py-3
+                text-left
+                font-medium
+                text-gray-500
+                cursor-pointer
+                select-none
+                hover:text-gray-900
+              "
+            >
+
+              资产
+
+              <SortArrow
+                column="name"
+              />
+
+            </th>
+
+            <th
+              onClick={() =>
+                handleSort(
+                  "previous"
+                )
+              }
+              className="
+                px-4
+                py-3
+                text-right
+                font-medium
+                text-gray-500
+                cursor-pointer
+                select-none
+                hover:text-gray-900
+                whitespace-nowrap
+              "
+            >
+
+              昨日
+
+              <SortArrow
+                column="previous"
+              />
+
+            </th>
+
+            <th
+              onClick={() =>
+                handleSort(
+                  "latest"
+                )
+              }
+              className="
+                px-4
+                py-3
+                text-right
+                font-medium
+                text-gray-500
+                cursor-pointer
+                select-none
+                hover:text-gray-900
+                whitespace-nowrap
+              "
+            >
+
+              今日
+
+              <SortArrow
+                column="latest"
+              />
+
+            </th>
+
+            <th
+              onClick={() =>
+                handleSort(
+                  "change"
+                )
+              }
+              className="
+                px-4
+                py-3
+                text-right
+                font-medium
+                text-gray-500
+                cursor-pointer
+                select-none
+                hover:text-gray-900
+                whitespace-nowrap
+              "
+            >
+
+              涨跌
+
+              <SortArrow
+                column="change"
+              />
+
+            </th>
+
+            <th
+              onClick={() =>
+                handleSort(
+                  "changeRate"
+                )
+              }
+              className="
+                px-6
+                py-3
+                text-right
+                font-medium
+                text-gray-500
+                cursor-pointer
+                select-none
+                hover:text-gray-900
+                whitespace-nowrap
+              "
+            >
+
+              涨跌%
+
+              <SortArrow
+                column="changeRate"
+              />
+
+            </th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          {sortedRows.map(
+            (
+              row,
+              index
+            ) => (
+
+              <tr
+                key={
+                  `${row.code}-${row.market}-${index}`
+                }
+                className="
+                  border-b
+                  border-gray-100
+                  last:border-b-0
+                  hover:bg-gray-50
+                "
+              >
+
+                <td
+                  className="
+                    px-6
+                    py-4
+                    text-gray-400
+                  "
+                >
+                  {index + 1}
+                </td>
+
+                <td
+                  className="
+                    px-4
+                    py-4
+                  "
+                >
+
+                  <div
+                    className="
+                      font-medium
+                      text-gray-900
+                    "
+                  >
+                    {row.name}
+                  </div>
+
+                  <div
+                    className="
+                      mt-0.5
+                      text-xs
+                      text-gray-400
+                    "
+                  >
+                    {row.code}
+                  </div>
+
+                </td>
+
+                <td
+                  className="
+                    px-4
+                    py-4
+                    text-right
+                    text-gray-600
+                    whitespace-nowrap
+                  "
+                >
+
+                  ¥
+                  {formatMoney(
+                    row.previous
+                  )}
+
+                </td>
+
+                <td
+                  className="
+                    px-4
+                    py-4
+                    text-right
+                    font-medium
+                    text-gray-900
+                    whitespace-nowrap
+                  "
+                >
+
+                  ¥
+                  {formatMoney(
+                    row.latest
+                  )}
+
+                </td>
+
+                <td
+                  className={`
+                    px-4
+                    py-4
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${
+                      row.change > 0
+                        ? "text-green-600"
+                        : row.change < 0
+                          ? "text-red-600"
+                          : "text-gray-500"
+                    }
+                  `}
+                >
+
+                  {formatChange(
+                    row.change
+                  )}
+
+                </td>
+
+                <td
+                  className={`
+                    px-6
+                    py-4
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${
+                      row.changeRate > 0
+                        ? "text-green-600"
+                        : row.changeRate < 0
+                          ? "text-red-600"
+                          : "text-gray-500"
+                    }
+                  `}
+                >
+
+                  {formatChangeRate(
+                    row.changeRate
+                  )}
+
+                </td>
+
+              </tr>
+
+            )
+          )}
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+  );
+
+}
+
+// =====================================================
+// 市场折叠区
+// =====================================================
+
+function MarketSection({
+
+  title,
+
+  count,
+
+  rows,
+
+  market,
+
+  defaultOpen = true,
+
+}: {
+
+  title: string;
+
+  count: number;
+
+  rows: PerformanceRow[];
+
+  market: "CN" | "HK";
+
+  defaultOpen?: boolean;
+
+}) {
+
+  const [
+    open,
+    setOpen,
+  ] =
+    useState(
+      defaultOpen
+    );
+
+  return (
+
+    <div
+      className="
+        border-b
+        border-gray-200
+        last:border-b-0
+      "
+    >
+
+      {/* =================================================
+          市场标题
+      ================================================= */}
+
+      <button
+        type="button"
+        onClick={() =>
+          setOpen(
+            current =>
+              !current
+          )
+        }
+        className="
+          w-full
+          px-6
+          py-4
+          flex
+          items-center
+          justify-between
+          bg-white
+          hover:bg-gray-50
+          transition
+          select-none
+        "
+      >
+
+        <div
+          className="
+            flex
+            items-center
+            gap-3
+          "
+        >
+
+          <span
+            className="
+              text-lg
+            "
+          >
+            {market === "CN"
+              ? "🇨🇳"
+              : "🇭🇰"}
+          </span>
+
+          <span
+            className="
+              font-semibold
+              text-gray-900
+            "
+          >
+            {title}
+          </span>
+
+          <span
+            className="
+              px-2
+              py-0.5
+              rounded-full
+              bg-gray-100
+              text-xs
+              text-gray-500
+            "
+          >
+            {count} 项
+          </span>
+
+        </div>
+
+        <span
+          className="
+            text-gray-400
+            text-lg
+          "
+        >
+          {open
+            ? "⌃"
+            : "⌄"}
+        </span>
+
+      </button>
+
+      {/* =================================================
+          内容
+      ================================================= */}
+
+      {open && (
+
+        <MarketTable
+          rows={rows}
+          market={market}
+        />
+
+      )}
+
+    </div>
+
+  );
+
+}
+
+// =====================================================
+// Today Performance Table
+// =====================================================
+
+export default function TodayPerformanceTable({
+
+  holdings,
+
+  latest,
+
+  previous,
+
+  latestDate,
+
+  previousDate,
+
+}: Props) {
+
+  // ===================================================
+  // 建立今日 / 昨日 Map
+  // ===================================================
+
+  const rows =
+    useMemo(
+      () => {
+
+        const latestRows =
+          Array.isArray(latest)
+            ? latest
+            : [];
+
+        const previousRows =
+          Array.isArray(previous)
+            ? previous
+            : [];
+
+        const holdingRows =
+          Array.isArray(holdings)
+            ? holdings
+            : [];
+
+        if (
+          latestRows.length === 0 ||
+          previousRows.length === 0
+        ) {
+
+          return [];
+
+        }
+
+        // ---------------------------------------------
+        // holdings map
+        // ---------------------------------------------
+
+        const holdingsMap =
+          new Map<
+            string,
+            any
+          >();
+
+        holdingRows.forEach(
+          (
+            item: any
+          ) => {
+
+            if (
+              item?.active === false
+            ) {
+
+              return;
+
+            }
+
+            const code =
+              String(
+                item?.code ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            const market =
+              String(
+                item?.market ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            if (
+              !code
+            ) {
+
+              return;
+
+            }
+
+            const key =
+              `${code}__${market}`;
+
+            holdingsMap.set(
+              key,
+              item
+            );
+
+          }
+        );
+
+        // ---------------------------------------------
+        // 今日 map
+        // ---------------------------------------------
+
+        const latestMap =
+          new Map<
+            string,
+            any
+          >();
+
+        latestRows.forEach(
+          (
+            item: any
+          ) => {
+
+            const code =
+              String(
+                item?.code ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            const market =
+              String(
+                item?.market ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            if (
+              !code
+            ) {
+
+              return;
+
+            }
+
+            const key =
+              `${code}__${market}`;
+
+            latestMap.set(
+              key,
+              item
+            );
+
+          }
+        );
+
+        // ---------------------------------------------
+        // 昨日 map
+        // ---------------------------------------------
+
+        const previousMap =
+          new Map<
+            string,
+            any
+          >();
+
+        previousRows.forEach(
+          (
+            item: any
+          ) => {
+
+            const code =
+              String(
+                item?.code ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            const market =
+              String(
+                item?.market ??
+                ""
+              )
+                .trim()
+                .toUpperCase();
+
+            if (
+              !code
+            ) {
+
+              return;
+
+            }
+
+            const key =
+              `${code}__${market}`;
+
+            previousMap.set(
+              key,
+              item
+            );
+
+          }
+        );
+
+        // ---------------------------------------------
+        // 计算
+        // ---------------------------------------------
+
+        const result:
+          PerformanceRow[] = [];
+
+        latestMap.forEach(
+          (
+            latestItem,
+            key
+          ) => {
+
+            const previousItem =
+              previousMap.get(
+                key
+              );
+
+            if (
+              !previousItem
+            ) {
+
+              return;
+
+            }
+
+            const activeItem =
+              holdingsMap.get(
+                key
+              );
+
+            const latestAmount =
+              toNumber(
+                latestItem?.amount
+              );
+
+            const previousAmount =
+              toNumber(
+                previousItem?.amount
+              );
+
+            const change =
+              latestAmount -
+              previousAmount;
+
+            const changeRate =
+              previousAmount !== 0
+                ? (
+                    change /
+                    previousAmount
+                  ) *
+                  100
+                : latestAmount !== 0
+                  ? 100
+                  : 0;
+
+            result.push({
+
+              code:
+                String(
+                  latestItem?.code ??
+                  previousItem?.code ??
+                  activeItem?.code ??
+                  ""
+                ),
+
+              name:
+                String(
+                  latestItem?.name ??
+                  previousItem?.name ??
+                  activeItem?.name ??
+                  latestItem?.code ??
+                  ""
+                ),
+
+              market:
+                String(
+                  latestItem?.market ??
+                  previousItem?.market ??
+                  activeItem?.market ??
+                  ""
+                )
+                  .trim()
+                  .toUpperCase(),
+
+              previous:
+                previousAmount,
+
+              latest:
+                latestAmount,
+
+              change,
+
+              changeRate,
+
+            });
+
+          }
+        );
+
+        return result;
+
+      },
+      [
+        latest,
+        previous,
+        holdings,
+      ]
+    );
+
+  // ===================================================
+  // 分市场
+  // ===================================================
+
+  const cnRows =
+    useMemo(
+      () =>
+        rows.filter(
+          row =>
+            row.market ===
+            "CN"
+        ),
+      [
+        rows,
+      ]
+    );
+
+  const hkRows =
+    useMemo(
+      () =>
+        rows.filter(
+          row =>
+            row.market ===
+            "HK"
+        ),
+      [
+        rows,
+      ]
+    );
+
+  // ===================================================
+  // 数据不足
   // ===================================================
 
   if (
@@ -782,7 +1232,6 @@ export default function TodayPerformanceTable({
             今日表现
           </h2>
 
-
           <div
             className="
               mt-1
@@ -794,7 +1243,6 @@ export default function TodayPerformanceTable({
           </div>
 
         </div>
-
 
         <div
           className="
@@ -812,7 +1260,6 @@ export default function TodayPerformanceTable({
     );
 
   }
-
 
   // ===================================================
   // 页面
@@ -859,7 +1306,6 @@ export default function TodayPerformanceTable({
             今日表现
           </h2>
 
-
           <div
             className="
               mt-1
@@ -869,15 +1315,18 @@ export default function TodayPerformanceTable({
           >
 
             {latestDate}
+
             {" "}
+
             vs
+
             {" "}
+
             {previousDate}
 
           </div>
 
         </div>
-
 
         <div
           className="
@@ -885,382 +1334,34 @@ export default function TodayPerformanceTable({
             text-gray-400
           "
         >
-          共 {sortedRows.length} 项
+          共 {rows.length} 项
         </div>
 
       </div>
 
-
       {/* =================================================
-          Table
+          大陆
       ================================================= */}
 
-      {sortedRows.length === 0 ? (
-
-        <div
-          className="
-            px-6
-            py-10
-            text-center
-            text-gray-400
-          "
-        >
-          暂无今日表现数据
-        </div>
-
-      ) : (
-
-        <div
-          className="
-            overflow-x-auto
-          "
-        >
-
-          <table
-            className="
-              w-full
-              text-sm
-            "
-          >
-
-            <thead>
-
-              <tr
-                className="
-                  bg-gray-50
-                  border-b
-                  border-gray-200
-                "
-              >
-
-                {/* # */}
-
-                <th
-                  className="
-                    px-6
-                    py-3
-                    text-left
-                    font-medium
-                    text-gray-500
-                    w-16
-                  "
-                >
-                  #
-                </th>
-
-
-                {/* 资产 */}
-
-                <th
-                  onClick={() =>
-                    handleSort(
-                      "name"
-                    )
-                  }
-                  className="
-                    px-4
-                    py-3
-                    text-left
-                    font-medium
-                    text-gray-500
-                    cursor-pointer
-                    select-none
-                    hover:text-gray-900
-                  "
-                >
-
-                  资产
-
-                  <SortArrow
-                    column="name"
-                  />
-
-                </th>
-
-
-                {/* 昨日 */}
-
-                <th
-                  onClick={() =>
-                    handleSort(
-                      "previous"
-                    )
-                  }
-                  className="
-                    px-4
-                    py-3
-                    text-right
-                    font-medium
-                    text-gray-500
-                    cursor-pointer
-                    select-none
-                    hover:text-gray-900
-                    whitespace-nowrap
-                  "
-                >
-
-                  昨日
-
-                  <SortArrow
-                    column="previous"
-                  />
-
-                </th>
-
-
-                {/* 今日 */}
-
-                <th
-                  onClick={() =>
-                    handleSort(
-                      "latest"
-                    )
-                  }
-                  className="
-                    px-4
-                    py-3
-                    text-right
-                    font-medium
-                    text-gray-500
-                    cursor-pointer
-                    select-none
-                    hover:text-gray-900
-                    whitespace-nowrap
-                  "
-                >
-
-                  今日
-
-                  <SortArrow
-                    column="latest"
-                  />
-
-                </th>
-
-
-                {/* 涨跌 */}
-
-                <th
-                  onClick={() =>
-                    handleSort(
-                      "change"
-                    )
-                  }
-                  className="
-                    px-4
-                    py-3
-                    text-right
-                    font-medium
-                    text-gray-500
-                    cursor-pointer
-                    select-none
-                    hover:text-gray-900
-                    whitespace-nowrap
-                  "
-                >
-
-                  涨跌
-
-                  <SortArrow
-                    column="change"
-                  />
-
-                </th>
-
-
-                {/* 涨跌幅 */}
-
-                <th
-                  onClick={() =>
-                    handleSort(
-                      "changeRate"
-                    )
-                  }
-                  className="
-                    px-6
-                    py-3
-                    text-right
-                    font-medium
-                    text-gray-500
-                    cursor-pointer
-                    select-none
-                    hover:text-gray-900
-                    whitespace-nowrap
-                  "
-                >
-
-                  涨跌%
-
-                  <SortArrow
-                    column="changeRate"
-                  />
-
-                </th>
-
-              </tr>
-
-            </thead>
-
-
-            <tbody>
-
-              {sortedRows.map(
-                (
-                  row,
-                  index
-                ) => (
-
-                  <tr
-                    key={
-                      `${row.code}-${row.market}-${index}`
-                    }
-                    className="
-                      border-b
-                      border-gray-100
-                      last:border-b-0
-                      hover:bg-gray-50
-                    "
-                  >
-
-                    {/* # */}
-
-                    <td
-                      className="
-                        px-6
-                        py-4
-                        text-gray-400
-                      "
-                    >
-                      {index + 1}
-                    </td>
-
-
-                    {/* 资产 */}
-
-                    <td
-                      className="
-                        px-4
-                        py-4
-                      "
-                    >
-
-                      <div
-                        className="
-                          font-medium
-                          text-gray-900
-                        "
-                      >
-                        {row.name}
-                      </div>
-
-
-                      <div
-                        className="
-                          mt-0.5
-                          text-xs
-                          text-gray-400
-                        "
-                      >
-                        {row.code}
-                      </div>
-
-                    </td>
-
-
-                    {/* 昨日 */}
-
-                    <td
-                      className="
-                        px-4
-                        py-4
-                        text-right
-                        text-gray-600
-                        whitespace-nowrap
-                      "
-                    >
-                      ¥{formatMoney(
-                        row.previous
-                      )}
-                    </td>
-
-
-                    {/* 今日 */}
-
-                    <td
-                      className="
-                        px-4
-                        py-4
-                        text-right
-                        font-medium
-                        text-gray-900
-                        whitespace-nowrap
-                      "
-                    >
-                      ¥{formatMoney(
-                        row.latest
-                      )}
-                    </td>
-
-
-                    {/* 涨跌 */}
-
-                    <td
-                      className={`
-                        px-4
-                        py-4
-                        text-right
-                        font-semibold
-                        whitespace-nowrap
-                        ${
-                          row.change > 0
-                            ? "text-green-600"
-                            : row.change < 0
-                              ? "text-red-600"
-                              : "text-gray-500"
-                        }
-                      `}
-                    >
-                      {formatChange(
-                        row.change
-                      )}
-                    </td>
-
-
-                    {/* 涨跌% */}
-
-                    <td
-                      className={`
-                        px-6
-                        py-4
-                        text-right
-                        font-semibold
-                        whitespace-nowrap
-                        ${
-                          row.changeRate > 0
-                            ? "text-green-600"
-                            : row.changeRate < 0
-                              ? "text-red-600"
-                              : "text-gray-500"
-                        }
-                      `}
-                    >
-                      {formatChangeRate(
-                        row.changeRate
-                      )}
-                    </td>
-
-                  </tr>
-
-                )
-              )}
-
-            </tbody>
-
-          </table>
-
-        </div>
-
-      )}
+      <MarketSection
+        title="大陆"
+        count={cnRows.length}
+        rows={cnRows}
+        market="CN"
+        defaultOpen={true}
+      />
+
+      {/* =================================================
+          香港
+      ================================================= */}
+
+      <MarketSection
+        title="香港"
+        count={hkRows.length}
+        rows={hkRows}
+        market="HK"
+        defaultOpen={true}
+      />
 
     </section>
 

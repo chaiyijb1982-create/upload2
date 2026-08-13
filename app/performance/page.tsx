@@ -46,13 +46,21 @@ export default function Performance() {
   ] =
     useState<any[]>([]);
 
-
-  const [
-    comparison,
-    setComparison,
-  ] =
-    useState<any>(null);
-
+const [
+  comparison,
+  setComparison,
+] =
+  useState<{
+    latestDate: string | null;
+    previousDate: string | null;
+    latest: any[];
+    previous: any[];
+  }>({
+    latestDate: null,
+    previousDate: null,
+    latest: [],
+    previous: [],
+  });
 
   // ===================================================
   // Load
@@ -63,28 +71,18 @@ export default function Performance() {
 
       async function load() {
 
-        const [
-
-          latest,
-
-          historyData,
-
-          holdingsData,
-
-          comparisonData,
-
-        ] =
-          await Promise.all([
-
-            getLatestAsset(),
-
-            getAssetHistory(),
-
-            getHoldings(),
-
-            getHoldingsHistoryComparison(),
-
-          ]);
+      const [
+              latest,
+              historyData,
+              holdingsData,
+              comparisonData,
+            ] =
+              await Promise.all([
+                getLatestAsset(),
+                getAssetHistory(),
+                getHoldings(),
+                getHoldingsHistoryComparison(),
+              ]);
 
 
         setAsset(
@@ -101,6 +99,10 @@ export default function Performance() {
           holdingsData
         );
 
+        console.log(
+  "===== comparisonData =====",
+  comparisonData
+);
 
         setComparison(
           comparisonData
@@ -203,10 +205,22 @@ export default function Performance() {
             前一个交易日
         ================================================= */}
 
-        <TodayPerformanceTable
-          comparison={
-            comparison
-          }
+          <TodayPerformanceTable
+            holdings={
+            holdings
+            }
+            latest={
+            comparison.latest
+            }
+            previous={
+            comparison.previous
+            }
+            latestDate={
+            comparison.latestDate
+            }
+            previousDate={
+            comparison.previousDate
+            }
         />
 
 
