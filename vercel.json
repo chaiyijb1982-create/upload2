@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/update-market",
-      "schedule": "30 0 * * *"
+      "schedule": "2 0 * * *"
     }
   ]
 }
