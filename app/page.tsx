@@ -13,6 +13,7 @@ import {
   getHoldingsAllocation,
   getHoldings,
   getHoldingsPlatformAllocation,
+  getLatestHoldingsHistoryUpdatedAt,
 } from "@/lib/asset";
 
 import {
@@ -36,7 +37,9 @@ export default function Home() {
 
   const [asset, setAsset] =
     useState<any>(null);
-
+ 
+  const [latestUpdatedAt, setLatestUpdatedAt] =
+  useState<string | null>(null);
 
   // =====================================================
   // History
@@ -130,7 +133,12 @@ export default function Home() {
 
           ]);
 
+        const latestUpdatedAt =
+               await getLatestHoldingsHistoryUpdatedAt();
 
+            setLatestUpdatedAt(
+              latestUpdatedAt
+            );
         // =================================================
         // 固收资产
         // =================================================
@@ -1615,13 +1623,16 @@ export default function Home() {
 
       <TopBar
         title="Dashboard"
+        dataDate={
+        asset.snapshot_date
+        }
         lastUpdate={
-          asset.snapshot_date
+        asset.created_at
         }
         usdCny={
-          asset.usd_cny
+        asset.usd_cny
         }
-      />
+    />
 
 
       <main
@@ -1638,6 +1649,9 @@ export default function Home() {
         <AssetSummary
           asset={
             asset
+          }
+           updatedAt={
+             latestUpdatedAt
           }
         />
 

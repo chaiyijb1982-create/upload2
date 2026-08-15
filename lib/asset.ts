@@ -11,6 +11,8 @@ export type AssetHistory = {
 
   snapshot_date?: string;
 
+  created_at?: string;
+
   total_asset?: number;
 
   total_wealth?: number;
@@ -199,7 +201,62 @@ export async function getAssetHistory(): Promise<AssetHistory[]> {
 
 }
 
+// =====================================================
+// 获取 Holdings History 最近更新时间
+//
+// 用于 Dashboard / AssetSummary
+//
+// 来源：holdings_history.updated_at
+// updated_at 为数据库 UTC 时间
+// =====================================================
 
+export async function getLatestHoldingsHistoryUpdatedAt(): Promise<string | null> {
+
+  const {
+    data,
+    error,
+  } = await supabase
+
+    .from("holdings_history")
+
+    .select("updated_at")
+
+    .not(
+      "updated_at",
+      "is",
+      null
+    )
+
+    .order(
+      "updated_at",
+      {
+        ascending: false,
+      }
+    )
+
+    .limit(1)
+
+    .maybeSingle();
+
+
+  if (error) {
+
+    console.error(
+      "getLatestHoldingsHistoryUpdatedAt error:",
+      error
+    );
+
+    return null;
+
+  }
+
+
+  return (
+    data?.updated_at ??
+    null
+  );
+
+}
 // =====================================================
 // 获取 Dashboard 当前持仓
 //
@@ -1673,7 +1730,7 @@ export async function getHoldingsHistoryComparison() {
       }
     );
 
-
+  
   // ===================================================
   // Supabase 查询错误
   // ===================================================

@@ -33,6 +33,10 @@ const menus = [
     icon: "🏦",
   },
 
+  // =====================================================
+  // 贷款
+  // =====================================================
+
   {
     id: 5,
     name: "贷款",
@@ -40,36 +44,48 @@ const menus = [
     icon: "💰",
   },
 
+  // =====================================================
+  // 贷款 Institutions
+  // =====================================================
+
   {
     id: 6,
+    name: "贷款insitutions",
+    href: "/loan-institutions",
+    icon: "🏛️",
+    subMenu: true,
+  },
+
+  {
+    id: 7,
     name: "保险",
     href: "/insurance",
     icon: "🛡️",
   },
 
   {
-    id: 7,
+    id: 8,
     name: "财务自由规划",
     href: "/financial-freedom",
     icon: "💎",
   },
 
   {
-    id: 8,
+    id: 9,
     name: "天天向上当前",
     href: "/tiantian-up",
     icon: "🚀",
   },
 
   {
-    id: 9,
+    id: 10,
     name: "天天向上年度详细",
     href: "/tiantian-up-detail",
     icon: "🚀",
   },
 
   {
-    id: 10,
+    id: 11,
     name: "退休规划",
     href: "/retirement",
     icon: "🎯",
@@ -136,7 +152,11 @@ export default function Sidebar() {
 
       setUpdateMessage(
         data?.error ||
-          `更新失败${data?.failed ? ` · ${data.failed} 项失败` : ""}`
+          `更新失败${
+            data?.failed
+              ? ` · ${data.failed} 项失败`
+              : ""
+          }`
       );
 
     } catch (error: any) {
@@ -174,11 +194,13 @@ export default function Sidebar() {
         flex-col
       "
     >
+
       {/* =================================================
           Logo
       ================================================= */}
 
       <div className="mb-10">
+
         <h1
           className="
             text-2xl
@@ -197,50 +219,122 @@ export default function Sidebar() {
         >
           Personal Wealth System
         </p>
+
       </div>
+
 
       {/* =================================================
           Menu
       ================================================= */}
 
       <nav className="space-y-3">
-        {menus.map((menu) => (
-          <Link
-            key={menu.id}
-            href={menu.href}
-            className={`
-              flex
-              items-center
-              gap-4
-              px-4
-              py-3
-              rounded-xl
-              transition
 
-              ${
-                pathname === menu.href
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-700 hover:bg-gray-100"
-              }
-            `}
-          >
-            <span
-              className="
-                text-xl
-              "
-            >
-              {menu.icon}
-            </span>
+        {menus.map((menu) => {
 
-            <span
-              className="
-                font-medium
-              "
+          // =================================================
+          // 判断当前页面
+          // =================================================
+
+          const isActive =
+            pathname === menu.href;
+
+
+          // =================================================
+          // 贷款 Institutions 子菜单
+          // =================================================
+
+          if (menu.subMenu) {
+
+            return (
+              <Link
+                key={menu.id}
+                href={menu.href}
+                className={`
+                  flex
+                  items-center
+                  gap-3
+                  ml-6
+                  px-4
+                  py-2.5
+                  rounded-xl
+                  transition
+
+                  ${
+                    isActive
+                      ? "bg-blue-600 text-white"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }
+                `}
+              >
+
+                <span
+                  className="
+                    text-lg
+                  "
+                >
+                  {menu.icon}
+                </span>
+
+                <span
+                  className="
+                    text-sm
+                    font-medium
+                  "
+                >
+                  {menu.name}
+                </span>
+
+              </Link>
+            );
+          }
+
+
+          // =================================================
+          // 普通菜单
+          // =================================================
+
+          return (
+            <Link
+              key={menu.id}
+              href={menu.href}
+              className={`
+                flex
+                items-center
+                gap-4
+                px-4
+                py-3
+                rounded-xl
+                transition
+
+                ${
+                  isActive
+                    ? "bg-blue-600 text-white"
+                    : "text-gray-700 hover:bg-gray-100"
+                }
+              `}
             >
-              {menu.name}
-            </span>
-          </Link>
-        ))}
+
+              <span
+                className="
+                  text-xl
+                "
+              >
+                {menu.icon}
+              </span>
+
+              <span
+                className="
+                  font-medium
+                "
+              >
+                {menu.name}
+              </span>
+
+            </Link>
+          );
+
+        })}
+
 
         {/* =================================================
             手动更新
@@ -248,8 +342,12 @@ export default function Sidebar() {
 
         <button
           type="button"
-          onClick={handleManualUpdate}
-          disabled={updating}
+          onClick={
+            handleManualUpdate
+          }
+          disabled={
+            updating
+          }
           className={`
             w-full
             flex
@@ -268,24 +366,34 @@ export default function Sidebar() {
             }
           `}
         >
+
           <span className="text-xl">
+
             {updating
               ? "⏳"
               : "🔄"}
+
           </span>
 
-          <span className="font-medium">
+          <span
+            className="
+              font-medium
+            "
+          >
             {updating
               ? "正在更新..."
               : "手动更新"}
           </span>
+
         </button>
+
 
         {/* =================================================
             更新结果
         ================================================= */}
 
         {updateMessage && (
+
           <div
             className={`
               px-4
@@ -303,8 +411,11 @@ export default function Sidebar() {
           >
             {updateMessage}
           </div>
+
         )}
+
       </nav>
+
 
       {/* =================================================
           Bottom
@@ -319,6 +430,7 @@ export default function Sidebar() {
       >
         v1.0 Wealth OS
       </div>
+
     </aside>
   );
 }

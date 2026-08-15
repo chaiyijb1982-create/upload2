@@ -8,7 +8,7 @@ import {
 interface Props {
 
   asset: any;
-
+  updatedAt?: string | null;
 }
 
 
@@ -206,9 +206,138 @@ function ComparisonRow({
 
 export default function AssetSummary({
   asset,
+  updatedAt,
 }: Props) {
 
+  // =====================================================
+  // 更新时间格式化
+  //
+  // updated_at：
+  // 数据库保存 UTC 时间
+  //
+  // 显示：
+  // UTC+0
+  // UTC+8 北京时间
+  // =====================================================
 
+ function formatUpdatedTime(
+  value: any
+) {
+
+  if (!value) {
+
+    return {
+      utc: "-",
+      beijing: "-",
+    };
+
+  }
+
+
+  // =====================================================
+  // holdings_history.updated_at 统一规定：
+  // 数据库保存的是 UTC+0
+  //
+  // 数据示例：
+  // 2026-08-15 01:23:34.712
+  //
+  // 必须明确按照 UTC 解析
+  // =====================================================
+
+  let utcValue =
+    String(value).trim();
+
+
+  // PostgreSQL timestamp without timezone
+  // 没有 Z，需要明确补上 UTC
+  if (
+    !utcValue.endsWith("Z")
+  ) {
+
+    utcValue =
+      utcValue.replace(
+        " ",
+        "T"
+      ) +
+      "Z";
+
+  }
+
+
+  const date =
+    new Date(
+      utcValue
+    );
+
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+
+    return {
+      utc: "-",
+      beijing: "-",
+    };
+
+  }
+
+
+  // =====================================================
+  // UTC+0
+  // =====================================================
+
+  const pad = (
+    n: number
+  ) =>
+    String(n).padStart(
+      2,
+      "0"
+    );
+
+
+  const utc =
+    `${date.getUTCFullYear()}-` +
+    `${pad(date.getUTCMonth() + 1)}-` +
+    `${pad(date.getUTCDate())} ` +
+    `${pad(date.getUTCHours())}:` +
+    `${pad(date.getUTCMinutes())}:` +
+    `${pad(date.getUTCSeconds())}`;
+
+
+  // =====================================================
+  // UTC+8 北京时间
+  // =====================================================
+
+  const beijingDate =
+    new Date(
+      date.getTime() +
+      8 * 60 * 60 * 1000
+    );
+
+
+  const beijing =
+    `${beijingDate.getUTCFullYear()}-` +
+    `${pad(beijingDate.getUTCMonth() + 1)}-` +
+    `${pad(beijingDate.getUTCDate())} ` +
+    `${pad(beijingDate.getUTCHours())}:` +
+    `${pad(beijingDate.getUTCMinutes())}:` +
+    `${pad(beijingDate.getUTCSeconds())}`;
+
+
+  return {
+    utc,
+    beijing,
+  };
+
+}
+
+
+  const updatedTime =
+    formatUpdatedTime(
+      updatedAt
+    );
   // =====================================================
   // More comparisons
   // =====================================================
@@ -666,16 +795,44 @@ export default function AssetSummary({
         }
 
 
-        <p
-          className="
-            text-gray-400
-            text-sm
-            mt-6
-          "
-        >
-          Updated:{" "}
-          {asset?.snapshot_date || "-"}
-        </p>
+        <div
+  className="
+    text-sm
+    mt-6
+    leading-6
+  "
+>
+  <div className="grid grid-cols-[4.5rem_1fr]">
+    <span>
+      Data Date:
+    </span>
+
+    <span>
+      {asset?.snapshot_date || "-"}
+    </span>
+  </div>
+
+  <div className="grid grid-cols-[4.5rem_1fr]">
+    <span>
+      Updated:
+    </span>
+
+    <span>
+      {updatedTime.utc}
+      {"（UTC+0）"}
+    </span>
+  </div>
+
+  <div className="grid grid-cols-[4.5rem_1fr]">
+    <span>
+    </span>
+
+    <span>
+      {updatedTime.beijing}
+      {"（UTC+8 北京时间）"}
+    </span>
+  </div>
+</div>
 
       </div>
 

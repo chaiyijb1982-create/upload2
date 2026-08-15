@@ -15,12 +15,19 @@ import {
   deleteLoan,
 } from "@/lib/loan";
 
+import {
+  getFinancialInstitutions,
+  addFinancialInstitution,
+  updateFinancialInstitution,
+  deleteFinancialInstitution,
+} from "@/lib/financialInstitution";
 // =====================================================
 // 类型
 // =====================================================
 
 type SortKey =
   | "name"
+  | "institution"
   | "type"
   | "loan_mode"
   | "remaining_amount"
@@ -208,26 +215,25 @@ function calculateLoanInterest(
 // 剩余期数
 // =====================================================
 
+// =====================================================
+// 剩余期数
+// =====================================================
+
 function calculateRemainingPeriods(
   loan: any
 ) {
-  const now =
-    new Date();
+  const now = new Date();
 
   // ---------------------------------------------------
-  // 已有最后还款日期
+  // 1. 已有最后还款日期
   // ---------------------------------------------------
 
   if (loan.end_date) {
-    const end =
-      new Date(
-        `${loan.end_date}T23:59:59`
-      );
+    const end = new Date(
+      `${loan.end_date}T23:59:59`
+    );
 
-    if (
-      end.getTime() <=
-      now.getTime()
-    ) {
+    if (end.getTime() <= now.getTime()) {
       return 0;
     }
 
@@ -256,7 +262,7 @@ function calculateRemainingPeriods(
   }
 
   // ---------------------------------------------------
-  // 根据本金、利率、月供反推
+  // 2. 根据本金、利率、月供反推剩余期数
   // ---------------------------------------------------
 
   const balance =
@@ -286,17 +292,21 @@ function calculateRemainingPeriods(
     100 /
     12;
 
-  // 无利息
-  if (
-    monthlyRate <= 0
-  ) {
+  // ---------------------------------------------------
+  // 3. 无利息
+  // ---------------------------------------------------
+
+  if (monthlyRate <= 0) {
     return Math.ceil(
       balance /
       payment
     );
   }
 
-  // 月供不足以覆盖利息
+  // ---------------------------------------------------
+  // 4. 月供不足以覆盖当月利息
+  // ---------------------------------------------------
+
   if (
     payment <=
     balance *
@@ -304,6 +314,10 @@ function calculateRemainingPeriods(
   ) {
     return 0;
   }
+
+  // ---------------------------------------------------
+  // 5. 标准等额还款公式
+  // ---------------------------------------------------
 
   const periods =
     -Math.log(
@@ -331,6 +345,9 @@ function calculateRemainingPeriods(
     periods
   );
 }
+
+
+
 
 
 // =====================================================
@@ -484,6 +501,9 @@ function getActualMonthlyPayment(
 function createEmptyLoan() {
   return {
     name: "",
+
+    // 银行 / 金融机构
+    institution: "",
 
     type: "房贷",
 
@@ -807,6 +827,33 @@ export default function LoanPage() {
     setLoans,
   ] =
     useState<any[]>([]);
+    
+
+  const [
+  institutions,
+  setInstitutions,
+] = useState<any[]>([]);
+
+const [
+  institutionsLoading,
+  setInstitutionsLoading,
+] = useState(true);
+
+  const [
+    addingInstitution,
+    setAddingInstitution,
+  ] = useState(false);
+
+  const [
+    newInstitution,
+    setNewInstitution,
+  ] = useState("");
+
+  const [
+  editingInstitution,
+  setEditingInstitution,
+] =
+  useState<any>(null);
 
   const [
     editing,
@@ -890,8 +937,122 @@ export default function LoanPage() {
 
   useEffect(() => {
     load();
+    loadInstitutions();
   }, []);
 
+   async function loadInstitutions() {
+
+  try {
+
+    setInstitutionsLoading(
+      true
+    );
+
+    const data =
+      await getFinancialInstitutions();
+
+    setInstitutions(
+      data || []
+    );
+
+  } catch (error) {
+
+    console.error(
+      "加载金融机构失败:",
+      error
+    );
+
+    alert(
+      "加载银行 / 金融机构失败"
+    );
+
+  } finally {
+
+    setInstitutionsLoading(
+      false
+    );
+  }
+}
+
+
+  // ---------------------------------------------------
+  // 新增银行 / 金融机构
+  // ---------------------------------------------------
+
+ async function addInstitution() {
+
+  const name =
+    newInstitution.trim();
+
+  if (!name) {
+    alert(
+      "请输入银行或金融机构名称"
+    );
+
+    return;
+  }
+
+  // 检查数据库中的机构是否已经存在
+  if (
+    institutions.some(
+      item =>
+        item.name === name
+    )
+  ) {
+    alert(
+      "该银行 / 金融机构已经存在"
+    );
+
+    return;
+  }
+
+  try {
+
+    const data =
+      await addFinancialInstitution(
+        name
+      );
+
+    setInstitutions(
+      prev =>
+        [
+          ...prev,
+          data,
+        ].sort(
+          (a, b) =>
+            a.name.localeCompare(
+              b.name,
+              "zh-CN"
+            )
+        )
+    );
+
+    // 新增后自动选中
+    setEditing(
+      (prev: any) => ({
+        ...prev,
+        institution: name,
+      })
+    );
+
+    setNewInstitution("");
+
+    setAddingInstitution(
+      false
+    );
+
+  } catch (error) {
+
+    console.error(
+      "新增金融机构失败:",
+      error
+    );
+
+    alert(
+      "新增银行 / 金融机构失败"
+    );
+  }
+}
 
   // ===================================================
   // 总负债
@@ -1085,7 +1246,7 @@ export default function LoanPage() {
       state
     );
 
-  }, [typeStats.length]);
+  }, [typeStats]);
 
 
   // ===================================================
@@ -1129,6 +1290,11 @@ export default function LoanPage() {
         return (
           loan.name || ""
         );
+
+      case "institution":
+          return (
+            loan.institution || ""
+          );
 
       case "type":
         return (
@@ -1395,7 +1561,7 @@ export default function LoanPage() {
       <main
         className="
           p-8
-          max-w-[1600px]
+          max-w-[1700px]
           mx-auto
           space-y-8
         "
@@ -1894,8 +2060,8 @@ export default function LoanPage() {
                               <table
                                 className="
                                   w-full
-                                  text-sm
-                                  min-w-[1500px]
+                                  text-xs
+                                  table-fixed
                                 "
                               >
 
@@ -1926,6 +2092,30 @@ export default function LoanPage() {
                                       )}
                                     </th>
 
+                                    
+
+
+                                    {/* 银行 / 金融机构 */}
+
+                                    <th
+                                      className="
+                                        p-3
+                                        text-left
+                                        cursor-pointer
+                                        whitespace-nowrap
+                                      "
+                                      onClick={() =>
+                                        handleSort(
+                                          "institution"
+                                        )
+                                      }
+                                    >
+                                      银行/金融机构
+                                      {sortIcon(
+                                        "institution"
+                                      )}
+                                    </th>
+
 
                                     <th
                                       className="
@@ -1938,12 +2128,14 @@ export default function LoanPage() {
                                           "type"
                                         )
                                       }
-                                    >
+                                    >   
                                       类型
                                       {sortIcon(
                                         "type"
                                       )}
-                                    </th>
+                                    </th>   
+
+
 
 
                                     <th
@@ -2199,6 +2391,14 @@ export default function LoanPage() {
                                           {item.name}
                                         </td>
 
+                                        <td
+                                          className="
+                                            p-3
+                                            whitespace-nowrap
+                                          "
+                                        >
+                                          {item.institution || "-"}
+                                        </td>
 
                                         <td
                                           className="
@@ -3073,6 +3273,219 @@ export default function LoanPage() {
 
             </label>
 
+               {/* =======================================
+                    银行 / 金融机构
+                ======================================= */}
+
+                <label>
+
+                  <span className="font-medium">
+                    银行 / 金融机构
+                  </span>
+
+                  <p
+                    className="
+                      text-xs
+                      text-gray-400
+                      mb-1
+                    "
+                  >
+                    从下拉列表选择，也可以随时新增银行或金融机构
+                  </p>
+
+
+                  {!addingInstitution ? (
+
+                    <div className="flex gap-2 mb-5">
+
+                      {/* ================================
+                          下拉框
+                      ================================= */}
+
+                      <select
+                        className="
+                          border
+                          p-3
+                          rounded
+                          w-full
+                          bg-white
+                        "
+                        value={
+                          editing.institution ||
+                          ""
+                        }
+                        onChange={e => {
+
+                          const value =
+                            e.target.value;
+
+                          if (
+                            value ===
+                            "__ADD_NEW__"
+                          ) {
+
+                            setAddingInstitution(
+                              true
+                            );
+
+                            setNewInstitution("");
+
+                            return;
+                          }
+
+                          setEditing({
+                            ...editing,
+                            institution:
+                              value,
+                          });
+
+                        }}
+                      >
+
+                        <option value="">
+                          请选择银行 / 金融机构
+                        </option>
+
+
+                        {institutions.map(
+                          institution => (
+                            <option
+                              key={institution.id}
+                              value={institution.name}
+                            >
+                              {institution.name}
+                            </option>
+                          )
+                        )}
+
+
+                        <option
+                          value="__ADD_NEW__"
+                        >
+                          ＋ 新增银行 / 金融机构
+                        </option>
+
+                      </select>
+
+                    </div>
+
+                  ) : (
+
+                    /* =================================
+                       新增银行
+                    ================================= */
+
+                    <div
+                      className="
+                        border
+                        border-blue-200
+                        bg-blue-50
+                        rounded-xl
+                        p-4
+                        mb-5
+                      "
+                    >
+
+                      <div
+                        className="
+                          font-medium
+                          mb-2
+                        "
+                      >
+                        ＋ 新增银行 / 金融机构
+                      </div>
+
+
+                      <input
+                        className="
+                          border
+                          p-3
+                          rounded
+                          w-full
+                          bg-white
+                          mb-3
+                        "
+                        autoFocus
+                        value={
+                          newInstitution
+                        }
+                        onChange={e =>
+                          setNewInstitution(
+                            e.target.value
+                          )
+                        }
+                        placeholder="例如：华夏银行 / 上海农商银行 / 某某保险公司"
+                        onKeyDown={e => {
+
+                          if (
+                            e.key ===
+                            "Enter"
+                          ) {
+
+                            e.preventDefault();
+
+                            addInstitution();
+
+                          }
+
+                        }}
+                      />
+
+
+                      <div
+                        className="
+                          flex
+                          gap-2
+                        "
+                      >
+
+                        <button
+                          type="button"
+                          className="
+                            px-4
+                            py-2
+                            bg-blue-600
+                            text-white
+                            rounded
+                            hover:bg-blue-700
+                          "
+                          onClick={
+                            addInstitution
+                          }
+                        >
+                          添加
+                        </button>
+
+
+                        <button
+                          type="button"
+                          className="
+                            px-4
+                            py-2
+                            bg-gray-200
+                            rounded
+                            hover:bg-gray-300
+                          "
+                          onClick={() => {
+
+                            setAddingInstitution(
+                              false
+                            );
+
+                            setNewInstitution("");
+
+                          }}
+                        >
+                          取消
+                        </button>
+
+                      </div>
+
+                    </div>
+
+                  )}
+
+                </label>
 
             {/* =======================================
                 类型
