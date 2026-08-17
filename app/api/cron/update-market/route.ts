@@ -37,7 +37,13 @@ import {
   getUsdCny,
 } from "@/lib/market-data";
 
+import {
+  saveFinancialFreedomHistory,
+} from "@/lib/financialFreedom";
 
+import {
+  getFinancialFreedomLoans,
+} from "@/lib/loan";
 // =====================================================
 // Runtime
 // =====================================================
@@ -2590,7 +2596,7 @@ export async function GET(
 
 
     if (
-      updated > 0
+      holdings.length > 0
     ) {
 
       const historyResult =
@@ -2638,20 +2644,26 @@ export async function GET(
       };
 
 
-    if (
-      updated > 0
-    ) {
+    assetHistoryResult =
+    await saveAssetHistory(
 
-      assetHistoryResult =
-        await saveAssetHistory(
+    snapshotDate,
 
-          snapshotDate,
+    usdCny
 
-          usdCny
+    );
 
-        );
 
-    }
+    // ===================================================
+    // Financial Freedom History Result
+    // ===================================================
+
+    let financialFreedomResult: {
+          success: boolean;
+          error?: string;
+        } = {
+          success: false,
+        };
 
 
     // ===================================================
@@ -2682,7 +2694,7 @@ export async function GET(
       totalAsset +=
         amount;
 
-
+        
       const market =
         String(
           item?.market ??
@@ -2710,6 +2722,291 @@ export async function GET(
 
     }
 
+    // ===================================================
+// Financial Freedom History
+// ===================================================
+
+console.log(
+  "before financial freedom",
+  {
+    updated,
+    totalAsset
+  }
+);
+
+
+if (
+  updated >= 0
+) {
+
+
+  // =================================================
+  // 1. 固收资产
+  // =================================================
+
+  const {
+    data: fixedIncomeData,
+    error: fixedIncomeError,
+  } =
+    await supabase
+      .from(
+        "fixed_income_assets"
+      )
+      .select(
+        "amount"
+      );
+
+
+  if (
+    fixedIncomeError
+  ) {
+
+    console.error(
+      "Financial Freedom fixed income error:",
+      fixedIncomeError
+    );
+
+  }
+
+
+  const fixedIncomeSum =
+    (
+      Array.isArray(
+        fixedIncomeData
+      )
+        ? fixedIncomeData
+        : []
+    )
+    .reduce(
+      (
+        sum:number,
+        item:any
+      ) => {
+
+        return (
+          sum +
+          Number(
+            item?.amount || 0
+          )
+        );
+
+      },
+      0
+    );
+
+
+
+  // =================================================
+  // 2. Financial Freedom 贷款
+  // =================================================
+
+  // =================================================
+// 2. Financial Freedom 贷款
+// =================================================
+
+const loanData =
+  await getFinancialFreedomLoans();
+
+console.log(
+  "Financial Freedom loan data:",
+  loanData
+);
+
+const financialFreedomLoan =
+  (
+    Array.isArray(
+      loanData
+    )
+      ? loanData
+      : []
+  )
+  .reduce(
+    (
+      sum:number,
+      loan:any
+    ) => {
+
+
+      const remaining =
+        Number(
+          loan?.remaining_amount ??
+          loan?.balance ??
+          loan?.amount ??
+          0
+        );
+
+
+      return (
+        sum +
+        (
+          Number.isFinite(
+            remaining
+          )
+            ? remaining
+            : 0
+        )
+      );
+
+
+    },
+    0
+  );
+
+ 
+
+
+ 
+
+
+
+  // =================================================
+  // 3. 当前家庭净资产
+  // =================================================
+
+  const familyNetAsset =
+    totalAsset
+    +
+    fixedIncomeSum
+    -
+    financialFreedomLoan;
+
+
+
+  // =================================================
+  // 4. 当前财务自由目标
+  //
+  // 2027 - 2041
+  //
+  // 与 FinancialFreedomPage 保持一致
+  // =================================================
+
+  const BASE_EXPENSE_CRON:any = {
+
+    2027:370000,
+    2028:370000,
+    2029:370000,
+    2030:370000,
+    2031:370000,
+
+    2032:320000,
+    2033:320000,
+    2034:320000,
+    2035:320000,
+    2036:320000,
+    2037:320000,
+    2038:320000,
+    2039:320000,
+    2040:320000,
+    2041:320000,
+    2042:320000,
+
+  };
+
+
+  const freedomTarget =
+    Object
+      .entries(
+        BASE_EXPENSE_CRON
+      )
+      .filter(
+        ([year]) =>
+          Number(year) >= 2027 &&
+          Number(year) <= 2041
+      )
+      .reduce(
+        (
+          sum,
+          [,value]
+        ) =>
+          sum +
+          Number(value),
+        0
+      );
+
+
+
+  // =================================================
+  // 5. 财务自由差额
+  // =================================================
+
+  const freedomGap =
+    Math.max(
+      0,
+      freedomTarget -
+      familyNetAsset
+    );
+
+
+  // =================================================
+  // 6. 财务自由完成率
+  // =================================================
+
+  const freedomRate =
+    freedomTarget > 0
+      ? (
+          familyNetAsset /
+          freedomTarget
+        )
+        *
+        100
+      : 0;
+
+
+
+  console.log(
+    "Financial Freedom save data:",
+    {
+      snapshotDate,
+
+      totalAsset,
+
+      fixedIncomeSum,
+
+      financialFreedomLoan,
+
+      familyNetAsset,
+
+      freedomTarget,
+
+      freedomGap,
+
+      freedomRate,
+    }
+  );
+
+
+  financialFreedomResult =
+    await saveFinancialFreedomHistory({
+
+      snapshot_date:
+        snapshotDate,
+
+
+      total_asset:
+        Math.round(
+          familyNetAsset
+        ),
+
+
+      freedom_target:
+        Math.round(
+          freedomTarget
+        ),
+
+
+      freedom_gap:
+        Math.round(
+          freedomGap
+        ),
+
+
+      freedom_rate:
+        freedomRate,
+
+    });
+
+
+}
 
     // ===================================================
     // 最终 Success
@@ -2837,6 +3134,9 @@ export async function GET(
     return NextResponse.json({
 
       success,
+
+      financial_freedom_history:
+        financialFreedomResult,
 
       date:
         snapshotDate,

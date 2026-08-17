@@ -566,7 +566,8 @@ export default function FinancialFreedomPage() {
         setCurrentFamilyAsset(
           netAsset
         );
-
+   
+        
 
         // =================================================
         // Debug

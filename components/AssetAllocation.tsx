@@ -116,28 +116,28 @@ export default function AssetAllocation({
 
     {
       id: "fixed_income",
-      name: "Fixed Income",
+      name: "固收（债券，现金）",
       value: fixedIncome,
       target: 45,
     },
 
     {
       id: "global_stock",
-      name: "Global Stocks",
+      name: "全球股票",
       value: globalStock,
       target: 35,
     },
 
     {
       id: "china_stock",
-      name: "China Stocks",
+      name: "中国股票",
       value: chinaStock,
       target: 5,
     },
 
     {
       id: "gold",
-      name: "Gold",
+      name: "黄金",
       value: gold,
       target: 15,
     },
@@ -238,7 +238,7 @@ export default function AssetAllocation({
           "
         >
 
-          📊 Asset Allocation
+          📊 投资资产 Allocation
 
         </h2>
 

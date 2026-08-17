@@ -8,7 +8,6 @@ import {
 
 import { supabase } from "@/lib/supabase";
 
-
 // =====================================================
 // 类型
 // =====================================================
@@ -25,6 +24,15 @@ interface Loan {
   loan_mode?: string | null;
 }
 
+interface CreditCard {
+  id: string;
+  institution_id?: string | null;
+  bank_name: string;
+  card_name: string;
+  billing_day: number;
+  payment_day?: number | null;
+  active: boolean;
+}
 
 interface FinancialInstitution {
   id: string;
@@ -33,7 +41,6 @@ interface FinancialInstitution {
   active: boolean;
   created_at?: string | null;
 }
-
 
 interface Institution {
   id: string | null;
@@ -52,8 +59,9 @@ interface Institution {
   actualPayment: number;
 
   loans: Loan[];
-}
 
+  creditCard?: CreditCard | null;
+}
 
 // =====================================================
 // 工具函数
@@ -67,13 +75,13 @@ function num(value: any): number {
     : 0;
 }
 
-
 function money(
   value: number,
   decimals = 0
 ): string {
-
-  return `¥${Number(value || 0).toLocaleString(
+  return `¥${Number(
+    value || 0
+  ).toLocaleString(
     "zh-CN",
     {
       minimumFractionDigits: decimals,
@@ -82,11 +90,9 @@ function money(
   )}`;
 }
 
-
 function getHousingFundMonthly(
   loan: Loan
 ): number {
-
   if (
     loan.type !== "房贷"
   ) {
@@ -101,11 +107,9 @@ function getHousingFundMonthly(
   );
 }
 
-
 function getActualMonthlyPayment(
   loan: Loan
 ): number {
-
   return Math.max(
     0,
     num(
@@ -116,7 +120,6 @@ function getActualMonthlyPayment(
       )
   );
 }
-
 
 // =====================================================
 // 页面
@@ -133,7 +136,6 @@ export default function LoanInstitutionsPage() {
     setLoans,
   ] = useState<Loan[]>([]);
 
-
   const [
     financialInstitutions,
     setFinancialInstitutions,
@@ -141,6 +143,10 @@ export default function LoanInstitutionsPage() {
     FinancialInstitution[]
   >([]);
 
+  const [
+    creditCards,
+    setCreditCards,
+  ] = useState<CreditCard[]>([]);
 
   // ===================================================
   // 状态
@@ -151,20 +157,20 @@ export default function LoanInstitutionsPage() {
     setLoading,
   ] = useState(true);
 
-
   const [
     saving,
     setSaving,
   ] = useState(false);
-
 
   const [
     error,
     setError,
   ] = useState("");
 
+  // ===================================================
+  // 展开
+  // ===================================================
 
-  // 展开的机构
   const [
     expanded,
     setExpanded,
@@ -172,8 +178,10 @@ export default function LoanInstitutionsPage() {
     Record<string, boolean>
   >({});
 
+  // ===================================================
+  // 编辑金融机构
+  // ===================================================
 
-  // 当前编辑机构
   const [
     editingInstitution,
     setEditingInstitution,
@@ -181,39 +189,74 @@ export default function LoanInstitutionsPage() {
     null
   );
 
-
-  // 编辑名称
   const [
     editingName,
     setEditingName,
   ] = useState("");
 
-
-  // 编辑类型
   const [
     editingType,
     setEditingType,
   ] = useState("银行");
 
-
+  // ===================================================
   // 新增机构
+  // ===================================================
+
   const [
     showAdd,
     setShowAdd,
   ] = useState(false);
-
 
   const [
     newName,
     setNewName,
   ] = useState("");
 
-
   const [
     newType,
     setNewType,
   ] = useState("银行");
 
+  // ===================================================
+  // 新增信用卡
+  // ===================================================
+
+  const [
+    newHasCreditCard,
+    setNewHasCreditCard,
+  ] = useState(false);
+
+  const [
+    newBillingDay,
+    setNewBillingDay,
+  ] = useState("");
+
+  const [
+    newPaymentDay,
+    setNewPaymentDay,
+  ] = useState("");
+
+  // ===================================================
+  // 编辑信用卡
+  // ===================================================
+
+  const [
+    editingCreditCardId,
+    setEditingCreditCardId,
+  ] = useState<string | null>(
+    null
+  );
+
+  const [
+    editingBillingDay,
+    setEditingBillingDay,
+  ] = useState("");
+
+  const [
+    editingPaymentDay,
+    setEditingPaymentDay,
+  ] = useState("");
 
   // ===================================================
   // 加载数据
@@ -224,14 +267,17 @@ export default function LoanInstitutionsPage() {
     try {
 
       setLoading(true);
-
       setError("");
-
 
       const [
         institutionsResult,
         loansResult,
+        creditCardsResult,
       ] = await Promise.all([
+
+        // -----------------------------------------------
+        // 金融机构
+        // -----------------------------------------------
 
         supabase
           .from(
@@ -257,6 +303,10 @@ export default function LoanInstitutionsPage() {
             }
           ),
 
+        // -----------------------------------------------
+        // 贷款
+        // -----------------------------------------------
+
         supabase
           .from(
             "loans"
@@ -281,8 +331,37 @@ export default function LoanInstitutionsPage() {
             }
           ),
 
-      ]);
+        // -----------------------------------------------
+        // 信用卡
+        // -----------------------------------------------
 
+        supabase
+          .from(
+            "credit_cards"
+          )
+          .select(
+            `
+              id,
+              institution_id,
+              bank_name,
+              card_name,
+              billing_day,
+              payment_day,
+              active
+            `
+          )
+          .eq(
+            "active",
+            true
+          )
+          .order(
+            "billing_day",
+            {
+              ascending: true,
+            }
+          ),
+
+      ]);
 
       if (
         institutionsResult.error
@@ -295,7 +374,6 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
       if (
         loansResult.error
       ) {
@@ -307,6 +385,16 @@ export default function LoanInstitutionsPage() {
 
       }
 
+      if (
+        creditCardsResult.error
+      ) {
+
+        throw new Error(
+          creditCardsResult.error.message ||
+            "读取信用卡失败"
+        );
+
+      }
 
       setFinancialInstitutions(
         (
@@ -315,12 +403,18 @@ export default function LoanInstitutionsPage() {
         ) as FinancialInstitution[]
       );
 
-
       setLoans(
         (
           loansResult.data ||
           []
         ) as Loan[]
+      );
+
+      setCreditCards(
+        (
+          creditCardsResult.data ||
+          []
+        ) as CreditCard[]
       );
 
     } catch (err: any) {
@@ -343,7 +437,6 @@ export default function LoanInstitutionsPage() {
 
   }
 
-
   // ===================================================
   // 初始化
   // ===================================================
@@ -353,7 +446,6 @@ export default function LoanInstitutionsPage() {
     loadData();
 
   }, []);
-
 
   // ===================================================
   // 构建机构数据
@@ -376,7 +468,6 @@ export default function LoanInstitutionsPage() {
                   institution.name
               );
 
-
             let balance = 0;
 
             let monthlyPayment = 0;
@@ -384,7 +475,6 @@ export default function LoanInstitutionsPage() {
             let housingFund = 0;
 
             let actualPayment = 0;
-
 
             institutionLoans.forEach(
               loan => {
@@ -412,6 +502,22 @@ export default function LoanInstitutionsPage() {
               }
             );
 
+            // -------------------------------------------
+            // 找到对应信用卡
+            // -------------------------------------------
+
+            const institutionCreditCard =
+              creditCards.find(
+                card =>
+                  card.institution_id ===
+                  institution.id
+              ) ||
+              creditCards.find(
+                card =>
+                  card.bank_name ===
+                  institution.name
+              ) ||
+              null;
 
             return {
 
@@ -442,11 +548,13 @@ export default function LoanInstitutionsPage() {
               loans:
                 institutionLoans,
 
+              creditCard:
+                institutionCreditCard,
+
             };
 
           }
         );
-
 
       // =================================================
       // 未设置金融机构
@@ -461,7 +569,6 @@ export default function LoanInstitutionsPage() {
             )
         );
 
-
       if (
         unassignedLoans.length > 0
       ) {
@@ -473,7 +580,6 @@ export default function LoanInstitutionsPage() {
         let housingFund = 0;
 
         let actualPayment = 0;
-
 
         unassignedLoans.forEach(
           loan => {
@@ -501,7 +607,6 @@ export default function LoanInstitutionsPage() {
           }
         );
 
-
         result.push({
 
           id: null,
@@ -528,17 +633,15 @@ export default function LoanInstitutionsPage() {
           loans:
             unassignedLoans,
 
+          creditCard:
+            null,
+
         });
 
       }
 
-
       // =================================================
       // 排序
-      //
-      // 有贷款的机构优先
-      // 贷款数量多的优先
-      // 数量相同按本金余额
       // =================================================
 
       return result.sort(
@@ -567,8 +670,8 @@ export default function LoanInstitutionsPage() {
     }, [
       financialInstitutions,
       loans,
+      creditCards,
     ]);
-
 
   // ===================================================
   // 总统计
@@ -614,14 +717,12 @@ export default function LoanInstitutionsPage() {
       institutions,
     ]);
 
-
   // ===================================================
   // 金融机构统计
   // ===================================================
 
   const institutionCount =
     financialInstitutions.length;
-
 
   const usedInstitutionCount =
     institutions.filter(
@@ -630,14 +731,12 @@ export default function LoanInstitutionsPage() {
         item.count > 0
     ).length;
 
-
   const emptyInstitutionCount =
     institutions.filter(
       item =>
         item.id !== null &&
         item.count === 0
     ).length;
-
 
   // ===================================================
   // 展开 / 收起
@@ -649,17 +748,14 @@ export default function LoanInstitutionsPage() {
 
     setExpanded(
       prev => ({
-
         ...prev,
 
         [name]:
           !prev[name],
-
       })
     );
 
   }
-
 
   function expandAll() {
 
@@ -670,7 +766,8 @@ export default function LoanInstitutionsPage() {
     institutions.forEach(
       item => {
 
-        result[item.name] = true;
+        result[item.name] =
+          true;
 
       }
     );
@@ -680,7 +777,6 @@ export default function LoanInstitutionsPage() {
     );
 
   }
-
 
   function collapseAll() {
 
@@ -691,7 +787,8 @@ export default function LoanInstitutionsPage() {
     institutions.forEach(
       item => {
 
-        result[item.name] = false;
+        result[item.name] =
+          false;
 
       }
     );
@@ -701,7 +798,6 @@ export default function LoanInstitutionsPage() {
     );
 
   }
-
 
   // ===================================================
   // 编辑机构
@@ -734,7 +830,6 @@ export default function LoanInstitutionsPage() {
 
   }
 
-
   function cancelEdit() {
 
     setEditingInstitution(
@@ -749,7 +844,6 @@ export default function LoanInstitutionsPage() {
 
   }
 
-
   // ===================================================
   // 保存机构
   // ===================================================
@@ -759,15 +853,12 @@ export default function LoanInstitutionsPage() {
     const oldName =
       editingInstitution;
 
-
     const newInstitutionName =
       editingName.trim();
-
 
     if (!oldName) {
       return;
     }
-
 
     if (
       !newInstitutionName
@@ -781,7 +872,6 @@ export default function LoanInstitutionsPage() {
 
     }
 
-
     const duplicated =
       financialInstitutions.some(
         institution =>
@@ -790,7 +880,6 @@ export default function LoanInstitutionsPage() {
           institution.name !==
             oldName
       );
-
 
     if (duplicated) {
 
@@ -802,13 +891,10 @@ export default function LoanInstitutionsPage() {
 
     }
 
-
     try {
 
       setSaving(true);
-
       setError("");
-
 
       const currentInstitution =
         financialInstitutions.find(
@@ -816,7 +902,6 @@ export default function LoanInstitutionsPage() {
             institution.name ===
             oldName
         );
-
 
       if (
         !currentInstitution
@@ -828,10 +913,9 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
-      // ===============================================
+      // -----------------------------------------------
       // 更新金融机构
-      // ===============================================
+      // -----------------------------------------------
 
       const institutionResult =
         await supabase
@@ -853,7 +937,6 @@ export default function LoanInstitutionsPage() {
             currentInstitution.id
           );
 
-
       if (
         institutionResult.error
       ) {
@@ -865,10 +948,9 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
-      // ===============================================
+      // -----------------------------------------------
       // 同步贷款
-      // ===============================================
+      // -----------------------------------------------
 
       if (
         oldName !==
@@ -891,7 +973,6 @@ export default function LoanInstitutionsPage() {
               oldName
             );
 
-
         if (
           loansResult.error
         ) {
@@ -903,8 +984,38 @@ export default function LoanInstitutionsPage() {
 
         }
 
-      }
+        // ---------------------------------------------
+        // 同步信用卡银行名称
+        // ---------------------------------------------
 
+        const creditCardResult =
+          await supabase
+            .from(
+              "credit_cards"
+            )
+            .update({
+
+              bank_name:
+                newInstitutionName,
+
+            })
+            .eq(
+              "institution_id",
+              currentInstitution.id
+            );
+
+        if (
+          creditCardResult.error
+        ) {
+
+          throw new Error(
+            creditCardResult.error.message ||
+              "同步信用卡机构失败"
+          );
+
+        }
+
+      }
 
       cancelEdit();
 
@@ -930,6 +1041,33 @@ export default function LoanInstitutionsPage() {
 
   }
 
+  // ===================================================
+  // 验证日期
+  // ===================================================
+
+  function validateDay(
+    value: string,
+    label: string
+  ): number {
+
+    const day =
+      Number(value);
+
+    if (
+      !Number.isInteger(day) ||
+      day < 1 ||
+      day > 31
+    ) {
+
+      throw new Error(
+        `${label}必须是 1-31`
+      );
+
+    }
+
+    return day;
+
+  }
 
   // ===================================================
   // 新增机构
@@ -939,7 +1077,6 @@ export default function LoanInstitutionsPage() {
 
     const name =
       newName.trim();
-
 
     if (!name) {
 
@@ -951,17 +1088,43 @@ export default function LoanInstitutionsPage() {
 
     }
 
-
     try {
 
       setSaving(true);
-
       setError("");
 
+      // -----------------------------------------------
+      // 如果有信用卡，必须验证账单日和还款日
+      // -----------------------------------------------
 
-      // ===============================================
-      // 查询是否存在
-      // ===============================================
+      let billingDay:
+        number | null = null;
+
+      let paymentDay:
+        number | null = null;
+
+      if (
+        newType === "银行" &&
+        newHasCreditCard
+      ) {
+
+        billingDay =
+          validateDay(
+            newBillingDay,
+            "信用卡账单日"
+          );
+
+        paymentDay =
+          validateDay(
+            newPaymentDay,
+            "信用卡还款日"
+          );
+
+      }
+
+      // -----------------------------------------------
+      // 查询机构
+      // -----------------------------------------------
 
       const existingResult =
         await supabase
@@ -982,7 +1145,6 @@ export default function LoanInstitutionsPage() {
           )
           .maybeSingle();
 
-
       if (
         existingResult.error
       ) {
@@ -994,14 +1156,12 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
       const existing =
         existingResult.data;
 
-
-      // ===============================================
+      // =================================================
       // 已存在且 active
-      // ===============================================
+      // =================================================
 
       if (
         existing &&
@@ -1016,11 +1176,9 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
-      // ===============================================
+      // =================================================
       // 已存在但 inactive
-      // 自动恢复
-      // ===============================================
+      // =================================================
 
       if (
         existing &&
@@ -1034,7 +1192,8 @@ export default function LoanInstitutionsPage() {
             )
             .update({
 
-              active: true,
+              active:
+                true,
 
               type:
                 newType ||
@@ -1047,7 +1206,6 @@ export default function LoanInstitutionsPage() {
               existing.id
             );
 
-
         if (
           restoreResult.error
         ) {
@@ -1059,11 +1217,140 @@ export default function LoanInstitutionsPage() {
 
         }
 
+        // ---------------------------------------------
+        // 如果选择了信用卡
+        // ---------------------------------------------
+
+        if (
+          newType === "银行" &&
+          newHasCreditCard
+        ) {
+
+          const existingCard =
+            await supabase
+              .from(
+                "credit_cards"
+              )
+              .select(
+                "id"
+              )
+              .eq(
+                "institution_id",
+                existing.id
+              )
+              .maybeSingle();
+
+          if (
+            existingCard.error
+          ) {
+
+            throw new Error(
+              existingCard.error.message ||
+                "查询原信用卡失败"
+            );
+
+          }
+
+          if (
+            existingCard.data
+          ) {
+
+            const updateCardResult =
+              await supabase
+                .from(
+                  "credit_cards"
+                )
+                .update({
+
+                  bank_name:
+                    name,
+
+                  billing_day:
+                    billingDay,
+
+                  payment_day:
+                    paymentDay,
+
+                  active:
+                    true,
+
+                })
+                .eq(
+                  "id",
+                  existingCard.data.id
+                );
+
+            if (
+              updateCardResult.error
+            ) {
+
+              throw new Error(
+                updateCardResult.error.message ||
+                  "恢复信用卡失败"
+              );
+
+            }
+
+          } else {
+
+            const insertCardResult =
+              await supabase
+                .from(
+                  "credit_cards"
+                )
+                .insert({
+
+                  institution_id:
+                    existing.id,
+
+                  bank_name:
+                    name,
+
+                  card_name:
+                    `${name}信用卡`,
+
+                  billing_day:
+                    billingDay,
+
+                  payment_day:
+                    paymentDay,
+
+                  active:
+                    true,
+
+                });
+
+            if (
+              insertCardResult.error
+            ) {
+
+              throw new Error(
+                insertCardResult.error.message ||
+                  "新增信用卡失败"
+              );
+
+            }
+
+          }
+
+        }
 
         setNewName("");
 
         setNewType(
           "银行"
+        );
+
+        setNewHasCreditCard(
+          false
+        );
+
+        setNewBillingDay(
+          ""
+        );
+
+        setNewPaymentDay(
+          ""
         );
 
         setShowAdd(false);
@@ -1078,10 +1365,9 @@ export default function LoanInstitutionsPage() {
 
       }
 
-
-      // ===============================================
-      // 新增
-      // ===============================================
+      // =================================================
+      // 新增金融机构
+      // =================================================
 
       const insertResult =
         await supabase
@@ -1099,101 +1385,20 @@ export default function LoanInstitutionsPage() {
             active:
               true,
 
-          });
-
+          })
+          .select(
+            `
+              id,
+              name,
+              type,
+              active
+            `
+          )
+          .single();
 
       if (
         insertResult.error
       ) {
-
-        // =============================================
-        // UNIQUE 双保险
-        // =============================================
-
-        if (
-          insertResult.error.code ===
-          "23505"
-        ) {
-
-          const retryResult =
-            await supabase
-              .from(
-                "financial_institutions"
-              )
-              .select(
-                `
-                  id,
-                  name,
-                  type,
-                  active
-                `
-              )
-              .eq(
-                "name",
-                name
-              )
-              .maybeSingle();
-
-
-          if (
-            retryResult.data &&
-            retryResult.data.active ===
-              false
-          ) {
-
-            const restoreResult =
-              await supabase
-                .from(
-                  "financial_institutions"
-                )
-                .update({
-
-                  active: true,
-
-                  type:
-                    newType ||
-                    retryResult.data.type ||
-                    "银行",
-
-                })
-                .eq(
-                  "id",
-                  retryResult.data.id
-                );
-
-
-            if (
-              restoreResult.error
-            ) {
-
-              throw new Error(
-                restoreResult.error.message ||
-                  "恢复金融机构失败"
-              );
-
-            }
-
-
-            setNewName("");
-
-            setNewType(
-              "银行"
-            );
-
-            setShowAdd(false);
-
-            await loadData();
-
-            alert(
-              `「${name}」已恢复。`
-            );
-
-            return;
-
-          }
-
-        }
-
 
         throw new Error(
           insertResult.error.message ||
@@ -1202,11 +1407,94 @@ export default function LoanInstitutionsPage() {
 
       }
 
+      const newInstitution =
+        insertResult.data;
+
+      // =================================================
+      // 新增信用卡
+      // =================================================
+
+      if (
+        newType === "银行" &&
+        newHasCreditCard
+      ) {
+
+        const creditCardResult =
+          await supabase
+            .from(
+              "credit_cards"
+            )
+            .insert({
+
+              // 关键：
+              // 这里必须关联刚刚创建的机构 ID
+              institution_id:
+                newInstitution.id,
+
+              bank_name:
+                name,
+
+              card_name:
+                `${name}信用卡`,
+
+              billing_day:
+                billingDay,
+
+              payment_day:
+                paymentDay,
+
+              active:
+                true,
+
+            });
+
+        if (
+          creditCardResult.error
+        ) {
+
+          // 如果信用卡创建失败，
+          // 删除刚刚创建的金融机构，
+          // 避免留下半成品数据
+
+          await supabase
+            .from(
+              "financial_institutions"
+            )
+            .delete()
+            .eq(
+              "id",
+              newInstitution.id
+            );
+
+          throw new Error(
+            creditCardResult.error.message ||
+              "新增信用卡失败"
+          );
+
+        }
+
+      }
+
+      // =================================================
+      // 清空表单
+      // =================================================
 
       setNewName("");
 
       setNewType(
         "银行"
+      );
+
+      setNewHasCreditCard(
+        false
+      );
+
+      setNewBillingDay(
+        ""
+      );
+
+      setNewPaymentDay(
+        ""
       );
 
       setShowAdd(false);
@@ -1237,12 +1525,98 @@ export default function LoanInstitutionsPage() {
 
   }
 
+  // ===================================================
+  // 停用机构
+  // ===================================================
+
+  async function disableInstitution(
+    institution: Institution
+  ) {
+
+    if (
+      !institution.id
+    ) {
+
+      return;
+
+    }
+
+    const confirmed =
+      window.confirm(
+        `确定要停用「${institution.name}」吗？
+
+停用后：
+
+1. 机构会从当前列表隐藏
+2. 数据不会被删除
+3. 贷款不会删除
+4. 信用卡不会删除
+5. 以后可以重新恢复`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+
+      setSaving(true);
+      setError("");
+
+      const result =
+        await supabase
+          .from(
+            "financial_institutions"
+          )
+          .update({
+
+            active:
+              false,
+
+          })
+          .eq(
+            "id",
+            institution.id
+          );
+
+      if (
+        result.error
+      ) {
+
+        throw new Error(
+          result.error.message ||
+            "停用金融机构失败"
+        );
+
+      }
+
+      await loadData();
+
+    } catch (err: any) {
+
+      console.error(
+        "disableInstitution error:",
+        err
+      );
+
+      setError(
+        err?.message ||
+          "停用金融机构失败"
+      );
+
+    } finally {
+
+      setSaving(false);
+
+    }
+
+  }
 
   // ===================================================
-  // 删除机构
+  // 真正删除机构
   // ===================================================
 
-  async function deleteInstitution(
+  async function permanentlyDeleteInstitution(
     institution: Institution
   ) {
 
@@ -1258,71 +1632,34 @@ export default function LoanInstitutionsPage() {
 
     }
 
-
     const confirmed =
       window.confirm(
-        `确定要删除「${institution.name}」吗？
+        `⚠️ 确定要真正删除「${institution.name}」吗？
 
-该机构目前有 ${institution.count} 笔贷款。
+这是永久删除，不是停用。
 
-删除后：
+将会：
 
-1. 机构会从列表隐藏
-2. 不会删除贷款
-3. 贷款会变成「未设置金融机构」
+1. 永久删除 financial_institutions 记录
+2. 删除该机构关联的信用卡
+3. 贷款不会删除
+4. 贷款机构会变成「未设置金融机构」
 
-以后重新新增「${institution.name}」时，
-系统会自动恢复。`
+删除后不能通过“恢复”找回。`
       );
-
 
     if (!confirmed) {
       return;
     }
 
-
     try {
 
       setSaving(true);
-
       setError("");
 
-
-      // ===============================================
-      // inactive
-      // ===============================================
-
-      const institutionResult =
-        await supabase
-          .from(
-            "financial_institutions"
-          )
-          .update({
-
-            active: false,
-
-          })
-          .eq(
-            "id",
-            institution.id
-          );
-
-
-      if (
-        institutionResult.error
-      ) {
-
-        throw new Error(
-          institutionResult.error.message ||
-            "删除金融机构失败"
-        );
-
-      }
-
-
-      // ===============================================
-      // 清空贷款机构
-      // ===============================================
+      // -----------------------------------------------
+      // 先清空贷款机构
+      // -----------------------------------------------
 
       const loansResult =
         await supabase
@@ -1340,7 +1677,6 @@ export default function LoanInstitutionsPage() {
             institution.name
           );
 
-
       if (
         loansResult.error
       ) {
@@ -1352,19 +1688,74 @@ export default function LoanInstitutionsPage() {
 
       }
 
+      // -----------------------------------------------
+      // 删除关联信用卡
+      // -----------------------------------------------
+
+      const creditCardResult =
+        await supabase
+          .from(
+            "credit_cards"
+          )
+          .delete()
+          .eq(
+            "institution_id",
+            institution.id
+          );
+
+      if (
+        creditCardResult.error
+      ) {
+
+        throw new Error(
+          creditCardResult.error.message ||
+            "删除关联信用卡失败"
+        );
+
+      }
+
+      // -----------------------------------------------
+      // 真正删除金融机构
+      // -----------------------------------------------
+
+      const institutionResult =
+        await supabase
+          .from(
+            "financial_institutions"
+          )
+          .delete()
+          .eq(
+            "id",
+            institution.id
+          );
+
+      if (
+        institutionResult.error
+      ) {
+
+        throw new Error(
+          institutionResult.error.message ||
+            "真正删除金融机构失败"
+        );
+
+      }
 
       await loadData();
+
+      alert(
+        `「${institution.name}」已经永久删除。`
+      );
 
     } catch (err: any) {
 
       console.error(
-        "deleteInstitution error:",
+        "permanentlyDeleteInstitution error:",
         err
       );
 
       setError(
         err?.message ||
-          "删除金融机构失败"
+          "真正删除金融机构失败"
       );
 
     } finally {
@@ -1375,6 +1766,198 @@ export default function LoanInstitutionsPage() {
 
   }
 
+  // ===================================================
+  // 开始编辑信用卡
+  // ===================================================
+
+  function startEditCreditCard(
+    card: CreditCard
+  ) {
+
+    setEditingCreditCardId(
+      card.id
+    );
+
+    setEditingBillingDay(
+      String(
+        card.billing_day || ""
+      )
+    );
+
+    setEditingPaymentDay(
+      String(
+        card.payment_day || ""
+      )
+    );
+
+  }
+
+  // ===================================================
+  // 取消编辑信用卡
+  // ===================================================
+
+  function cancelEditCreditCard() {
+
+    setEditingCreditCardId(
+      null
+    );
+
+    setEditingBillingDay("");
+
+    setEditingPaymentDay("");
+
+  }
+
+  // ===================================================
+  // 保存信用卡
+  // ===================================================
+
+  async function saveCreditCard() {
+
+    if (
+      !editingCreditCardId
+    ) {
+
+      return;
+
+    }
+
+    try {
+
+      setSaving(true);
+      setError("");
+
+      const billingDay =
+        validateDay(
+          editingBillingDay,
+          "信用卡账单日"
+        );
+
+      const paymentDay =
+        validateDay(
+          editingPaymentDay,
+          "信用卡还款日"
+        );
+
+      const result =
+        await supabase
+          .from(
+            "credit_cards"
+          )
+          .update({
+
+            billing_day:
+              billingDay,
+
+            payment_day:
+              paymentDay,
+
+          })
+          .eq(
+            "id",
+            editingCreditCardId
+          );
+
+      if (
+        result.error
+      ) {
+
+        throw new Error(
+          result.error.message ||
+            "保存信用卡失败"
+        );
+
+      }
+
+      cancelEditCreditCard();
+
+      await loadData();
+
+    } catch (err: any) {
+
+      console.error(
+        "saveCreditCard error:",
+        err
+      );
+
+      setError(
+        err?.message ||
+          "保存信用卡失败"
+      );
+
+    } finally {
+
+      setSaving(false);
+
+    }
+
+  }
+
+  // ===================================================
+  // 删除信用卡
+  // ===================================================
+
+  async function deleteCreditCard(
+    card: CreditCard
+  ) {
+
+    const confirmed =
+      window.confirm(
+        `确定删除「${card.card_name}」吗？`
+      );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+
+      setSaving(true);
+      setError("");
+
+      const result =
+        await supabase
+          .from(
+            "credit_cards"
+          )
+          .delete()
+          .eq(
+            "id",
+            card.id
+          );
+
+      if (
+        result.error
+      ) {
+
+        throw new Error(
+          result.error.message ||
+            "删除信用卡失败"
+        );
+
+      }
+
+      await loadData();
+
+    } catch (err: any) {
+
+      console.error(
+        "deleteCreditCard error:",
+        err
+      );
+
+      setError(
+        err?.message ||
+          "删除信用卡失败"
+      );
+
+    } finally {
+
+      setSaving(false);
+
+    }
+
+  }
 
   // ===================================================
   // 页面
@@ -1390,8 +1973,8 @@ export default function LoanInstitutionsPage() {
         py-5
         md:px-6
         md:py-6
-        max-w‑5xl    /* 设置最大宽度，可以替换 max-w‑6xl / max-w‑5xl / max-w‑full */
-        mx-auto      /* 水平居中，必须搭配 max‑w 使用 */
+        max-w-7xl
+        mx-auto
       "
     >
 
@@ -1444,11 +2027,10 @@ export default function LoanInstitutionsPage() {
                 mt-1
               "
             >
-              管理家庭贷款涉及的银行及金融机构
+              管理家庭贷款及信用卡涉及的银行及金融机构
             </p>
 
           </div>
-
 
           <div
             className="
@@ -1482,7 +2064,6 @@ export default function LoanInstitutionsPage() {
               ＋ 新增金融机构
             </button>
 
-
             <button
               className="
                 px-3
@@ -1513,7 +2094,6 @@ export default function LoanInstitutionsPage() {
 
       </section>
 
-
       {/* =================================================
           新增金融机构
       ================================================= */}
@@ -1542,7 +2122,6 @@ export default function LoanInstitutionsPage() {
             新增金融机构
           </div>
 
-
           <div
             className="
               text-xs
@@ -1550,154 +2129,406 @@ export default function LoanInstitutionsPage() {
               mb-4
             "
           >
-            如果该机构以前删除过，系统会自动恢复。
+            如果该机构以前停用过，系统会自动恢复。
           </div>
-
 
           <div
             className="
               flex
               flex-col
-              md:flex-row
               gap-3
             "
           >
 
-            <input
+            <div
               className="
-                flex-1
-                border
-                border-gray-200
-                rounded-lg
-                px-3
-                py-2.5
-                text-sm
-                outline-none
-                focus:border-blue-500
+                flex
+                flex-col
+                lg:flex-row
+                gap-3
+                items-start
+                lg:items-center
               "
-              placeholder="例如：招商银行"
-              value={
-                newName
-              }
-              onChange={e =>
-                setNewName(
-                  e.target.value
-                )
-              }
-              onKeyDown={e => {
+            >
 
-                if (
-                  e.key ===
-                  "Enter"
-                ) {
+              {/* ---------------------------------------
+                  名称
+              --------------------------------------- */}
 
-                  addInstitution();
-
+              <input
+                className="
+                  flex-1
+                  w-full
+                  border
+                  border-gray-200
+                  rounded-lg
+                  px-3
+                  py-2.5
+                  text-sm
+                  outline-none
+                  focus:border-blue-500
+                "
+                placeholder="例如：招商银行"
+                value={
+                  newName
                 }
+                onChange={e =>
+                  setNewName(
+                    e.target.value
+                  )
+                }
+                onKeyDown={e => {
 
-              }}
-            />
+                  if (
+                    e.key ===
+                    "Enter"
+                  ) {
 
+                    addInstitution();
 
-            <select
+                  }
+
+                }}
+              />
+
+              {/* ---------------------------------------
+                  类型
+              --------------------------------------- */}
+
+              <select
+                className="
+                  border
+                  border-gray-200
+                  rounded-lg
+                  px-3
+                  py-2.5
+                  text-sm
+                  lg:w-36
+                "
+                value={
+                  newType
+                }
+                onChange={e => {
+
+                  setNewType(
+                    e.target.value
+                  );
+
+                  if (
+                    e.target.value !==
+                    "银行"
+                  ) {
+
+                    setNewHasCreditCard(
+                      false
+                    );
+
+                    setNewBillingDay(
+                      ""
+                    );
+
+                    setNewPaymentDay(
+                      ""
+                    );
+
+                  }
+
+                }}
+              >
+
+                <option value="银行">
+                  银行
+                </option>
+
+                <option value="保险">
+                  保险
+                </option>
+
+                <option value="证券">
+                  证券
+                </option>
+
+                <option value="基金">
+                  基金
+                </option>
+
+                <option value="其他">
+                  其他
+                </option>
+
+              </select>
+
+            </div>
+
+            {/* =================================================
+                信用卡设置
+            ================================================= */}
+
+            {newType === "银行" && (
+
+              <div
+                className="
+                  border
+                  border-gray-200
+                  rounded-xl
+                  p-4
+                  bg-gray-50
+                "
+              >
+
+                <label
+                  className="
+                    flex
+                    items-center
+                    gap-2
+                    text-sm
+                    font-medium
+                    text-gray-700
+                  "
+                >
+
+                  <input
+                    type="checkbox"
+                    checked={
+                      newHasCreditCard
+                    }
+                    onChange={e =>
+                      setNewHasCreditCard(
+                        e.target.checked
+                      )
+                    }
+                  />
+
+                  有信用卡
+                </label>
+
+                {newHasCreditCard && (
+
+                  <div
+                    className="
+                      mt-3
+                      flex
+                      flex-col
+                      sm:flex-row
+                      gap-3
+                      items-start
+                      sm:items-center
+                    "
+                  >
+
+                    {/* -----------------------------------
+                        账单日
+                    ----------------------------------- */}
+
+                    <div
+                      className="
+                        flex
+                        items-center
+                        gap-2
+                      "
+                    >
+
+                      <span
+                        className="
+                          text-sm
+                          text-gray-500
+                          whitespace-nowrap
+                        "
+                      >
+                        账单日
+                      </span>
+
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className="
+                          w-20
+                          border
+                          border-gray-200
+                          rounded-lg
+                          px-3
+                          py-2
+                          text-sm
+                          text-center
+                          outline-none
+                          focus:border-blue-500
+                          bg-white
+                        "
+                        placeholder="1-31"
+                        value={
+                          newBillingDay
+                        }
+                        onChange={e =>
+                          setNewBillingDay(
+                            e.target.value
+                          )
+                        }
+                      />
+
+                      <span
+                        className="
+                          text-sm
+                          text-gray-500
+                        "
+                      >
+                        日
+                      </span>
+
+                    </div>
+
+                    {/* -----------------------------------
+                        还款日
+                    ----------------------------------- */}
+
+                    <div
+                      className="
+                        flex
+                        items-center
+                        gap-2
+                      "
+                    >
+
+                      <span
+                        className="
+                          text-sm
+                          text-gray-500
+                          whitespace-nowrap
+                        "
+                      >
+                        还款日
+                      </span>
+
+                      <input
+                        type="number"
+                        min={1}
+                        max={31}
+                        className="
+                          w-20
+                          border
+                          border-gray-200
+                          rounded-lg
+                          px-3
+                          py-2
+                          text-sm
+                          text-center
+                          outline-none
+                          focus:border-blue-500
+                          bg-white
+                        "
+                        placeholder="1-31"
+                        value={
+                          newPaymentDay
+                        }
+                        onChange={e =>
+                          setNewPaymentDay(
+                            e.target.value
+                          )
+                        }
+                      />
+
+                      <span
+                        className="
+                          text-sm
+                          text-gray-500
+                        "
+                      >
+                        日
+                      </span>
+
+                    </div>
+
+                  </div>
+
+                )}
+
+              </div>
+
+            )}
+
+            {/* =================================================
+                按钮
+            ================================================= */}
+
+            <div
               className="
-                border
-                border-gray-200
-                rounded-lg
-                px-3
-                py-2.5
-                text-sm
-                md:w-36
+                flex
+                items-center
+                justify-end
+                gap-3
               "
-              value={
-                newType
-              }
-              onChange={e =>
-                setNewType(
-                  e.target.value
-                )
-              }
             >
 
-              <option value="银行">
-                银行
-              </option>
+              <button
+                className="
+                  px-5
+                  py-2.5
+                  rounded-lg
+                  bg-blue-600
+                  text-white
+                  text-sm
+                  font-medium
+                  hover:bg-blue-700
+                  disabled:opacity-50
+                "
+                onClick={
+                  addInstitution
+                }
+                disabled={
+                  saving
+                }
+              >
+                {saving
+                  ? "处理中..."
+                  : "确定"}
+              </button>
 
-              <option value="保险">
-                保险
-              </option>
+              <button
+                className="
+                  px-5
+                  py-2.5
+                  rounded-lg
+                  bg-gray-100
+                  text-gray-600
+                  text-sm
+                  hover:bg-gray-200
+                "
+                onClick={() => {
 
-              <option value="证券">
-                证券
-              </option>
+                  setShowAdd(
+                    false
+                  );
 
-              <option value="基金">
-                基金
-              </option>
+                  setNewName("");
 
-              <option value="其他">
-                其他
-              </option>
+                  setNewType(
+                    "银行"
+                  );
 
-            </select>
+                  setNewHasCreditCard(
+                    false
+                  );
 
+                  setNewBillingDay(
+                    ""
+                  );
 
-            <button
-              className="
-                px-5
-                py-2.5
-                rounded-lg
-                bg-blue-600
-                text-white
-                text-sm
-                font-medium
-                hover:bg-blue-700
-                disabled:opacity-50
-              "
-              onClick={
-                addInstitution
-              }
-              disabled={
-                saving
-              }
-            >
-              {saving
-                ? "处理中..."
-                : "确定"}
-            </button>
+                  setNewPaymentDay(
+                    ""
+                  );
 
+                }}
+              >
+                取消
+              </button>
 
-            <button
-              className="
-                px-5
-                py-2.5
-                rounded-lg
-                bg-gray-100
-                text-gray-600
-                text-sm
-                hover:bg-gray-200
-              "
-              onClick={() => {
-
-                setShowAdd(false);
-
-                setNewName("");
-
-                setNewType(
-                  "银行"
-                );
-
-              }}
-            >
-              取消
-            </button>
+            </div>
 
           </div>
 
         </section>
 
       )}
-
 
       {/* =================================================
           错误
@@ -1741,20 +2572,20 @@ export default function LoanInstitutionsPage() {
 
       )}
 
-
       {/* =================================================
           家庭贷款总览
       ================================================= */}
 
       <section
         className="
-            overflow-hidden
-            rounded-xl
-            border
-            border-gray-200
-            bg-white
-            shadow-sm
-          "
+          mt-4
+          overflow-hidden
+          rounded-xl
+          border
+          border-gray-200
+          bg-white
+          shadow-sm
+        "
       >
 
         <div
@@ -1793,7 +2624,6 @@ export default function LoanInstitutionsPage() {
 
           </div>
 
-
           <div
             className="
               text-2xl
@@ -1808,7 +2638,6 @@ export default function LoanInstitutionsPage() {
           </div>
 
         </div>
-
 
         <div
           className="
@@ -1847,6 +2676,7 @@ export default function LoanInstitutionsPage() {
               "
             >
               {totalStats.count}
+
               <span
                 className="
                   text-sm
@@ -1857,10 +2687,10 @@ export default function LoanInstitutionsPage() {
               >
                 笔
               </span>
+
             </div>
 
           </div>
-
 
           {/* 固定月供 */}
 
@@ -1895,7 +2725,6 @@ export default function LoanInstitutionsPage() {
 
           </div>
 
-
           {/* 公积金 */}
 
           <div
@@ -1928,7 +2757,6 @@ export default function LoanInstitutionsPage() {
             </div>
 
           </div>
-
 
           {/* 实际月还 */}
 
@@ -1963,7 +2791,6 @@ export default function LoanInstitutionsPage() {
 
           </div>
 
-
           {/* 机构 */}
 
           <div
@@ -1993,6 +2820,7 @@ export default function LoanInstitutionsPage() {
               "
             >
               {institutionCount}
+
               <span
                 className="
                   text-sm
@@ -2003,6 +2831,7 @@ export default function LoanInstitutionsPage() {
               >
                 家
               </span>
+
             </div>
 
           </div>
@@ -2010,7 +2839,6 @@ export default function LoanInstitutionsPage() {
         </div>
 
       </section>
-
 
       {/* =================================================
           机构数量统计
@@ -2066,7 +2894,6 @@ export default function LoanInstitutionsPage() {
 
         </div>
 
-
         <div
           className="
             bg-white
@@ -2107,7 +2934,6 @@ export default function LoanInstitutionsPage() {
           </div>
 
         </div>
-
 
         <div
           className="
@@ -2152,7 +2978,6 @@ export default function LoanInstitutionsPage() {
 
       </section>
 
-
       {/* =================================================
           金融机构列表
       ================================================= */}
@@ -2186,13 +3011,13 @@ export default function LoanInstitutionsPage() {
 
           <div
             className="
-              min-w-[860px]
-                grid
-                grid-cols-[minmax(180px,1.4fr)_70px_70px_110px_100px_110px_110px_110px]
-                items-center
-                gap-2
-                text-xs
-                text-gray-500
+              min-w-[1100px]
+              grid
+              grid-cols-[minmax(220px,1.8fr)_80px_80px_130px_120px_130px_130px_190px]
+              items-center
+              gap-2
+              text-xs
+              text-gray-500
             "
           >
 
@@ -2231,7 +3056,6 @@ export default function LoanInstitutionsPage() {
           </div>
 
         </div>
-
 
         {/* =================================================
             数据
@@ -2275,11 +3099,9 @@ export default function LoanInstitutionsPage() {
                     institution.name
                   ] === true;
 
-
                 const isEditing =
                   editingInstitution ===
                   institution.name;
-
 
                 return (
 
@@ -2309,14 +3131,14 @@ export default function LoanInstitutionsPage() {
                     >
 
                       <div
-                          className="
-                            min-w-[860px]
-                            grid
-                            grid-cols-[minmax(180px,1.4fr)_70px_70px_110px_100px_110px_110px_110px]
-                            items-center
-                            gap-2
-                          "
-                        >
+                        className="
+                          min-w-[1100px]
+                          grid
+                          grid-cols-[minmax(220px,1.8fr)_80px_80px_130px_120px_130px_130px_190px]
+                          items-center
+                          gap-2
+                        "
+                      >
 
                         {/* =================================
                             金融机构
@@ -2354,7 +3176,6 @@ export default function LoanInstitutionsPage() {
                               ? "−"
                               : "+"}
                           </button>
-
 
                           {isEditing ? (
 
@@ -2408,7 +3229,6 @@ export default function LoanInstitutionsPage() {
 
                                 }}
                               />
-
 
                               <select
                                 className="
@@ -2477,7 +3297,6 @@ export default function LoanInstitutionsPage() {
                                   }
                                 </span>
 
-
                                 {institution.count >
                                   0 && (
 
@@ -2497,9 +3316,36 @@ export default function LoanInstitutionsPage() {
 
                               </div>
 
+                              {institution.creditCard && (
+
+                                <div
+                                  className="
+                                    text-xs
+                                    text-blue-600
+                                    mt-1
+                                  "
+                                >
+                                  💳{" "}
+                                  {
+                                    institution.creditCard.card_name
+                                  }
+                                  {" · 账单日 "}
+                                  {
+                                    institution.creditCard.billing_day
+                                  }
+                                  {" · 还款日 "}
+                                  {
+                                    institution.creditCard.payment_day ||
+                                    "-"
+                                  }
+                                  {" 日"}
+                                </div>
+
+                              )}
 
                               {institution.count ===
-                                0 && (
+                                0 &&
+                                !institution.creditCard && (
 
                                 <div
                                   className="
@@ -2518,7 +3364,6 @@ export default function LoanInstitutionsPage() {
                           )}
 
                         </div>
-
 
                         {/* =================================
                             类型
@@ -2544,7 +3389,6 @@ export default function LoanInstitutionsPage() {
 
                         </div>
 
-
                         {/* =================================
                             贷款笔数
                         ================================= */}
@@ -2557,7 +3401,6 @@ export default function LoanInstitutionsPage() {
                         >
                           {institution.count}
                         </div>
-
 
                         {/* =================================
                             本金余额
@@ -2575,7 +3418,6 @@ export default function LoanInstitutionsPage() {
                           )}
                         </div>
 
-
                         {/* =================================
                             月供
                         ================================= */}
@@ -2590,7 +3432,6 @@ export default function LoanInstitutionsPage() {
                             institution.monthlyPayment
                           )}
                         </div>
-
 
                         {/* =================================
                             公积金
@@ -2610,7 +3451,6 @@ export default function LoanInstitutionsPage() {
                             : "-"}
                         </div>
 
-
                         {/* =================================
                             实际月还
                         ================================= */}
@@ -2627,7 +3467,6 @@ export default function LoanInstitutionsPage() {
                           )}
                         </div>
 
-
                         {/* =================================
                             操作
                         ================================= */}
@@ -2636,7 +3475,8 @@ export default function LoanInstitutionsPage() {
                           className="
                             flex
                             items-center
-                            gap-2
+                            gap-3
+                            whitespace-nowrap
                           "
                         >
 
@@ -2665,13 +3505,11 @@ export default function LoanInstitutionsPage() {
                                 保存
                               </button>
 
-
                               <button
                                 className="
                                   text-xs
                                   text-gray-500
                                   hover:text-gray-700
-                                  px-1
                                 "
                                 onClick={
                                   cancelEdit
@@ -2705,6 +3543,23 @@ export default function LoanInstitutionsPage() {
                                 编辑
                               </button>
 
+                              <button
+                                className="
+                                  text-xs
+                                  text-orange-500
+                                  hover:text-orange-700
+                                "
+                                onClick={() =>
+                                  disableInstitution(
+                                    institution
+                                  )
+                                }
+                                disabled={
+                                  saving
+                                }
+                              >
+                                停用
+                              </button>
 
                               <button
                                 className="
@@ -2713,7 +3568,7 @@ export default function LoanInstitutionsPage() {
                                   hover:text-red-700
                                 "
                                 onClick={() =>
-                                  deleteInstitution(
+                                  permanentlyDeleteInstitution(
                                     institution
                                   )
                                 }
@@ -2745,9 +3600,8 @@ export default function LoanInstitutionsPage() {
 
                     </div>
 
-
                     {/* =================================
-                        贷款明细
+                        展开明细
                     ================================= */}
 
                     {isExpanded && (
@@ -2759,10 +3613,324 @@ export default function LoanInstitutionsPage() {
                           border-gray-100
                           px-4
                           md:px-8
-                          py-3
-                          overflow-x-auto
+                          py-4
                         "
                       >
+
+                        {/* =================================
+                            信用卡
+                        ================================= */}
+
+                        {institution.creditCard && (
+
+                          <div
+                            className="
+                              bg-white
+                              border
+                              border-blue-100
+                              rounded-lg
+                              p-4
+                              mb-4
+                            "
+                          >
+
+                            <div
+                              className="
+                                flex
+                                items-center
+                                justify-between
+                                mb-3
+                              "
+                            >
+
+                              <div
+                                className="
+                                  text-sm
+                                  font-semibold
+                                  text-gray-800
+                                "
+                              >
+                                💳 信用卡
+                              </div>
+
+                            </div>
+
+                            {editingCreditCardId ===
+                            institution.creditCard.id ? (
+
+                              <div
+                                className="
+                                  flex
+                                  flex-wrap
+                                  items-center
+                                  gap-4
+                                "
+                              >
+
+                                <div
+                                  className="
+                                    text-sm
+                                    font-medium
+                                    text-gray-700
+                                  "
+                                >
+                                  {
+                                    institution.creditCard.card_name
+                                  }
+                                </div>
+
+                                <div
+                                  className="
+                                    flex
+                                    items-center
+                                    gap-2
+                                  "
+                                >
+
+                                  <span
+                                    className="
+                                      text-xs
+                                      text-gray-500
+                                    "
+                                  >
+                                    账单日
+                                  </span>
+
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={31}
+                                    className="
+                                      w-20
+                                      border
+                                      border-blue-300
+                                      rounded-md
+                                      px-2
+                                      py-1.5
+                                      text-sm
+                                      text-center
+                                      outline-none
+                                    "
+                                    value={
+                                      editingBillingDay
+                                    }
+                                    onChange={e =>
+                                      setEditingBillingDay(
+                                        e.target.value
+                                      )
+                                    }
+                                  />
+
+                                  <span
+                                    className="
+                                      text-xs
+                                      text-gray-500
+                                    "
+                                  >
+                                    日
+                                  </span>
+
+                                </div>
+
+                                <div
+                                  className="
+                                    flex
+                                    items-center
+                                    gap-2
+                                  "
+                                >
+
+                                  <span
+                                    className="
+                                      text-xs
+                                      text-gray-500
+                                    "
+                                  >
+                                    还款日
+                                  </span>
+
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={31}
+                                    className="
+                                      w-20
+                                      border
+                                      border-blue-300
+                                      rounded-md
+                                      px-2
+                                      py-1.5
+                                      text-sm
+                                      text-center
+                                      outline-none
+                                    "
+                                    value={
+                                      editingPaymentDay
+                                    }
+                                    onChange={e =>
+                                      setEditingPaymentDay(
+                                        e.target.value
+                                      )
+                                    }
+                                  />
+
+                                  <span
+                                    className="
+                                      text-xs
+                                      text-gray-500
+                                    "
+                                  >
+                                    日
+                                  </span>
+
+                                </div>
+
+                                <button
+                                  className="
+                                    text-xs
+                                    text-white
+                                    bg-blue-600
+                                    hover:bg-blue-700
+                                    rounded-md
+                                    px-3
+                                    py-1.5
+                                  "
+                                  onClick={
+                                    saveCreditCard
+                                  }
+                                  disabled={
+                                    saving
+                                  }
+                                >
+                                  保存
+                                </button>
+
+                                <button
+                                  className="
+                                    text-xs
+                                    text-gray-500
+                                    hover:text-gray-700
+                                  "
+                                  onClick={
+                                    cancelEditCreditCard
+                                  }
+                                >
+                                  取消
+                                </button>
+
+                              </div>
+
+                            ) : (
+
+                              <div
+                                className="
+                                  flex
+                                  flex-wrap
+                                  items-center
+                                  gap-5
+                                "
+                              >
+
+                                <div
+                                  className="
+                                    text-sm
+                                    font-medium
+                                    text-gray-700
+                                  "
+                                >
+                                  {
+                                    institution.creditCard.card_name
+                                  }
+                                </div>
+
+                                <div
+                                  className="
+                                    text-sm
+                                    text-gray-600
+                                  "
+                                >
+                                  账单日：
+                                  <span
+                                    className="
+                                      font-medium
+                                      text-gray-900
+                                    "
+                                  >
+                                    {
+                                      institution.creditCard.billing_day
+                                    }
+                                    日
+                                  </span>
+                                </div>
+
+                                <div
+                                  className="
+                                    text-sm
+                                    text-gray-600
+                                  "
+                                >
+                                  还款日：
+                                  <span
+                                    className="
+                                      font-medium
+                                      text-gray-900
+                                    "
+                                  >
+                                    {
+                                      institution.creditCard.payment_day ||
+                                      "-"
+                                    }
+                                    日
+                                  </span>
+                                </div>
+
+                                <button
+                                  className="
+                                    text-xs
+                                    text-blue-600
+                                    hover:text-blue-800
+                                  "
+                                  onClick={() =>
+                                    startEditCreditCard(
+                                      institution.creditCard!
+                                    )
+                                  }
+                                  disabled={
+                                    saving
+                                  }
+                                >
+                                  编辑
+                                </button>
+
+                                <button
+                                  className="
+                                    text-xs
+                                    text-red-500
+                                    hover:text-red-700
+                                  "
+                                  onClick={() =>
+                                    deleteCreditCard(
+                                      institution.creditCard!
+                                    )
+                                  }
+                                  disabled={
+                                    saving
+                                  }
+                                >
+                                  删除信用卡
+                                </button>
+
+                              </div>
+
+                            )}
+
+                          </div>
+
+                        )}
+
+                        {/* =================================
+                            贷款明细
+                        ================================= */}
 
                         {institution.loans.length ===
                         0 ? (
@@ -2780,266 +3948,266 @@ export default function LoanInstitutionsPage() {
 
                         ) : (
 
-                          <table
+                          <div
                             className="
-                              w-full
-                              min-w-[760px]
-                              text-xs
+                              overflow-x-auto
                             "
                           >
 
-                            <thead>
+                            <table
+                              className="
+                                w-full
+                                min-w-[900px]
+                                text-xs
+                              "
+                            >
 
-                              <tr
-                                className="
-                                  text-gray-400
-                                  border-b
-                                  border-gray-200
-                                "
-                              >
+                              <thead>
 
-                                <th
+                                <tr
                                   className="
-                                    py-2
-                                    px-3
-                                    text-left
-                                    font-normal
+                                    text-gray-400
+                                    border-b
+                                    border-gray-200
                                   "
                                 >
-                                  贷款名称
-                                </th>
 
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-left
-                                    font-normal
-                                  "
-                                >
-                                  类型
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-left
-                                    font-normal
-                                  "
-                                >
-                                  模式
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-right
-                                    font-normal
-                                  "
-                                >
-                                  本金余额
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-right
-                                    font-normal
-                                  "
-                                >
-                                  利率
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-right
-                                    font-normal
-                                  "
-                                >
-                                  月供
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-right
-                                    font-normal
-                                  "
-                                >
-                                  公积金月冲
-                                </th>
-
-                                <th
-                                  className="
-                                    py-2
-                                    px-3
-                                    text-right
-                                    font-normal
-                                  "
-                                >
-                                  自己实际还贷
-                                </th>
-
-                              </tr>
-
-                            </thead>
-
-
-                            <tbody>
-
-                              {institution.loans.map(
-                                loan => (
-
-                                  <tr
-                                    key={
-                                      loan.id
-                                    }
+                                  <th
                                     className="
-                                      border-b
-                                      border-gray-100
-                                      last:border-0
+                                      py-2
+                                      px-3
+                                      text-left
+                                      font-normal
                                     "
                                   >
+                                    贷款名称
+                                  </th>
 
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        font-medium
-                                        text-gray-700
-                                      "
-                                    >
-                                      {
-                                        loan.name
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-left
+                                      font-normal
+                                    "
+                                  >
+                                    类型
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-left
+                                      font-normal
+                                    "
+                                  >
+                                    模式
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-right
+                                      font-normal
+                                    "
+                                  >
+                                    本金余额
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-right
+                                      font-normal
+                                    "
+                                  >
+                                    利率
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-right
+                                      font-normal
+                                    "
+                                  >
+                                    月供
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-right
+                                      font-normal
+                                    "
+                                  >
+                                    公积金月冲
+                                  </th>
+
+                                  <th
+                                    className="
+                                      py-2
+                                      px-3
+                                      text-right
+                                      font-normal
+                                    "
+                                  >
+                                    自己实际还贷
+                                  </th>
+
+                                </tr>
+
+                              </thead>
+
+                              <tbody>
+
+                                {institution.loans.map(
+                                  loan => (
+
+                                    <tr
+                                      key={
+                                        loan.id
                                       }
-                                    </td>
-
-
-                                    <td
                                       className="
-                                        py-2.5
-                                        px-3
-                                        text-gray-600
+                                        border-b
+                                        border-gray-100
+                                        last:border-0
                                       "
                                     >
-                                      {
-                                        loan.type ||
-                                        "其他"
-                                      }
-                                    </td>
 
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          font-medium
+                                          text-gray-700
+                                        "
+                                      >
+                                        {
+                                          loan.name
+                                        }
+                                      </td>
 
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-gray-600
-                                      "
-                                    >
-                                      {
-                                        loan.loan_mode ||
-                                        "-"
-                                      }
-                                    </td>
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-gray-600
+                                        "
+                                      >
+                                        {
+                                          loan.type ||
+                                          "其他"
+                                        }
+                                      </td>
 
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-gray-600
+                                        "
+                                      >
+                                        {
+                                          loan.loan_mode ||
+                                          "-"
+                                        }
+                                      </td>
 
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-right
-                                        font-medium
-                                        text-gray-800
-                                      "
-                                    >
-                                      {money(
-                                        num(
-                                          loan.remaining_amount
-                                        )
-                                      )}
-                                    </td>
-
-
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-right
-                                        text-gray-600
-                                      "
-                                    >
-                                      {num(
-                                        loan.interest_rate
-                                      )}
-                                      %
-                                    </td>
-
-
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-right
-                                        text-gray-600
-                                      "
-                                    >
-                                      {money(
-                                        num(
-                                          loan.monthly_payment
-                                        )
-                                      )}
-                                    </td>
-
-
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-right
-                                        text-green-600
-                                      "
-                                    >
-                                      {loan.type ===
-                                      "房贷"
-                                        ? money(
-                                            getHousingFundMonthly(
-                                              loan
-                                            )
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-right
+                                          font-medium
+                                          text-gray-800
+                                        "
+                                      >
+                                        {money(
+                                          num(
+                                            loan.remaining_amount
                                           )
-                                        : "-"}
-                                    </td>
+                                        )}
+                                      </td>
 
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-right
+                                          text-gray-600
+                                        "
+                                      >
+                                        {num(
+                                          loan.interest_rate
+                                        )}
+                                        %
+                                      </td>
 
-                                    <td
-                                      className="
-                                        py-2.5
-                                        px-3
-                                        text-right
-                                        font-medium
-                                        text-blue-600
-                                      "
-                                    >
-                                      {money(
-                                        getActualMonthlyPayment(
-                                          loan
-                                        )
-                                      )}
-                                    </td>
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-right
+                                          text-gray-600
+                                        "
+                                      >
+                                        {money(
+                                          num(
+                                            loan.monthly_payment
+                                          )
+                                        )}
+                                      </td>
 
-                                  </tr>
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-right
+                                          text-green-600
+                                        "
+                                      >
+                                        {loan.type ===
+                                        "房贷"
+                                          ? money(
+                                              getHousingFundMonthly(
+                                                loan
+                                              )
+                                            )
+                                          : "-"}
+                                      </td>
 
-                                )
-                              )}
+                                      <td
+                                        className="
+                                          py-2.5
+                                          px-3
+                                          text-right
+                                          font-medium
+                                          text-blue-600
+                                        "
+                                      >
+                                        {money(
+                                          getActualMonthlyPayment(
+                                            loan
+                                          )
+                                        )}
+                                      </td>
 
-                            </tbody>
+                                    </tr>
 
-                          </table>
+                                  )
+                                )}
+
+                              </tbody>
+
+                            </table>
+
+                          </div>
 
                         )}
 
@@ -3059,7 +4227,6 @@ export default function LoanInstitutionsPage() {
         )}
 
       </section>
-
 
       {/* =================================================
           底部操作
@@ -3086,7 +4253,6 @@ export default function LoanInstitutionsPage() {
           {emptyInstitutionCount} 家暂无贷款
         </div>
 
-
         <div
           className="
             flex
@@ -3108,7 +4274,6 @@ export default function LoanInstitutionsPage() {
             全部展开
           </button>
 
-
           <button
             className="
               text-xs
@@ -3125,7 +4290,6 @@ export default function LoanInstitutionsPage() {
         </div>
 
       </section>
-
 
       {/* =================================================
           使用说明
@@ -3154,7 +4318,6 @@ export default function LoanInstitutionsPage() {
           💡 使用说明
         </div>
 
-
         <div
           className="
             text-xs
@@ -3168,23 +4331,35 @@ export default function LoanInstitutionsPage() {
           </p>
 
           <p>
-            • 即使没有贷款的机构，也会继续显示。
+            • 信用卡来自 credit_cards 表，并通过 institution_id 关联金融机构。
           </p>
 
           <p>
-            • 贷款按照 loans.institution 自动归类。
+            • 新增银行时可以同时创建信用卡。
           </p>
 
           <p>
-            • 编辑机构名称会同步修改 loans.institution。
+            • 信用卡可以设置账单日和还款日。
           </p>
 
           <p>
-            • 删除机构不会删除贷款，只会将机构设为 inactive，并把贷款转为「未设置金融机构」。
+            • 信用卡账单日和还款日可以随时编辑。
           </p>
 
           <p>
-            • 再次新增已经删除过的机构，会自动恢复原机构。
+            • 编辑机构名称会同步修改 loans.institution 和 credit_cards.bank_name。
+          </p>
+
+          <p>
+            • 停用机构不会删除数据库记录。
+          </p>
+
+          <p>
+            • 真正删除机构会删除金融机构及其关联信用卡，但不会删除贷款。
+          </p>
+
+          <p>
+            • 删除机构后，原机构下的贷款会变成「未设置金融机构」。
           </p>
 
           <p>
