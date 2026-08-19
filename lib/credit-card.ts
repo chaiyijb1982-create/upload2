@@ -1309,6 +1309,8 @@ export async function getCreditCardActualBillTotal() {
 //   funding,
 //
 //   estimate_bill_total,
+//   installment_total,
+//   estimate_total,
 //   estimate_funding_total,
 //   estimate_need_myself,
 //
@@ -1317,19 +1319,24 @@ export async function getCreditCardActualBillTotal() {
 //   actual_need_myself
 // }
 //
-// 计算：
+// =====================================================
 //
+// 预估：
+//
+// 信用卡消费预估
+// +
+// 信用卡固定分期
+// =
+// 信用卡总预估支出
+//
+// 然后：
+//
+// 信用卡总预估支出
+// - LP预估资金
+// - 自己已有预估资金
+// =
 // 预估还需要自己拿
-// = 预估账单
-// - 预估LP
-// - 预估自己已有
 //
-// 实际还需要自己拿
-// = 实际账单
-// - 实际LP
-// - 实际自己已有
-//
-// 最低显示 0
 // =====================================================
 
 export async function getCreditCardFundingSummary() {
@@ -1343,7 +1350,9 @@ export async function getCreditCardFundingSummary() {
 
 
   // ===============================================
-  // 总预估账单
+  // 信用卡消费预估
+  //
+  // credit_cards.monthly_estimate
   // ===============================================
 
   const estimateBillTotal =
@@ -1366,7 +1375,9 @@ export async function getCreditCardFundingSummary() {
 
 
   // ===============================================
-  // 总实际账单
+  // 信用卡实际账单
+  //
+  // credit_cards.actual_bill_amount
   // ===============================================
 
   const actualBillTotal =
@@ -1389,7 +1400,55 @@ export async function getCreditCardFundingSummary() {
 
 
   // ===============================================
+  // ⭐ 信用卡固定分期
+  //
+  // 来源：
+  //
+  // loans
+  //
+  // type = 信用卡分期
+  // status = active
+  //
+  // 例如 8 月：
+  //
+  // ¥5,745.41
+  //
+  // ===============================================
+
+  const installmentTotal =
+    await getMonthlyCreditCardInstallmentTotal();
+
+
+  // ===============================================
+  // ⭐ 信用卡总预估支出
+  //
+  // 消费预估
+  // +
+  // 固定分期
+  //
+  // 例如：
+  //
+  // 17,949.59
+  // +
+  // 5,745.41
+  // =
+  // 23,695.00
+  //
+  // ===============================================
+
+  const estimateTotal =
+    estimateBillTotal +
+    Number(
+      installmentTotal || 0
+    );
+
+
+  // ===============================================
   // 预估资金
+  //
+  // LP预估
+  // +
+  // 自己已有预估
   // ===============================================
 
   const estimateFundingTotal =
@@ -1423,7 +1482,13 @@ export async function getCreditCardFundingSummary() {
 
 
   // ===============================================
-  // 预估还需要自己拿
+  // ⭐ 预估还需要自己拿
+  //
+  // 信用卡总预估支出
+  // -
+  // 预估资金
+  //
+  // 最低为 0
   // ===============================================
 
   const estimateNeedMyself =
@@ -1432,7 +1497,7 @@ export async function getCreditCardFundingSummary() {
 
       0,
 
-      estimateBillTotal -
+      estimateTotal -
       estimateFundingTotal
 
     );
@@ -1440,6 +1505,14 @@ export async function getCreditCardFundingSummary() {
 
   // ===============================================
   // 实际还需要自己拿
+  //
+  // 注意：
+  //
+  // 实际账单目前已经是最终账单金额。
+  //
+  // 这里暂时不把固定分期再次加进去，
+  // 避免实际账单已经包含分期时重复计算。
+  //
   // ===============================================
 
   const actualNeedMyself =
@@ -1454,24 +1527,129 @@ export async function getCreditCardFundingSummary() {
     );
 
 
+  // ===============================================
+  // DEBUG
+  // ===============================================
+
+  console.log(
+    "========== 信用卡资金安排最终计算 =========="
+  );
+
+  console.log(
+    "estimateBillTotal =",
+    estimateBillTotal
+  );
+
+  console.log(
+    "installmentTotal =",
+    installmentTotal
+  );
+
+  console.log(
+    "estimateTotal =",
+    estimateTotal
+  );
+
+  console.log(
+    "estimateFundingTotal =",
+    estimateFundingTotal
+  );
+
+  console.log(
+    "estimateNeedMyself =",
+    estimateNeedMyself
+  );
+
+  console.log(
+    "actualBillTotal =",
+    actualBillTotal
+  );
+
+  console.log(
+    "actualFundingTotal =",
+    actualFundingTotal
+  );
+
+  console.log(
+    "actualNeedMyself =",
+    actualNeedMyself
+  );
+
+  console.log(
+    "==========================================="
+  );
+
+
+  // ===============================================
+  // 返回
+  // ===============================================
+
   return {
 
     funding,
 
+
+    // ---------------------------------------------
+    // 信用卡消费预估
+    // ---------------------------------------------
+
     estimate_bill_total:
       estimateBillTotal,
+
+
+    // ---------------------------------------------
+    // 固定信用卡分期
+    // ---------------------------------------------
+
+    installment_total:
+      installmentTotal,
+
+
+    // ---------------------------------------------
+    // ⭐ 信用卡总预估支出
+    // ---------------------------------------------
+
+    estimate_total:
+      estimateTotal,
+
+
+    // ---------------------------------------------
+    // 预估资金安排
+    // ---------------------------------------------
 
     estimate_funding_total:
       estimateFundingTotal,
 
+
+    // ---------------------------------------------
+    // ⭐ 预估还需要自己拿
+    //
+    // 这就是两个页面统一使用的数字
+    // ---------------------------------------------
+
     estimate_need_myself:
       estimateNeedMyself,
+
+
+    // ---------------------------------------------
+    // 实际账单
+    // ---------------------------------------------
 
     actual_bill_total:
       actualBillTotal,
 
+
+    // ---------------------------------------------
+    // 实际资金安排
+    // ---------------------------------------------
+
     actual_funding_total:
       actualFundingTotal,
+
+
+    // ---------------------------------------------
+    // 实际还需要自己拿
+    // ---------------------------------------------
 
     actual_need_myself:
       actualNeedMyself,
