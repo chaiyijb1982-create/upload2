@@ -23,6 +23,11 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // 贷款自动还款 Cron 必须放行
+  if (pathname === "/api/cron/loan-auto-payment") {
+    return NextResponse.next();
+  }
+
   // Next.js 静态资源放行
   if (
     pathname.startsWith("/_next/") ||
