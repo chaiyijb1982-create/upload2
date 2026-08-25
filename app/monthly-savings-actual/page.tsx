@@ -1832,7 +1832,7 @@ export default function MonthlySavingsActualPage() {
     <div
       className="
         min-h-screen
-        bg-[#0f172a]
+        bg-[#315a8a]
         text-gray-900
       "
     >
