@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/update-market",
       "schedule": "30 22 * * *"
+    },
+    {
+      "path": "/api/cron/loan-auto-payment",
+      "schedule": "5 4 * * *"
     }
   ]
 }
