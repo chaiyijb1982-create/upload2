@@ -297,9 +297,9 @@ function buildLoanCards(
   cards: CardItem[],
   loans: any[]
 ): CardItem[] {
-  const result = cards.map(card => ({
+  const result: CardItem[] = cards.map(card => ({
     ...card,
-    source: "credit_card" as const,
+    source: "credit_card",
     installment: Number(card.installment || 0),
   }));
 
@@ -324,9 +324,11 @@ function buildLoanCards(
   }
 
   // loans 中存在但 credit_cards 尚未建立主卡记录的信用卡分期，
-  // 直接显示在信用卡页面。账单日/还款日可在页面上填写，填写后会自动建立 credit_cards 主记录。
+  // 直接显示在信用卡页面。账单日/还款日可在页面上填写，
+  // 填写后会自动建立 credit_cards 主记录。
   for (const loan of loans) {
     const loanId = String(loan.id || "");
+
     if (!loanId || matchedLoanIds.has(loanId)) {
       continue;
     }
@@ -347,7 +349,6 @@ function buildLoanCards(
 
   return result;
 }
-
 
 function getBillingDay(card: CardItem): number {
   return Math.floor(
