@@ -78,35 +78,45 @@ const menus = [
     icon: "💳",
   },
 
- // =====================================================
-  // 信用卡（有鱼预估）
+  // =====================================================
+  // 信用卡实际账单导入
   // =====================================================
 
   {
     id: 9,
-    name: "每月储蓄金(预估)",
-    href: "monthly-savings-estimate",
-    icon: "💰",
+    name: "信用卡实际账单导入",
+    href: "/credit-card-import",
+    icon: "📥",
   },
- // =====================================================
-  // 信用卡（有鱼预估）
+
+  // =====================================================
+  // 每月储蓄金（预估）
   // =====================================================
 
   {
     id: 10,
-    name: "每月储蓄金(实际)",
-    href: "monthly-savings-actual",
+    name: "每月储蓄金(预估)",
+    href: "/monthly-savings-estimate",
     icon: "💰",
   },
 
+  // =====================================================
+  // 每月储蓄金（实际）
+  // =====================================================
 
+  {
+    id: 11,
+    name: "每月储蓄金(实际)",
+    href: "/monthly-savings-actual",
+    icon: "💰",
+  },
 
   // =====================================================
   // 消费明细
   // =====================================================
 
   {
-    id: 11,
+    id: 12,
     name: "消费明细",
     href: "/expense",
     icon: "🧾",
@@ -117,7 +127,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 12,
+    id: 13,
     name: "保险",
     href: "/insurance",
     icon: "🛡️",
@@ -128,7 +138,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 13,
+    id: 14,
     name: "财务自由规划",
     href: "/financial-freedom",
     icon: "💎",
@@ -139,7 +149,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 14,
+    id: 15,
     name: "财务自由历史",
     href: "/financial-freedom-history",
     icon: "💎",
@@ -151,14 +161,14 @@ const menus = [
   // =====================================================
 
   {
-    id: 15,
+    id: 16,
     name: "天天向上当前",
     href: "/tiantian-up",
     icon: "🚀",
   },
 
   {
-    id: 16,
+    id: 17,
     name: "天天向上年度详细",
     href: "/tiantian-up-detail",
     icon: "🚀",
@@ -169,7 +179,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 17,
+    id: 18,
     name: "退休规划",
     href: "/retirement",
     icon: "🎯",
@@ -241,7 +251,6 @@ export default function Sidebar() {
               : ""
           }`
       );
-
     } catch (error: any) {
       console.error(
         "Manual update error:",
@@ -254,7 +263,6 @@ export default function Sidebar() {
         error?.message ||
           "更新失败"
       );
-
     } finally {
       setUpdating(false);
     }
@@ -277,13 +285,11 @@ export default function Sidebar() {
         flex-col
       "
     >
-
       {/* =================================================
           Logo
       ================================================= */}
 
-      <div className="mb-10">
-
+      <div className="mb-8 shrink-0">
         <h1
           className="
             text-2xl
@@ -302,18 +308,29 @@ export default function Sidebar() {
         >
           Personal Wealth System
         </p>
-
       </div>
 
-
       {/* =================================================
-          Menu
+          Menu Scroll Area
+          
+          只有这里滚动。
+          Logo 和底部版本号固定。
       ================================================= */}
 
-      <nav className="space-y-3">
+      <nav
+        className="
+          flex-1
+          min-h-0
+          overflow-y-auto
+          space-y-3
+          pr-1
 
+          scrollbar-thin
+          scrollbar-thumb-gray-300
+          scrollbar-track-transparent
+        "
+      >
         {menus.map((menu) => {
-
           // =================================================
           // 判断当前页面
           // =================================================
@@ -321,13 +338,11 @@ export default function Sidebar() {
           const isActive =
             pathname === menu.href;
 
-
           // =================================================
           // 子菜单
           // =================================================
 
           if (menu.subMenu) {
-
             return (
               <Link
                 key={menu.id}
@@ -349,7 +364,6 @@ export default function Sidebar() {
                   }
                 `}
               >
-
                 <span
                   className="
                     text-lg
@@ -366,11 +380,9 @@ export default function Sidebar() {
                 >
                   {menu.name}
                 </span>
-
               </Link>
             );
           }
-
 
           // =================================================
           // 普通菜单
@@ -396,7 +408,6 @@ export default function Sidebar() {
                 }
               `}
             >
-
               <span
                 className="
                   text-xl
@@ -412,12 +423,9 @@ export default function Sidebar() {
               >
                 {menu.name}
               </span>
-
             </Link>
           );
-
         })}
-
 
         {/* =================================================
             手动更新
@@ -449,13 +457,10 @@ export default function Sidebar() {
             }
           `}
         >
-
           <span className="text-xl">
-
             {updating
               ? "⏳"
               : "🔄"}
-
           </span>
 
           <span
@@ -467,21 +472,19 @@ export default function Sidebar() {
               ? "正在更新..."
               : "手动更新"}
           </span>
-
         </button>
-
 
         {/* =================================================
             更新结果
         ================================================= */}
 
         {updateMessage && (
-
           <div
             className={`
               px-4
               text-xs
               leading-5
+              pb-2
 
               ${
                 updateSuccess === true
@@ -494,26 +497,28 @@ export default function Sidebar() {
           >
             {updateMessage}
           </div>
-
         )}
-
       </nav>
-
 
       {/* =================================================
           Bottom
+          
+          永远固定在 Sidebar 最底部
       ================================================= */}
 
       <div
         className="
-          mt-auto
+          shrink-0
+          pt-4
+          mt-4
+          border-t
+          border-gray-100
           text-sm
           text-gray-400
         "
       >
         v1.0 Wealth OS
       </div>
-
     </aside>
   );
 }

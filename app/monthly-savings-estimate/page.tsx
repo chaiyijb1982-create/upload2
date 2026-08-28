@@ -8,6 +8,8 @@ import {
 
 import TopBar from "@/components/TopBar";
 
+import { supabase } from "@/lib/supabase";
+
 // =====================================================
 // 类型
 // =====================================================
@@ -27,11 +29,6 @@ type SavingsItem = {
   source?: string | null;
   editable?: boolean;
   copy_group_id?: string | null;
-};
-
-type CreditCardAutoExpense = {
-  amount: number;
-  name: string;
 };
 
 // =====================================================
@@ -81,13 +78,8 @@ export default function MonthlySavingsEstimatePage() {
   const [items, setItems] =
     useState<SavingsItem[]>([]);
 
-  const [
-    creditCardAutoExpense,
-    setCreditCardAutoExpense,
-  ] = useState<CreditCardAutoExpense>({
-    amount: 0,
-    name: "信用卡还需要自己拿",
-  });
+  const [creditCardAutoExpenseMap, setCreditCardAutoExpenseMap] =
+    useState<Record<string, number>>({});
 
   const [creditCardLoading, setCreditCardLoading] =
     useState(false);
@@ -170,73 +162,183 @@ export default function MonthlySavingsEstimatePage() {
   }
 
   // ===================================================
-  // 加载信用卡
+  // 加载信用卡月度资金安排
+  //
+  // 核心规则：
+  // monthly-savings-estimate 某个月的“信用卡支出”
+  // 必须等于 /credit-card 同一个账单月份的：
+  //
+  // 预估账单资金安排 → 还需要自己拿
+  //
+  // /credit-card 的计算口径：
+  // 预计账单 = 固定信用卡分期 + 当月信用卡预估账单
+  // 还需要自己拿 = max(0, 预计账单 - LP给我 - 我自己现在有)
+  //
+  // 这里直接读取同一套月度表，按月份计算，
+  // 不再读取 /api/credit-card 的“当前月份”汇总。
   // ===================================================
 
   async function loadCreditCardExpense() {
     try {
       setCreditCardLoading(true);
 
-      const response = await fetch(
-        "/api/credit-card",
-        {
-          method: "GET",
-          cache: "no-store",
-        }
+      const yearStart = `${year}-01-01`;
+      const yearEnd = `${year}-12-01`;
+      const currentMonthKey =
+        `${currentYear}-${String(currentMonth).padStart(2, "0")}`;
+
+      const [
+        monthlyBillsResult,
+        monthlyFundingResult,
+        loansResult,
+        cardsResult,
+      ] = await Promise.all([
+        supabase
+          .from("credit_card_monthly_bills")
+          .select("credit_card_id, bill_month, monthly_estimate")
+          .gte("bill_month", yearStart)
+          .lte("bill_month", yearEnd),
+
+        supabase
+          .from("credit_card_monthly_funding")
+          .select("bill_month, lp_estimate_amount, my_estimate_amount")
+          .gte("bill_month", yearStart)
+          .lte("bill_month", yearEnd),
+
+        supabase
+          .from("loans")
+          .select("monthly_payment")
+          .eq("type", "信用卡分期")
+          .eq("status", "active"),
+
+        supabase
+          .from("credit_cards")
+          .select("id, monthly_estimate, active")
+          .eq("active", true),
+      ]);
+
+      if (monthlyBillsResult.error) {
+        throw monthlyBillsResult.error;
+      }
+
+      if (monthlyFundingResult.error) {
+        throw monthlyFundingResult.error;
+      }
+
+      if (loansResult.error) {
+        throw loansResult.error;
+      }
+
+      if (cardsResult.error) {
+        throw cardsResult.error;
+      }
+
+      // 固定信用卡分期：与 /credit-card 页面一致，
+      // 所有 active + type=信用卡分期 的贷款月供都会进入预计账单。
+      const installmentTotal = (loansResult.data || []).reduce(
+        (sum, loan) =>
+          sum + Number(loan.monthly_payment || 0),
+        0
       );
 
-      if (!response.ok) {
-        setCreditCardAutoExpense({
-          amount: 0,
-          name: "信用卡还需要自己拿",
-        });
+      // 每个月信用卡预估账单。
+      const estimateByMonth: Record<string, number> = {};
+      const billCardIdsByMonth: Record<string, Set<string>> = {};
 
-        return;
-      }
+      (monthlyBillsResult.data || []).forEach(row => {
+        const billMonth = String(row.bill_month || "").slice(0, 7);
+        const cardId = String(row.credit_card_id || "");
 
-      const data =
-        await response.json();
+        if (!billMonth) return;
 
-      const values = [
-        data?.estimate_need_myself,
-        data?.summary?.estimate_need_myself,
-        data?.estimateNeedMyself,
-        data?.summary?.estimateNeedMyself,
-        data?.data?.estimate_need_myself,
-        data?.data?.estimateNeedMyself,
-      ];
+        estimateByMonth[billMonth] =
+          (estimateByMonth[billMonth] || 0) +
+          Number(row.monthly_estimate || 0);
 
-      let amount = 0;
-
-      for (const value of values) {
-        const number = Number(value);
-
-        if (
-          Number.isFinite(number)
-        ) {
-          amount = Math.max(
-            0,
-            number
-          );
-
-          break;
+        if (!billCardIdsByMonth[billMonth]) {
+          billCardIdsByMonth[billMonth] = new Set<string>();
         }
+
+        if (cardId) {
+          billCardIdsByMonth[billMonth].add(cardId);
+        }
+      });
+
+      // 与 /credit-card 的月度账单加载规则保持一致：
+      // 只有当前月份，如果月度账单表没有某张卡的记录，
+      // 才回退到 credit_cards.monthly_estimate。
+      // 其他月份没有记录就按 0 处理。
+      if (year === currentYear) {
+        const currentExistingIds =
+          billCardIdsByMonth[currentMonthKey] ||
+          new Set<string>();
+
+        (cardsResult.data || []).forEach(card => {
+          const cardId = String(card.id || "");
+
+          if (!cardId || currentExistingIds.has(cardId)) {
+            return;
+          }
+
+          estimateByMonth[currentMonthKey] =
+            (estimateByMonth[currentMonthKey] || 0) +
+            Number(card.monthly_estimate || 0);
+        });
       }
 
-      setCreditCardAutoExpense({
-        amount,
-        name: "信用卡还需要自己拿",
+      const fundingByMonth: Record<
+        string,
+        {
+          lp: number;
+          myself: number;
+        }
+      > = {};
+
+      (monthlyFundingResult.data || []).forEach(row => {
+        const billMonth = String(row.bill_month || "").slice(0, 7);
+        if (!billMonth) return;
+
+        fundingByMonth[billMonth] = {
+          lp: Number(row.lp_estimate_amount || 0),
+          myself: Number(row.my_estimate_amount || 0),
+        };
       });
+
+      const result: Record<string, number> = {};
+
+      MONTHS.forEach(month => {
+        const monthKey =
+          `${year}-${String(month).padStart(2, "0")}`;
+
+        const estimateTotal =
+          Number(estimateByMonth[monthKey] || 0);
+
+        const funding =
+          fundingByMonth[monthKey] || {
+            lp: 0,
+            myself: 0,
+          };
+
+        const estimatedBillTotal =
+          installmentTotal + estimateTotal;
+
+        const fundingTotal =
+          funding.lp + funding.myself;
+
+        result[monthKey] = Math.max(
+          0,
+          estimatedBillTotal - fundingTotal
+        );
+      });
+
+      setCreditCardAutoExpenseMap(result);
     } catch (err) {
       console.error(
-        "Load credit card expense error:",
+        "Load monthly credit card funding error:",
         err
       );
 
-      setCreditCardAutoExpense({
-        amount: 0,
-        name: "信用卡还需要自己拿",
-      });
+      setCreditCardAutoExpenseMap({});
     } finally {
       setCreditCardLoading(false);
     }
@@ -336,22 +438,13 @@ export default function MonthlySavingsEstimatePage() {
   function getCreditCardAutoExpense(
     month: number
   ) {
-    if (
-      year !== currentYear
-    ) {
-      return 0;
-    }
-
-    if (
-      month !== currentMonth
-    ) {
-      return 0;
-    }
+    const monthKey =
+      `${year}-${String(month).padStart(2, "0")}`;
 
     return Math.max(
       0,
       Number(
-        creditCardAutoExpense.amount ||
+        creditCardAutoExpenseMap[monthKey] ||
           0
       )
     );
@@ -384,8 +477,11 @@ export default function MonthlySavingsEstimatePage() {
   );
 
   const yearCreditCardExpense =
-    getCreditCardAutoExpense(
-      currentMonth
+    MONTHS.reduce(
+      (total, month) =>
+        total +
+        getCreditCardAutoExpense(month),
+      0
     );
 
   const yearTotalExpense =
@@ -2231,12 +2327,12 @@ export default function MonthlySavingsEstimatePage() {
               -translate-y-1/2
               text-xs
               text-gray-400
-              "
+            "
           >
             {creditCardLoading
               ? "读取中..."
               : `¥${formatMoney(
-                  creditCardAutoExpense.amount
+                  getCreditCardAutoExpense(activeMonth)
                 )}`}
           </div>
         </div>

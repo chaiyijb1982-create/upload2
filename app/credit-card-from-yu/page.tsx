@@ -42,6 +42,10 @@ interface CreditCardWithExpense
 
   excelExpense: number;
 
+  selfExpense: number;
+
+  paidForOthersExpense: number;
+
   installmentExpense: number;
 
   estimatedExpense: number;
@@ -192,30 +196,29 @@ function isExpense(
   item: ExpenseTransaction
 ): boolean {
 
-  // 平账不算消费
-  if (
-    item.is_settlement
-  ) {
-
+  // 平账不是消费
+  if (item.is_settlement) {
     return false;
-
   }
 
+  // 收入不是消费
   const type =
     item.income_expense_type ||
     "";
 
-  // 收入不算消费
-  if (
-    type.includes("收入")
-  ) {
-
+  if (type.includes("收入")) {
     return false;
-
   }
 
-  return true;
-
+  // 消费归属已经由 expense_transactions.consumption_type
+  // 明确确定：
+  // self            = 自己消费
+  // paid_for_others = 替别人先付
+  // null            = 非消费
+  return (
+    item.consumption_type === "self" ||
+    item.consumption_type === "paid_for_others"
+  );
 }
 
 
@@ -1569,6 +1572,8 @@ export default function CreditCardFromYuPage() {
     card: CreditCard
   ): {
     amount: number;
+    selfAmount: number;
+    paidForOthersAmount: number;
     count: number;
     cycleStart: Date | null;
     cycleEnd: Date | null;
@@ -1590,6 +1595,8 @@ export default function CreditCardFromYuPage() {
 
       return {
         amount: 0,
+        selfAmount: 0,
+        paidForOthersAmount: 0,
         count: 0,
         cycleStart: null,
         cycleEnd: null,
@@ -1627,6 +1634,8 @@ export default function CreditCardFromYuPage() {
 
       return {
         amount: 0,
+        selfAmount: 0,
+        paidForOthersAmount: 0,
         count: 0,
         cycleStart: null,
         cycleEnd: null,
@@ -1636,6 +1645,12 @@ export default function CreditCardFromYuPage() {
 
 
     let amount =
+      0;
+
+    let selfAmount =
+      0;
+
+    let paidForOthersAmount =
       0;
 
     let count =
@@ -1807,6 +1822,20 @@ export default function CreditCardFromYuPage() {
       amount +=
         transactionAmount;
 
+      if (
+        item.consumption_type ===
+        "paid_for_others"
+      ) {
+        paidForOthersAmount +=
+          transactionAmount;
+      } else if (
+        item.consumption_type ===
+        "self"
+      ) {
+        selfAmount +=
+          transactionAmount;
+      }
+
       count +=
         1;
 
@@ -1816,6 +1845,10 @@ export default function CreditCardFromYuPage() {
     return {
 
       amount,
+
+      selfAmount,
+
+      paidForOthersAmount,
 
       count,
 
@@ -1940,6 +1973,12 @@ export default function CreditCardFromYuPage() {
 
               excelExpense:
                 excel.amount,
+
+              selfExpense:
+                excel.selfAmount,
+
+              paidForOthersExpense:
+                excel.paidForOthersAmount,
 
               installmentExpense:
                 installment,
@@ -2205,6 +2244,12 @@ export default function CreditCardFromYuPage() {
       let excel =
         0;
 
+      let selfExpense =
+        0;
+
+      let paidForOthersExpense =
+        0;
+
       let installment =
         0;
 
@@ -2223,6 +2268,12 @@ export default function CreditCardFromYuPage() {
         excel +=
           row.excelExpense;
 
+        selfExpense +=
+          row.selfExpense;
+
+        paidForOthersExpense +=
+          row.paidForOthersExpense;
+
         installment +=
           row.installmentExpense;
 
@@ -2238,6 +2289,10 @@ export default function CreditCardFromYuPage() {
       return {
 
         excel,
+
+        selfExpense,
+
+        paidForOthersExpense,
 
         installment,
 
@@ -2470,7 +2525,7 @@ export default function CreditCardFromYuPage() {
 
 
         {/* =================================================
-            总览
+            消费总览
         ================================================= */}
 
         <div
@@ -2483,79 +2538,45 @@ export default function CreditCardFromYuPage() {
             py-4
           "
         >
-
           <div
             className="
               grid
               grid-cols-1
               gap-4
-              md:grid-cols-4
+              md:grid-cols-3
             "
           >
-
             <div>
-
               <div className="text-xs text-gray-500">
-                Excel 消费笔数
-              </div>
-
-              <div className="mt-1 text-xl font-semibold">
-                {summary.transactionCount.toLocaleString(
-                  "zh-CN"
-                )}
-              </div>
-
-            </div>
-
-
-            <div>
-
-              <div className="text-xs text-gray-500">
-                {month} Excel 预估消费
-              </div>
-
-              <div className="mt-1 text-xl font-semibold">
-                {formatMoney(
-                  summary.excel
-                )}
-              </div>
-
-            </div>
-
-
-            <div>
-
-              <div className="text-xs text-gray-500">
-                LOANS 分期月供
-              </div>
-
-              <div className="mt-1 text-xl font-semibold">
-                {formatMoney(
-                  summary.installment
-                )}
-              </div>
-
-            </div>
-
-
-            <div>
-
-              <div className="text-xs text-gray-500">
-                {month} 预计支出
+                信用卡总消费
               </div>
 
               <div className="mt-1 text-xl font-bold">
-                {formatMoney(
-                  summary.estimated
-                )}
+                {formatMoney(summary.excel)}
               </div>
-
             </div>
 
+            <div>
+              <div className="text-xs text-gray-500">
+                自己消费总共
+              </div>
+
+              <div className="mt-1 text-xl font-semibold">
+                {formatMoney(summary.selfExpense)}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-gray-500">
+                替别人提前付总共
+              </div>
+
+              <div className="mt-1 text-xl font-semibold">
+                {formatMoney(summary.paidForOthersExpense)}
+              </div>
+            </div>
           </div>
-
         </div>
-
 
         {/* =================================================
             错误
@@ -3549,62 +3570,67 @@ export default function CreditCardFromYuPage() {
 
 
           <div>
-            ⑥ 只统计信用卡消费，不统计收入。
+            ⑥ 信用卡总消费 = 自己消费 + 替别人先付。
           </div>
 
 
           <div>
-            ⑦ 自动排除「平账 / 平帐」流水。
+            ⑦ 自己消费和替别人先付按照 consumption_type 区分。
           </div>
 
 
           <div>
-            ⑧ 分期月供来自 loans，不从 Excel 读取。
+            ⑧ 自动排除「平账 / 平帐」流水。
           </div>
 
 
           <div>
-            ⑨ 只统计 loans.type =「信用卡分期」且 status =「active」的贷款。
+            ⑨ 分期月供来自 loans，不从 Excel 读取。
           </div>
 
 
           <div>
-            ⑩ loans.institution 与 credit_cards.bank_name 采用标准化银行名称匹配。
+            ⑩ 只统计 loans.type =「信用卡分期」且 status =「active」的贷款。
           </div>
 
 
           <div>
-            ⑪ 分期月供使用 loans.monthly_payment。
+            ⑪ loans.institution 与 credit_cards.bank_name 采用标准化银行名称匹配。
           </div>
 
 
           <div>
-            ⑫ {month} 预计支出 = 账单周期内 Excel 预估消费 + LOANS 分期月供。
+            ⑫ 分期月供使用 loans.monthly_payment。
           </div>
 
 
           <div>
-            ⑬ 本页面不会修改 /credit-card 手工预估数据。
+            ⑬ {month} 预计支出 = 账单周期内 Excel 预估消费 + LOANS 分期月供。
           </div>
 
 
           <div>
-            ⑭ 点击表头可以对每一列进行升序 / 降序排序。
+            ⑭ 本页面不会修改 /credit-card 手工预估数据。
           </div>
 
 
           <div>
-            ⑮ 资金安排 = LP给我 + 我自己现在有。
+            ⑮ 点击表头可以对每一列进行升序 / 降序排序。
           </div>
 
 
           <div>
-            ⑯ 还需要自己拿 = max(预估账单 - 目前安排资金, 0)。
+            ⑯ 资金安排 = LP给我 + 我自己现在有。
           </div>
 
 
           <div>
-            ⑰ LP给我、我自己现在有按月份自动保存到本机浏览器。
+            ⑰ 还需要自己拿 = max(预估账单 - 目前安排资金, 0)。
+          </div>
+
+
+          <div>
+            ⑱ LP给我、我自己现在有按月份自动保存到本机浏览器。
           </div>
 
         </div>
