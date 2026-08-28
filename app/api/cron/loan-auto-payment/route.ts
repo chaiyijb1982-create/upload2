@@ -18,7 +18,6 @@
 // =====================================================
 
 import { NextResponse } from "next/server";
-
 import { createClient } from "@supabase/supabase-js";
 
 import {
@@ -27,15 +26,37 @@ import {
 
 export const runtime = "nodejs";
 
-export const dynamic =
-  "force-dynamic";
+export const dynamic = "force-dynamic";
+
+// =====================================================
+// 类型
+// =====================================================
+
+type LoanRow = {
+  id: string;
+  name: string | null;
+  type: string | null;
+  loan_mode: string | null;
+  remaining_amount: number | string | null;
+  monthly_payment: number | string | null;
+  interest_rate: number | string | null;
+  end_date: string | null;
+  institution: string | null;
+  last_auto_payment_date: string | null;
+  auto_reduce_principal: boolean | null;
+  status: string | null;
+};
+
+type CreditCardRow = {
+  bank_name: string | null;
+  payment_day: number | string | null;
+};
 
 // =====================================================
 // Supabase Admin
 // =====================================================
 
 function getAdminSupabase() {
-
   const url =
     process.env.NEXT_PUBLIC_SUPABASE_URL ??
     process.env.SUPABASE_URL;
@@ -72,9 +93,8 @@ function getAdminSupabase() {
 // =====================================================
 
 function normalizeText(
-  value: any
+  value: unknown
 ): string {
-
   return String(
     value ?? ""
   )
@@ -92,9 +112,8 @@ function normalizeText(
 // =====================================================
 
 function normalizeBankName(
-  value: any
+  value: unknown
 ): string {
-
   const name =
     normalizeText(value);
 
@@ -147,7 +166,6 @@ function getShanghaiToday(): {
   month: number;
   day: number;
 } {
-
   const parts =
     new Intl.DateTimeFormat(
       "en-CA",
@@ -187,7 +205,6 @@ function buildCycleDate(
   month: number,
   paymentDay: number
 ): string {
-
   const lastDay =
     new Date(
       year,
@@ -211,16 +228,8 @@ function buildCycleDate(
 // =====================================================
 
 function resolvePaymentDay(
-  loan: any,
-  activeCards: Array<{
-    bank_name:
-      | string
-      | null;
-
-    payment_day:
-      | number
-      | null;
-  }>
+  loan: LoanRow,
+  activeCards: CreditCardRow[]
 ):
   | {
       paymentDay: number;
@@ -238,7 +247,6 @@ function resolvePaymentDay(
   if (
     loan.type === "房贷"
   ) {
-
     return {
       paymentDay: 20,
       classification: "房贷",
@@ -252,14 +260,12 @@ function resolvePaymentDay(
   if (
     loan.type === "信用卡分期"
   ) {
-
     const loanBank =
       normalizeBankName(
         loan.institution
       );
 
     if (!loanBank) {
-
       return {
         skip: true,
         reason:
@@ -269,7 +275,9 @@ function resolvePaymentDay(
 
     const matched =
       activeCards.filter(
-        card =>
+        (
+          card
+        ) =>
           normalizeBankName(
             card.bank_name
           ) === loanBank
@@ -278,7 +286,6 @@ function resolvePaymentDay(
     if (
       matched.length === 0
     ) {
-
       return {
         skip: true,
         reason:
@@ -289,7 +296,6 @@ function resolvePaymentDay(
     if (
       matched.length > 1
     ) {
-
       return {
         skip: true,
         reason:
@@ -305,7 +311,6 @@ function resolvePaymentDay(
       paymentDay === undefined ||
       Number(paymentDay) < 1
     ) {
-
       return {
         skip: true,
         reason:
@@ -340,7 +345,6 @@ function resolvePaymentDay(
 // =====================================================
 
 export async function GET() {
-
   const adminSupabase =
     getAdminSupabase();
 
@@ -371,7 +375,6 @@ export async function GET() {
       .single();
 
   if (logError) {
-
     console.error(
       "loan-auto-payment cron_logs insert error:",
       logError
@@ -395,22 +398,28 @@ export async function GET() {
   const details: any[] =
     [];
 
-  let updatedCount = 0;
+  let updatedCount =
+    0;
 
-  let failedCount = 0;
+  let failedCount =
+    0;
 
-  let skippedCount = 0;
+  let skippedCount =
+    0;
 
   try {
-
     // =================================================
     // 读取贷款
     //
-    // 这里必须把 auto_reduce_principal 一起读出来
+    // 重要：
+    // Supabase 生成类型可能把复杂 select 推断成
+    // GenericStringError。
+    //
+    // 因此这里明确转换成 LoanRow[]。
     // =================================================
 
     const {
-      data: loans,
+      data: loansData,
       error: loansError,
     } =
       await adminSupabase
@@ -437,18 +446,30 @@ export async function GET() {
         );
 
     if (loansError) {
-
       throw new Error(
         `读取 loans 失败：${loansError.message}`
       );
     }
+
+    // -------------------------------------------------
+    // 关键 TypeScript 修复
+    //
+    // Supabase 查询结果有可能被推断成
+    // GenericStringError。
+    //
+    // 这里明确告诉 TypeScript：
+    // loansData 就是 LoanRow[]。
+    // -------------------------------------------------
+
+    const loans =
+      (loansData ?? []) as unknown as LoanRow[];
 
     // =================================================
     // 读取 active 信用卡
     // =================================================
 
     const {
-      data: cards,
+      data: cardsData,
       error: cardsError,
     } =
       await adminSupabase
@@ -462,14 +483,13 @@ export async function GET() {
         );
 
     if (cardsError) {
-
       throw new Error(
         `读取 credit_cards 失败：${cardsError.message}`
       );
     }
 
     const activeCards =
-      cards ?? [];
+      (cardsData ?? []) as unknown as CreditCardRow[];
 
     const today =
       getShanghaiToday();
@@ -479,12 +499,9 @@ export async function GET() {
     // =================================================
 
     for (
-      const loan of
-        loans ?? []
+      const loan of loans
     ) {
-
       const record: any = {
-
         loan_id:
           loan.id,
 
@@ -535,7 +552,6 @@ export async function GET() {
       if (
         "skip" in resolved
       ) {
-
         record.skipped =
           true;
 
@@ -580,7 +596,6 @@ export async function GET() {
           cycleDate.slice(-2)
         )
       ) {
-
         record.skipped =
           true;
 
@@ -612,7 +627,6 @@ export async function GET() {
         lastAutoPaymentDate >=
           cycleDate
       ) {
-
         record.skipped =
           true;
 
@@ -639,7 +653,6 @@ export async function GET() {
       if (
         !lastAutoPaymentDate
       ) {
-
         let initYear =
           today.year;
 
@@ -649,10 +662,11 @@ export async function GET() {
         if (
           initMonth === 0
         ) {
+          initMonth =
+            12;
 
-          initMonth = 12;
-
-          initYear -= 1;
+          initYear -=
+            1;
         }
 
         const initCycleDate =
@@ -666,7 +680,8 @@ export async function GET() {
             : cycleDate;
 
         const {
-          error: initError,
+          error:
+            initError,
         } =
           await adminSupabase
             .from("loans")
@@ -686,7 +701,6 @@ export async function GET() {
         if (
           initError
         ) {
-
           record.skipped =
             true;
 
@@ -694,9 +708,7 @@ export async function GET() {
             `首次初始化失败：${initError.message}`;
 
           failedCount++;
-
         } else {
-
           record.skipped =
             true;
 
@@ -716,22 +728,18 @@ export async function GET() {
       // =================================================
       // 5. 自动递减本金开关
       //
-      // 关键规则：
-      //
       // true：
       //   正常计算并递减本金
       //
       // false：
       //   不递减本金
-      //   但仍然把本周期标记为已处理
-      //
-      // 这样不会因为关闭开关导致同一周期每天重复进入。
+      //   但仍然标记本周期已处理
       // =================================================
 
       if (
-        loan.auto_reduce_principal !== true
+        loan.auto_reduce_principal !==
+        true
       ) {
-
         record.skipped =
           true;
 
@@ -740,10 +748,6 @@ export async function GET() {
 
         record.new_remaining_amount =
           record.old_remaining_amount;
-
-        // -------------------------------------------------
-        // 只更新处理日期，不修改本金
-        // -------------------------------------------------
 
         const {
           error:
@@ -766,7 +770,6 @@ export async function GET() {
         if (
           noReduceUpdateError
         ) {
-
           record.skipped =
             true;
 
@@ -774,9 +777,7 @@ export async function GET() {
             `auto_reduce_principal=false，本金不变；更新周期日期失败：${noReduceUpdateError.message}`;
 
           failedCount++;
-
         } else {
-
           record.skipped =
             true;
 
@@ -814,12 +815,9 @@ export async function GET() {
       if (
         oldPeriods <= 1
       ) {
-
         newPrincipal =
           0;
-
       } else {
-
         const principalReduction =
           oldPrincipal /
           oldPeriods;
@@ -864,13 +862,11 @@ export async function GET() {
         await adminSupabase
           .from("loans")
           .update({
-
             remaining_amount:
               newPrincipal,
 
             last_auto_payment_date:
               cycleDate,
-
           })
           .eq(
             "id",
@@ -883,7 +879,6 @@ export async function GET() {
       if (
         updateError
       ) {
-
         record.skipped =
           true;
 
@@ -891,9 +886,7 @@ export async function GET() {
           `更新失败：${updateError.message}`;
 
         failedCount++;
-
       } else {
-
         updatedCount++;
       }
 
@@ -909,7 +902,6 @@ export async function GET() {
     await adminSupabase
       .from("cron_logs")
       .update({
-
         status:
           "success",
 
@@ -921,7 +913,7 @@ export async function GET() {
           startedAt,
 
         message:
-          `处理 ${(loans ?? []).length} 笔贷款：更新 ${updatedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
+          `处理 ${loans.length} 笔贷款：更新 ${updatedCount}，跳过 ${skippedCount}，失败 ${failedCount}`,
 
         updated_count:
           updatedCount,
@@ -933,7 +925,6 @@ export async function GET() {
           skippedCount,
 
         details,
-
       })
       .eq(
         "id",
@@ -941,7 +932,6 @@ export async function GET() {
       );
 
     return NextResponse.json({
-
       success:
         true,
 
@@ -953,11 +943,8 @@ export async function GET() {
 
       failed:
         failedCount,
-
     });
-
   } catch (error) {
-
     const message =
       error instanceof Error
         ? error.message
@@ -968,14 +955,13 @@ export async function GET() {
       error
     );
 
-    // =================================================
+    // ===================================================
     // cron_logs：failed
-    // =================================================
+    // ===================================================
 
     await adminSupabase
       .from("cron_logs")
       .update({
-
         status:
           "failed",
 
@@ -998,7 +984,6 @@ export async function GET() {
           skippedCount,
 
         details,
-
       })
       .eq(
         "id",
