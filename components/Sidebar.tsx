@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const menus = [
   {
@@ -189,6 +189,17 @@ const menus = [
 export default function Sidebar() {
   const pathname = usePathname();
 
+  // =====================================================
+  // 手机端 Sidebar 开关
+  // =====================================================
+
+  const [mobileOpen, setMobileOpen] =
+    useState(false);
+
+  // =====================================================
+  // 手动更新状态
+  // =====================================================
+
   const [updating, setUpdating] =
     useState(false);
 
@@ -197,6 +208,58 @@ export default function Sidebar() {
 
   const [updateSuccess, setUpdateSuccess] =
     useState<boolean | null>(null);
+
+  // =====================================================
+  // 页面切换后自动关闭手机 Sidebar
+  // =====================================================
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
+  // =====================================================
+  // 手机端打开 Sidebar 时禁止背景滚动
+  // =====================================================
+
+  useEffect(() => {
+    if (mobileOpen) {
+      document.body.style.overflow = "hidden";
+    } else {
+      document.body.style.overflow = "";
+    }
+
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [mobileOpen]);
+
+  // =====================================================
+  // ESC 关闭
+  // =====================================================
+
+  useEffect(() => {
+    function handleKeyDown(
+      event: KeyboardEvent
+    ) {
+      if (
+        event.key === "Escape"
+      ) {
+        setMobileOpen(false);
+      }
+    }
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, []);
 
   // =====================================================
   // 手动更新全球资产
@@ -268,19 +331,14 @@ export default function Sidebar() {
     }
   }
 
-  return (
-    <aside
+  // =====================================================
+  // Sidebar 内容
+  // =====================================================
+
+  const sidebarContent = (
+    <div
       className="
-        fixed
-        left-0
-        top-0
-        z-50
-        w-64
-        h-screen
-        bg-white
-        border-r
-        border-gray-200
-        p-6
+        h-full
         flex
         flex-col
       "
@@ -289,32 +347,72 @@ export default function Sidebar() {
           Logo
       ================================================= */}
 
-      <div className="mb-8 shrink-0">
-        <h1
+      <div
+        className="
+          mb-8
+          shrink-0
+        "
+      >
+        <div
           className="
-            text-2xl
-            font-bold
+            flex
+            items-center
+            justify-between
           "
         >
-          AI Wealth OS
-        </h1>
+          <div>
+            <h1
+              className="
+                text-2xl
+                font-bold
+                text-gray-900
+              "
+            >
+              AI Wealth OS
+            </h1>
 
-        <p
-          className="
-            text-gray-500
-            text-sm
-            mt-2
-          "
-        >
-          Personal Wealth System
-        </p>
+            <p
+              className="
+                text-gray-500
+                text-sm
+                mt-2
+              "
+            >
+              Personal Wealth System
+            </p>
+          </div>
+
+          {/* =================================================
+              手机端关闭按钮
+          ================================================= */}
+
+          <button
+            type="button"
+            onClick={() =>
+              setMobileOpen(false)
+            }
+            className="
+              md:hidden
+              w-10
+              h-10
+              flex
+              items-center
+              justify-center
+              rounded-xl
+              text-gray-500
+              hover:bg-gray-100
+              active:bg-gray-200
+              text-xl
+            "
+            aria-label="关闭菜单"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {/* =================================================
           Menu Scroll Area
-          
-          只有这里滚动。
-          Logo 和底部版本号固定。
       ================================================= */}
 
       <nav
@@ -332,7 +430,7 @@ export default function Sidebar() {
       >
         {menus.map((menu) => {
           // =================================================
-          // 判断当前页面
+          // 当前页面
           // =================================================
 
           const isActive =
@@ -347,6 +445,9 @@ export default function Sidebar() {
               <Link
                 key={menu.id}
                 href={menu.href}
+                onClick={() =>
+                  setMobileOpen(false)
+                }
                 className={`
                   flex
                   items-center
@@ -367,6 +468,7 @@ export default function Sidebar() {
                 <span
                   className="
                     text-lg
+                    shrink-0
                   "
                 >
                   {menu.icon}
@@ -376,6 +478,7 @@ export default function Sidebar() {
                   className="
                     text-sm
                     font-medium
+                    whitespace-nowrap
                   "
                 >
                   {menu.name}
@@ -392,6 +495,9 @@ export default function Sidebar() {
             <Link
               key={menu.id}
               href={menu.href}
+              onClick={() =>
+                setMobileOpen(false)
+              }
               className={`
                 flex
                 items-center
@@ -411,6 +517,7 @@ export default function Sidebar() {
               <span
                 className="
                   text-xl
+                  shrink-0
                 "
               >
                 {menu.icon}
@@ -419,6 +526,7 @@ export default function Sidebar() {
               <span
                 className="
                   font-medium
+                  whitespace-nowrap
                 "
               >
                 {menu.name}
@@ -457,7 +565,12 @@ export default function Sidebar() {
             }
           `}
         >
-          <span className="text-xl">
+          <span
+            className="
+              text-xl
+              shrink-0
+            "
+          >
             {updating
               ? "⏳"
               : "🔄"}
@@ -466,6 +579,7 @@ export default function Sidebar() {
           <span
             className="
               font-medium
+              whitespace-nowrap
             "
           >
             {updating
@@ -502,8 +616,6 @@ export default function Sidebar() {
 
       {/* =================================================
           Bottom
-          
-          永远固定在 Sidebar 最底部
       ================================================= */}
 
       <div
@@ -519,6 +631,155 @@ export default function Sidebar() {
       >
         v1.0 Wealth OS
       </div>
-    </aside>
+    </div>
+  );
+
+  return (
+    <>
+      {/* ===================================================
+          PC Sidebar
+          
+          md 以上显示
+          手机完全隐藏
+      =================================================== */}
+
+      <aside
+        className="
+          hidden
+          md:block
+          fixed
+          left-0
+          top-0
+          z-50
+          w-64
+          h-screen
+          bg-white
+          border-r
+          border-gray-200
+          p-6
+        "
+      >
+        {sidebarContent}
+      </aside>
+
+      {/* ===================================================
+          手机顶部 Header
+          
+          手机才显示
+      =================================================== */}
+
+      <header
+        className="
+          md:hidden
+          fixed
+          top-0
+          left-0
+          right-0
+          z-40
+          h-16
+          bg-white
+          border-b
+          border-gray-200
+          px-4
+          flex
+          items-center
+          justify-between
+        "
+      >
+        <button
+          type="button"
+          onClick={() =>
+            setMobileOpen(true)
+          }
+          className="
+            w-10
+            h-10
+            flex
+            items-center
+            justify-center
+            rounded-xl
+            text-gray-700
+            hover:bg-gray-100
+            active:bg-gray-200
+            text-2xl
+          "
+          aria-label="打开菜单"
+        >
+          ☰
+        </button>
+
+        <div
+          className="
+            flex-1
+            ml-3
+          "
+        >
+          <div
+            className="
+              text-lg
+              font-bold
+              text-gray-900
+            "
+          >
+            AI Wealth OS
+          </div>
+        </div>
+      </header>
+
+      {/* ===================================================
+          手机遮罩
+          
+          Sidebar 打开后显示
+      =================================================== */}
+
+      {mobileOpen && (
+        <div
+          className="
+            md:hidden
+            fixed
+            inset-0
+            z-[60]
+            bg-black/40
+          "
+          onClick={() =>
+            setMobileOpen(false)
+          }
+        />
+      )}
+
+      {/* ===================================================
+          手机 Sidebar Drawer
+      =================================================== */}
+
+      <aside
+        className={`
+          md:hidden
+          fixed
+          left-0
+          top-0
+          z-[70]
+          w-[82vw]
+          max-w-[320px]
+          h-screen
+          bg-white
+          border-r
+          border-gray-200
+          p-5
+
+          transform
+          transition-transform
+          duration-300
+          ease-in-out
+
+          ${
+            mobileOpen
+              ? "translate-x-0"
+              : "-translate-x-full"
+          }
+        `}
+      >
+        {sidebarContent}
+      </aside>
+    </>
   );
 }
