@@ -27,6 +27,7 @@ import {
   updateFinancialInstitution,
   deleteFinancialInstitution,
 } from "@/lib/financialInstitution";
+
 // =====================================================
 // 类型
 // =====================================================
@@ -50,7 +51,6 @@ type SortKey =
 type SortDirection = "asc" | "desc";
 
 type LoanGroupState = Record<string, boolean>;
-
 
 // =====================================================
 // 输入组件
@@ -92,7 +92,6 @@ function InputBox({
   );
 }
 
-
 // =====================================================
 // 金额格式
 // =====================================================
@@ -122,7 +121,6 @@ function money(value: number) {
   );
 }
 
-
 // =====================================================
 // 数字格式
 // =====================================================
@@ -135,7 +133,6 @@ function numberFormat(value: number) {
     }
   );
 }
-
 
 // =====================================================
 // 贷款类型名称
@@ -156,7 +153,6 @@ function loanModeName(mode: string) {
 
   return "-";
 }
-
 
 // =====================================================
 // 累计利息
@@ -216,7 +212,6 @@ function calculateLoanInterest(
   return interest;
 }
 
-
 // =====================================================
 // 公积金月冲
 //
@@ -237,7 +232,6 @@ function getHousingFundMonthly(
       0
   );
 }
-
 
 // =====================================================
 // 自己实际还贷
@@ -272,7 +266,6 @@ function getActualMonthlyPayment(
   );
 }
 
-
 // =====================================================
 // 创建新贷款
 // =====================================================
@@ -300,8 +293,10 @@ function createEmptyLoan() {
 
     monthly_payment: 0,
 
-    // 新增
     housing_fund_monthly: 0,
+
+    // 自动递减本金
+    auto_reduce_principal: true,
 
     start_date: "",
 
@@ -317,7 +312,6 @@ function createEmptyLoan() {
     note: "",
   };
 }
-
 
 // =====================================================
 // 年度还款计划
@@ -344,7 +338,6 @@ type YearPlan = {
     actualPayment: number;
   }[];
 };
-
 
 // =====================================================
 // 计算年度计划
@@ -594,7 +587,6 @@ function calculateYearPlans(
   );
 }
 
-
 // =====================================================
 // 页面
 // =====================================================
@@ -606,33 +598,36 @@ export default function LoanPage() {
     setLoans,
   ] =
     useState<any[]>([]);
-    
 
   const [
-  institutions,
-  setInstitutions,
-] = useState<any[]>([]);
+    institutions,
+    setInstitutions,
+  ] =
+    useState<any[]>([]);
 
-const [
-  institutionsLoading,
-  setInstitutionsLoading,
-] = useState(true);
+  const [
+    institutionsLoading,
+    setInstitutionsLoading,
+  ] =
+    useState(true);
 
   const [
     addingInstitution,
     setAddingInstitution,
-  ] = useState(false);
+  ] =
+    useState(false);
 
   const [
     newInstitution,
     setNewInstitution,
-  ] = useState("");
+  ] =
+    useState("");
 
   const [
-  editingInstitution,
-  setEditingInstitution,
-] =
-  useState<any>(null);
+    editingInstitution,
+    setEditingInstitution,
+  ] =
+    useState<any>(null);
 
   const [
     editing,
@@ -696,7 +691,6 @@ const [
       "desc"
     );
 
-
   // ===================================================
   // 加载
   // ===================================================
@@ -713,125 +707,121 @@ const [
     setLoading(false);
   }
 
-
   useEffect(() => {
     load();
     loadInstitutions();
   }, []);
 
-   async function loadInstitutions() {
+  async function loadInstitutions() {
 
-  try {
+    try {
 
-    setInstitutionsLoading(
-      true
-    );
+      setInstitutionsLoading(
+        true
+      );
 
-    const data =
-      await getFinancialInstitutions();
+      const data =
+        await getFinancialInstitutions();
 
-    setInstitutions(
-      data || []
-    );
+      setInstitutions(
+        data || []
+      );
 
-  } catch (error) {
+    } catch (error) {
 
-    console.error(
-      "加载金融机构失败:",
-      error
-    );
+      console.error(
+        "加载金融机构失败:",
+        error
+      );
 
-    alert(
-      "加载银行 / 金融机构失败"
-    );
+      alert(
+        "加载银行 / 金融机构失败"
+      );
 
-  } finally {
+    } finally {
 
-    setInstitutionsLoading(
-      false
-    );
+      setInstitutionsLoading(
+        false
+      );
+    }
   }
-}
-
 
   // ---------------------------------------------------
   // 新增银行 / 金融机构
   // ---------------------------------------------------
 
- async function addInstitution() {
+  async function addInstitution() {
 
-  const name =
-    newInstitution.trim();
+    const name =
+      newInstitution.trim();
 
-  if (!name) {
-    alert(
-      "请输入银行或金融机构名称"
-    );
-
-    return;
-  }
-
-  // 检查数据库中的机构是否已经存在
-  if (
-    institutions.some(
-      item =>
-        item.name === name
-    )
-  ) {
-    alert(
-      "该银行 / 金融机构已经存在"
-    );
-
-    return;
-  }
-
-  try {
-
-    const data =
-      await addFinancialInstitution(
-        name
+    if (!name) {
+      alert(
+        "请输入银行或金融机构名称"
       );
 
-    setInstitutions(
-      prev =>
-        [
+      return;
+    }
+
+    if (
+      institutions.some(
+        item =>
+          item.name === name
+      )
+    ) {
+      alert(
+        "该银行 / 金融机构已经存在"
+      );
+
+      return;
+    }
+
+    try {
+
+      const data =
+        await addFinancialInstitution(
+          name
+        );
+
+      setInstitutions(
+        prev =>
+          [
+            ...prev,
+            data,
+          ].sort(
+            (a, b) =>
+              a.name.localeCompare(
+                b.name,
+                "zh-CN"
+              )
+          )
+      );
+
+      setEditing(
+        (prev: any) => ({
           ...prev,
-          data,
-        ].sort(
-          (a, b) =>
-            a.name.localeCompare(
-              b.name,
-              "zh-CN"
-            )
-        )
-    );
+          institution: name,
+        })
+      );
 
-    // 新增后自动选中
-    setEditing(
-      (prev: any) => ({
-        ...prev,
-        institution: name,
-      })
-    );
+      setNewInstitution("");
 
-    setNewInstitution("");
+      setAddingInstitution(
+        false
+      );
 
-    setAddingInstitution(
-      false
-    );
+    } catch (error) {
 
-  } catch (error) {
+      console.error(
+        "新增金融机构失败:",
+        error
+      );
 
-    console.error(
-      "新增金融机构失败:",
-      error
-    );
-
-    alert(
-      "新增银行 / 金融机构失败"
-    );
+      alert(
+        "新增银行 / 金融机构失败"
+      );
+    }
   }
-}
 
   // ===================================================
   // 总负债
@@ -851,7 +841,6 @@ const [
       0
     );
 
-
   // ===================================================
   // 总月供
   // ===================================================
@@ -870,7 +859,6 @@ const [
       0
     );
 
-
   // ===================================================
   // 总公积金月冲
   // ===================================================
@@ -888,7 +876,6 @@ const [
       0
     );
 
-
   // ===================================================
   // 总自己实际月还贷
   // ===================================================
@@ -905,7 +892,6 @@ const [
         ),
       0
     );
-
 
   // ===================================================
   // 类型统计
@@ -1004,7 +990,6 @@ const [
 
     }, [loans]);
 
-
   // ===================================================
   // 默认打开所有类型
   // ===================================================
@@ -1026,7 +1011,6 @@ const [
     );
 
   }, [typeStats]);
-
 
   // ===================================================
   // 排序
@@ -1057,7 +1041,6 @@ const [
     }
   }
 
-
   function getSortValue(
     loan: any,
     key: SortKey
@@ -1071,9 +1054,9 @@ const [
         );
 
       case "institution":
-          return (
-            loan.institution || ""
-          );
+        return (
+          loan.institution || ""
+        );
 
       case "type":
         return (
@@ -1145,7 +1128,6 @@ const [
     }
   }
 
-
   function sortLoans(
     list: any[]
   ) {
@@ -1171,9 +1153,9 @@ const [
 
         if (
           typeof av ===
-          "number" &&
+            "number" &&
           typeof bv ===
-          "number"
+            "number"
         ) {
           result =
             av - bv;
@@ -1193,7 +1175,6 @@ const [
       }
     );
   }
-
 
   // ===================================================
   // 排序箭头
@@ -1225,7 +1206,6 @@ const [
     );
   }
 
-
   // ===================================================
   // 新增
   // ===================================================
@@ -1236,7 +1216,6 @@ const [
       createEmptyLoan()
     );
   }
-
 
   // ===================================================
   // 保存
@@ -1254,10 +1233,23 @@ const [
       return;
     }
 
-    // 房贷之外不保存公积金月冲
+    // =================================================
+    // 关键：
+    // 必须明确保存 false。
+    //
+    // 不能使用：
+    // auto_reduce_principal: editing.auto_reduce_principal || true
+    //
+    // 否则取消勾选后的 false 会重新变成 true。
+    // =================================================
+
     const data = {
       ...editing,
 
+      auto_reduce_principal:
+        editing.auto_reduce_principal === true,
+
+      // 房贷之外不保存公积金月冲
       housing_fund_monthly:
         editing.type ===
         "房贷"
@@ -1268,27 +1260,40 @@ const [
           : 0,
     };
 
-    if (
-      editing.id
-    ) {
+    try {
 
-      await updateLoan(
-        editing.id,
-        data
+      if (
+        editing.id
+      ) {
+
+        await updateLoan(
+          editing.id,
+          data
+        );
+
+      } else {
+
+        await addLoan(
+          data
+        );
+      }
+
+      setEditing(null);
+
+      await load();
+
+    } catch (error) {
+
+      console.error(
+        "保存贷款失败:",
+        error
       );
 
-    } else {
-
-      await addLoan(
-        data
+      alert(
+        "保存贷款失败，请检查控制台错误"
       );
     }
-
-    setEditing(null);
-
-    load();
   }
-
 
   // ===================================================
   // 删除
@@ -1312,7 +1317,6 @@ const [
     }
   }
 
-
   // ===================================================
   // 年度计划
   // ===================================================
@@ -1325,7 +1329,6 @@ const [
         ),
       [loans]
     );
-
 
   // ===================================================
   // 渲染
@@ -1372,7 +1375,6 @@ const [
 
         </div>
 
-
         {/* ===========================================
             汇总卡片
         =========================================== */}
@@ -1411,7 +1413,6 @@ const [
             </div>
           </div>
 
-
           <div
             className="
               bg-white
@@ -1436,7 +1437,6 @@ const [
               )}
             </div>
           </div>
-
 
           <div
             className="
@@ -1464,7 +1464,6 @@ const [
             </div>
           </div>
 
-
           <div
             className="
               bg-white
@@ -1490,7 +1489,6 @@ const [
               )}
             </div>
           </div>
-
 
           <div
             className="
@@ -1522,7 +1520,6 @@ const [
           </div>
 
         </section>
-
 
         {/* ===========================================
             贷款明细
@@ -1588,7 +1585,6 @@ const [
 
           </button>
 
-
           {detailExpanded && (
 
             <div
@@ -1619,10 +1615,6 @@ const [
               ) : (
 
                 <div>
-
-                  {/* =================================
-                      按类型分组
-                  ================================= */}
 
                   {typeStats.map(
                     (
@@ -1657,10 +1649,6 @@ const [
                             last:border-b-0
                           "
                         >
-
-                          {/* =============================
-                              类型标题 + 类型统计
-                          ============================= */}
 
                           <button
                             className="
@@ -1728,7 +1716,6 @@ const [
 
                               </div>
 
-
                               <div
                                 className="
                                   flex
@@ -1752,7 +1739,6 @@ const [
                                   </span>
                                 </div>
 
-
                                 <div>
                                   <span className="text-gray-400">
                                     月供
@@ -1764,7 +1750,6 @@ const [
                                     )}
                                   </span>
                                 </div>
-
 
                                 {stat.housingFund >
                                   0 && (
@@ -1789,7 +1774,6 @@ const [
 
                                 )}
 
-
                                 <div>
                                   <span className="text-gray-400">
                                     自己实际还贷
@@ -1808,7 +1792,6 @@ const [
                                   </span>
                                 </div>
 
-
                                 <div>
                                   <span className="text-gray-400">
                                     剩余应还
@@ -1826,11 +1809,6 @@ const [
                             </div>
 
                           </button>
-
-
-                          {/* =============================
-                              类型贷款表
-                          ============================= */}
 
                           {expanded && (
 
@@ -1871,11 +1849,6 @@ const [
                                       )}
                                     </th>
 
-                                    
-
-
-                                    {/* 银行 / 金融机构 */}
-
                                     <th
                                       className="
                                         p-3
@@ -1895,7 +1868,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -1907,15 +1879,12 @@ const [
                                           "type"
                                         )
                                       }
-                                    >   
+                                    >
                                       类型
                                       {sortIcon(
                                         "type"
                                       )}
-                                    </th>   
-
-
-
+                                    </th>
 
                                     <th
                                       className="
@@ -1935,7 +1904,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -1953,7 +1921,6 @@ const [
                                         "remaining_amount"
                                       )}
                                     </th>
-
 
                                     <th
                                       className="
@@ -1973,7 +1940,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -1991,7 +1957,6 @@ const [
                                         "interest"
                                       )}
                                     </th>
-
 
                                     <th
                                       className="
@@ -2011,7 +1976,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -2030,7 +1994,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -2048,7 +2011,6 @@ const [
                                         "actual_monthly_payment"
                                       )}
                                     </th>
-
 
                                     <th
                                       className="
@@ -2069,7 +2031,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -2088,7 +2049,6 @@ const [
                                         "remaining_periods"
                                       )}
                                     </th>
-
 
                                     <th
                                       className="
@@ -2109,7 +2069,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -2129,7 +2088,6 @@ const [
                                       )}
                                     </th>
 
-
                                     <th
                                       className="
                                         p-3
@@ -2142,7 +2100,6 @@ const [
                                   </tr>
 
                                 </thead>
-
 
                                 <tbody>
 
@@ -2187,7 +2144,6 @@ const [
                                           {item.type}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2197,7 +2153,6 @@ const [
                                             item.loan_mode
                                           )}
                                         </td>
-
 
                                         <td
                                           className="
@@ -2211,7 +2166,6 @@ const [
                                           )}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2223,7 +2177,6 @@ const [
                                           }
                                           %
                                         </td>
-
 
                                         <td
                                           className="
@@ -2241,7 +2194,6 @@ const [
                                             : "-"}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2252,7 +2204,6 @@ const [
                                             item.monthly_payment
                                           )}
                                         </td>
-
 
                                         <td
                                           className="
@@ -2271,7 +2222,6 @@ const [
                                             : "-"}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2287,7 +2237,6 @@ const [
                                           )}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2301,7 +2250,6 @@ const [
                                             )
                                           )}
                                         </td>
-
 
                                         <td
                                           className="
@@ -2319,7 +2267,6 @@ const [
                                             : "-"}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2332,7 +2279,6 @@ const [
                                           )}
                                         </td>
 
-
                                         <td
                                           className="
                                             p-3
@@ -2343,7 +2289,6 @@ const [
                                             ? "✅"
                                             : "❌"}
                                         </td>
-
 
                                         <td
                                           className="
@@ -2363,6 +2308,14 @@ const [
                                               setEditing(
                                                 {
                                                   ...item,
+
+                                                  // =================================================
+                                                  // 关键：
+                                                  // 数据库返回 false 时必须保留 false
+                                                  // =================================================
+                                                  auto_reduce_principal:
+                                                    item.auto_reduce_principal === true,
+
                                                   housing_fund_monthly:
                                                     Number(
                                                       item.housing_fund_monthly ||
@@ -2374,7 +2327,6 @@ const [
                                           >
                                             编辑
                                           </button>
-
 
                                           <button
                                             className="
@@ -2420,7 +2372,6 @@ const [
           )}
 
         </section>
-
 
         {/* ===========================================
             按贷款类型统计
@@ -2485,7 +2436,6 @@ const [
 
           </button>
 
-
           {typeStatsExpanded && (
 
             <div
@@ -2543,7 +2493,6 @@ const [
                   </tr>
 
                 </thead>
-
 
                 <tbody>
 
@@ -2626,7 +2575,6 @@ const [
 
         </section>
 
-
         {/* ===========================================
             每年贷款还款计划
         =========================================== */}
@@ -2690,7 +2638,6 @@ const [
 
           </button>
 
-
           {yearPlanExpanded && (
 
             <div
@@ -2730,8 +2677,6 @@ const [
                       "
                     >
 
-                      {/* 年份汇总 */}
-
                       <div
                         className="
                           bg-gray-50
@@ -2758,7 +2703,6 @@ const [
                           >
                             {plan.year} 年
                           </div>
-
 
                           <div
                             className="
@@ -2787,7 +2731,6 @@ const [
                               </span>
                             </div>
 
-
                             <div>
                               <span className="text-gray-400">
                                 公积金月冲
@@ -2805,7 +2748,6 @@ const [
                                 )}
                               </span>
                             </div>
-
 
                             <div>
                               <span className="text-gray-400">
@@ -2830,9 +2772,6 @@ const [
                         </div>
 
                       </div>
-
-
-                      {/* 年度明细 */}
 
                       <div
                         className="
@@ -2880,7 +2819,6 @@ const [
                             </tr>
 
                           </thead>
-
 
                           <tbody>
 
@@ -2962,7 +2900,6 @@ const [
 
       </main>
 
-
       {/* =============================================
           新增 / 编辑窗口
       ============================================= */}
@@ -3008,7 +2945,6 @@ const [
               }
             </h2>
 
-
             {/* =======================================
                 名称
             ======================================= */}
@@ -3052,219 +2988,205 @@ const [
 
             </label>
 
-               {/* =======================================
-                    银行 / 金融机构
-                ======================================= */}
+            {/* =======================================
+                银行 / 金融机构
+            ======================================= */}
 
-                <label>
+            <label>
 
-                  <span className="font-medium">
-                    银行 / 金融机构
-                  </span>
+              <span className="font-medium">
+                银行 / 金融机构
+              </span>
 
-                  <p
+              <p
+                className="
+                  text-xs
+                  text-gray-400
+                  mb-1
+                "
+              >
+                从下拉列表选择，也可以随时新增银行或金融机构
+              </p>
+
+              {!addingInstitution ? (
+
+                <div className="flex gap-2 mb-5">
+
+                  <select
                     className="
-                      text-xs
-                      text-gray-400
-                      mb-1
+                      border
+                      p-3
+                      rounded
+                      w-full
+                      bg-white
+                    "
+                    value={
+                      editing.institution ||
+                      ""
+                    }
+                    onChange={e => {
+
+                      const value =
+                        e.target.value;
+
+                      if (
+                        value ===
+                        "__ADD_NEW__"
+                      ) {
+
+                        setAddingInstitution(
+                          true
+                        );
+
+                        setNewInstitution("");
+
+                        return;
+                      }
+
+                      setEditing({
+                        ...editing,
+                        institution:
+                          value,
+                      });
+
+                    }}
+                  >
+
+                    <option value="">
+                      请选择银行 / 金融机构
+                    </option>
+
+                    {institutions.map(
+                      institution => (
+                        <option
+                          key={institution.id}
+                          value={institution.name}
+                        >
+                          {institution.name}
+                        </option>
+                      )
+                    )}
+
+                    <option
+                      value="__ADD_NEW__"
+                    >
+                      ＋ 新增银行 / 金融机构
+                    </option>
+
+                  </select>
+
+                </div>
+
+              ) : (
+
+                <div
+                  className="
+                    border
+                    border-blue-200
+                    bg-blue-50
+                    rounded-xl
+                    p-4
+                    mb-5
+                  "
+                >
+
+                  <div
+                    className="
+                      font-medium
+                      mb-2
                     "
                   >
-                    从下拉列表选择，也可以随时新增银行或金融机构
-                  </p>
+                    ＋ 新增银行 / 金融机构
+                  </div>
 
+                  <input
+                    className="
+                      border
+                      p-3
+                      rounded
+                      w-full
+                      bg-white
+                      mb-3
+                    "
+                    autoFocus
+                    value={
+                      newInstitution
+                    }
+                    onChange={e =>
+                      setNewInstitution(
+                        e.target.value
+                      )
+                    }
+                    placeholder="例如：华夏银行 / 上海农商银行 / 某某保险公司"
+                    onKeyDown={e => {
 
-                  {!addingInstitution ? (
+                      if (
+                        e.key ===
+                        "Enter"
+                      ) {
 
-                    <div className="flex gap-2 mb-5">
+                        e.preventDefault();
 
-                      {/* ================================
-                          下拉框
-                      ================================= */}
+                        addInstitution();
 
-                      <select
-                        className="
-                          border
-                          p-3
-                          rounded
-                          w-full
-                          bg-white
-                        "
-                        value={
-                          editing.institution ||
-                          ""
-                        }
-                        onChange={e => {
+                      }
 
-                          const value =
-                            e.target.value;
+                    }}
+                  />
 
-                          if (
-                            value ===
-                            "__ADD_NEW__"
-                          ) {
+                  <div
+                    className="
+                      flex
+                      gap-2
+                    "
+                  >
 
-                            setAddingInstitution(
-                              true
-                            );
-
-                            setNewInstitution("");
-
-                            return;
-                          }
-
-                          setEditing({
-                            ...editing,
-                            institution:
-                              value,
-                          });
-
-                        }}
-                      >
-
-                        <option value="">
-                          请选择银行 / 金融机构
-                        </option>
-
-
-                        {institutions.map(
-                          institution => (
-                            <option
-                              key={institution.id}
-                              value={institution.name}
-                            >
-                              {institution.name}
-                            </option>
-                          )
-                        )}
-
-
-                        <option
-                          value="__ADD_NEW__"
-                        >
-                          ＋ 新增银行 / 金融机构
-                        </option>
-
-                      </select>
-
-                    </div>
-
-                  ) : (
-
-                    /* =================================
-                       新增银行
-                    ================================= */
-
-                    <div
+                    <button
+                      type="button"
                       className="
-                        border
-                        border-blue-200
-                        bg-blue-50
-                        rounded-xl
-                        p-4
-                        mb-5
+                        px-4
+                        py-2
+                        bg-blue-600
+                        text-white
+                        rounded
+                        hover:bg-blue-700
                       "
+                      onClick={
+                        addInstitution
+                      }
                     >
+                      添加
+                    </button>
 
-                      <div
-                        className="
-                          font-medium
-                          mb-2
-                        "
-                      >
-                        ＋ 新增银行 / 金融机构
-                      </div>
+                    <button
+                      type="button"
+                      className="
+                        px-4
+                        py-2
+                        bg-gray-200
+                        rounded
+                        hover:bg-gray-300
+                      "
+                      onClick={() => {
 
+                        setAddingInstitution(
+                          false
+                        );
 
-                      <input
-                        className="
-                          border
-                          p-3
-                          rounded
-                          w-full
-                          bg-white
-                          mb-3
-                        "
-                        autoFocus
-                        value={
-                          newInstitution
-                        }
-                        onChange={e =>
-                          setNewInstitution(
-                            e.target.value
-                          )
-                        }
-                        placeholder="例如：华夏银行 / 上海农商银行 / 某某保险公司"
-                        onKeyDown={e => {
+                        setNewInstitution("");
 
-                          if (
-                            e.key ===
-                            "Enter"
-                          ) {
+                      }}
+                    >
+                      取消
+                    </button>
 
-                            e.preventDefault();
+                  </div>
 
-                            addInstitution();
+                </div>
 
-                          }
+              )}
 
-                        }}
-                      />
-
-
-                      <div
-                        className="
-                          flex
-                          gap-2
-                        "
-                      >
-
-                        <button
-                          type="button"
-                          className="
-                            px-4
-                            py-2
-                            bg-blue-600
-                            text-white
-                            rounded
-                            hover:bg-blue-700
-                          "
-                          onClick={
-                            addInstitution
-                          }
-                        >
-                          添加
-                        </button>
-
-
-                        <button
-                          type="button"
-                          className="
-                            px-4
-                            py-2
-                            bg-gray-200
-                            rounded
-                            hover:bg-gray-300
-                          "
-                          onClick={() => {
-
-                            setAddingInstitution(
-                              false
-                            );
-
-                            setNewInstitution("");
-
-                          }}
-                        >
-                          取消
-                        </button>
-
-                      </div>
-
-                    </div>
-
-                  )}
-
-                </label>
+            </label>
 
             {/* =======================================
                 类型
@@ -3320,7 +3242,6 @@ const [
                     loan_mode:
                       mode,
 
-                    // 非房贷清零
                     housing_fund_monthly:
                       type ===
                       "房贷"
@@ -3358,7 +3279,6 @@ const [
 
             </label>
 
-
             {/* =======================================
                 房贷 / 信用卡
             ======================================= */}
@@ -3381,7 +3301,6 @@ const [
                   🏠 固定还款贷款
                 </h3>
 
-
                 <InputBox
                   title="初始贷款金额"
                   tip="最开始借的钱，例如3000000"
@@ -3397,7 +3316,6 @@ const [
                       })
                   }
                 />
-
 
                 <InputBox
                   title="当前本金余额"
@@ -3415,7 +3333,6 @@ const [
                   }
                 />
 
-
                 <InputBox
                   title="年利率 (%)"
                   tip="例如3.1"
@@ -3431,7 +3348,6 @@ const [
                       })
                   }
                 />
-
 
                 <InputBox
                   title="每月还款"
@@ -3449,6 +3365,56 @@ const [
                   }
                 />
 
+                {/* =================================
+                    自动递减本金
+                ================================= */}
+
+                <label
+                  className="
+                    flex
+                    gap-2
+                    items-center
+                    mb-5
+                    cursor-pointer
+                  "
+                >
+
+                  <input
+                    type="checkbox"
+                    checked={
+                      editing.auto_reduce_principal === true
+                    }
+                    onChange={e =>
+                      setEditing({
+                        ...editing,
+                        auto_reduce_principal:
+                          e.target.checked,
+                      })
+                    }
+                  />
+
+                  <span>
+                    自动递减本金
+                  </span>
+
+                </label>
+
+                <div
+                  className="
+                    bg-gray-50
+                    border
+                    border-gray-200
+                    rounded-xl
+                    p-4
+                    mb-5
+                    text-sm
+                    text-gray-500
+                  "
+                >
+                  {editing.auto_reduce_principal === true
+                    ? "开启后：Cron 在每期还款日自动递减当前本金余额。"
+                    : "关闭后：Cron 仍可记录还款周期，但不会自动递减当前本金余额。"}
+                </div>
 
                 {/* =================================
                     房贷专属
@@ -3474,7 +3440,6 @@ const [
                           })
                       }
                     />
-
 
                     <div
                       className="
@@ -3517,6 +3482,7 @@ const [
                               )
                           )
                         )}
+
                         <span
                           className="
                             text-sm
@@ -3527,6 +3493,7 @@ const [
                         >
                           / 月
                         </span>
+
                       </div>
 
                       <p
@@ -3548,7 +3515,6 @@ const [
 
             )}
 
-
             {/* =======================================
                 保险贷款
             ======================================= */}
@@ -3567,7 +3533,6 @@ const [
                   🛡️ 保险贷款
                 </h3>
 
-
                 <InputBox
                   title="当前本金余额"
                   tip="从保单现金价值借出的金额，例如500000"
@@ -3583,7 +3548,6 @@ const [
                       })
                   }
                 />
-
 
                 <InputBox
                   title="贷款利率 (%)"
@@ -3601,7 +3565,6 @@ const [
                   }
                 />
 
-
                 <InputBox
                   title="期限(月)"
                   tip="例如6个月填写6"
@@ -3617,7 +3580,6 @@ const [
                       })
                   }
                 />
-
 
                 <label
                   className="
@@ -3650,7 +3612,6 @@ const [
 
             )}
 
-
             {/* =======================================
                 银行信用贷
             ======================================= */}
@@ -3669,7 +3630,6 @@ const [
                   🏦 银行信用贷
                 </h3>
 
-
                 <InputBox
                   title="授信额度"
                   tip="银行批准最大金额，例如1000000"
@@ -3686,7 +3646,6 @@ const [
                   }
                 />
 
-
                 <InputBox
                   title="当前本金余额"
                   tip="已经借出的本金金额"
@@ -3702,7 +3661,6 @@ const [
                       })
                   }
                 />
-
 
                 <InputBox
                   title="年利率 (%)"
@@ -3724,7 +3682,6 @@ const [
 
             )}
 
-
             {/* =======================================
                 时间
             ======================================= */}
@@ -3737,7 +3694,6 @@ const [
             >
               📅 时间
             </h3>
-
 
             <label
               className="
@@ -3772,7 +3728,6 @@ const [
               }
             />
 
-
             <label
               className="
                 block
@@ -3784,7 +3739,6 @@ const [
               最后还款日期（可选）
             </label>
 
-
             <p
               className="
                 text-xs
@@ -3794,7 +3748,6 @@ const [
             >
               留空时，固定还款贷款会根据本金余额、利率和月供自动计算。
             </p>
-
 
             <input
               className="
@@ -3817,7 +3770,6 @@ const [
                 })
               }
             />
-
 
             {/* =======================================
                 Financial Freedom
@@ -3850,7 +3802,6 @@ const [
 
             </label>
 
-
             {/* =======================================
                 备注
             ======================================= */}
@@ -3881,7 +3832,6 @@ const [
               }
             />
 
-
             {/* =======================================
                 按钮
             ======================================= */}
@@ -3908,7 +3858,6 @@ const [
               >
                 取消
               </button>
-
 
               <button
                 className="

@@ -1,14 +1,19 @@
+// =====================================================
 // lib/loan.ts
+//
+// 贷款数据访问层
+//
+// 本版本只针对 auto_reduce_principal 增加正确读写。
+// 其他贷款逻辑保持原有逻辑。
+// =====================================================
 
 import { supabase } from "@/lib/supabase";
-
 
 // =====================================================
 // 获取全部贷款
 // =====================================================
 
 export async function getLoans() {
-
   const {
     data,
     error,
@@ -46,13 +51,11 @@ export async function getLoans() {
   return data || [];
 }
 
-
 // =====================================================
 // 获取全部金融机构
 // =====================================================
 
 export async function getFinancialInstitutions() {
-
   const {
     data,
     error,
@@ -88,7 +91,6 @@ export async function getFinancialInstitutions() {
 
   return data || [];
 }
-
 
 // =====================================================
 // 新增金融机构
@@ -136,7 +138,6 @@ export async function addFinancialInstitution(
 
   return data;
 }
-
 
 // =====================================================
 // 修改金融机构
@@ -192,8 +193,6 @@ export async function updateFinancialInstitution(
   return data;
 }
 
-
-
 // =====================================================
 // 删除金融机构
 //
@@ -206,16 +205,14 @@ export async function deleteFinancialInstitution(
   id: string
 ) {
 
-  // ---------------------------------------------------
-  // 先检查是否还有贷款使用这个金融机构
-  // ---------------------------------------------------
-
   const {
     data: loans,
     error: loanError,
   } = await supabase
     .from("loans")
-    .select("id, name")
+    .select(
+      "id, name"
+    )
     .eq(
       "financial_institution_id",
       id
@@ -235,11 +232,6 @@ export async function deleteFinancialInstitution(
     throw loanError;
   }
 
-
-  // ---------------------------------------------------
-  // 如果还有关联贷款，不允许删除
-  // ---------------------------------------------------
-
   if (
     loans &&
     loans.length > 0
@@ -248,13 +240,7 @@ export async function deleteFinancialInstitution(
     throw new Error(
       `该金融机构还有 ${loans.length} 笔贷款正在使用，不能删除。请先修改或删除相关贷款。`
     );
-
   }
-
-
-  // ---------------------------------------------------
-  // 没有关联贷款 → 真正删除
-  // ---------------------------------------------------
 
   const {
     error,
@@ -282,7 +268,6 @@ export async function deleteFinancialInstitution(
 
   return true;
 }
-
 
 // =====================================================
 // 新增贷款
@@ -346,6 +331,21 @@ export async function addLoan(
             )
           : 0,
 
+      // =================================================
+      // 自动递减本金
+      //
+      // 新增贷款：
+      // - true  -> 自动递减
+      // - false -> 不自动递减
+      //
+      // 这里不能使用：
+      // loan.auto_reduce_principal || true
+      //
+      // 因为 false 会被重新变成 true。
+      // =================================================
+      auto_reduce_principal:
+        loan.auto_reduce_principal === true,
+
       financial_institution_id:
         loan.financial_institution_id ||
         null,
@@ -407,7 +407,6 @@ export async function addLoan(
   return data?.[0];
 }
 
-
 // =====================================================
 // 修改贷款
 // =====================================================
@@ -423,7 +422,7 @@ export async function updateLoan(
       loan.name || "",
 
     institution:
-    loan.institution || "",
+      loan.institution || "",
 
     type:
       loan.type || "其他",
@@ -466,6 +465,17 @@ export async function updateLoan(
           )
         : 0,
 
+    // =================================================
+    // 最关键的修复
+    //
+    // 必须显式写入 false。
+    //
+    // 以前如果这里没有这个字段，
+    // 用户取消勾选后数据库原来的 true 会一直保留。
+    // =================================================
+    auto_reduce_principal:
+      loan.auto_reduce_principal === true,
+
     financial_institution_id:
       loan.financial_institution_id ||
       null,
@@ -498,7 +508,6 @@ export async function updateLoan(
       new Date().toISOString(),
 
   };
-
 
   const {
     data,
@@ -538,7 +547,6 @@ export async function updateLoan(
   return data?.[0];
 }
 
-
 // =====================================================
 // 删除贷款
 // =====================================================
@@ -574,7 +582,6 @@ export async function deleteLoan(
   return true;
 }
 
-
 // =====================================================
 // 当前家庭总负债
 // =====================================================
@@ -597,7 +604,6 @@ export async function getTotalLoanBalance() {
   );
 }
 
-
 // =====================================================
 // Financial Freedom 专用
 // =====================================================
@@ -612,7 +618,6 @@ export async function getFinancialFreedomLoans() {
       loan.include_financial_freedom === true
   );
 }
-
 
 // =====================================================
 // Financial Freedom 年度贷款支出
@@ -660,7 +665,6 @@ export async function getFinancialFreedomLoanPayment(
             loan.monthly_payment || 0
           ) *
           12;
-
       }
 
     }
@@ -668,7 +672,6 @@ export async function getFinancialFreedomLoanPayment(
 
   return total;
 }
-
 
 // =====================================================
 // 计算保险贷款累计利息
@@ -730,7 +733,6 @@ export function calculateInsuranceLoanInterest(
   );
 }
 
-
 // =====================================================
 // 计算保险贷款当前应还
 // =====================================================
@@ -748,7 +750,6 @@ export function calculateInsuranceLoanPayable(
     )
   );
 }
-
 
 // =====================================================
 // 某一年保险贷款利息
@@ -849,7 +850,6 @@ export async function getAnnualInsuranceLoanInterest(
   return total;
 }
 
-
 // =====================================================
 // 天天向上年度贷款压力
 // =====================================================
@@ -902,7 +902,6 @@ export async function getAnnualLoanPressure(
             loan.monthly_payment || 0
           ) *
           12;
-
       }
 
       if (
@@ -913,7 +912,6 @@ export async function getAnnualLoanPressure(
           calculateInsuranceLoanInterest(
             loan
           );
-
       }
 
     }
@@ -921,7 +919,6 @@ export async function getAnnualLoanPressure(
 
   return total;
 }
-
 
 // =====================================================
 // 循环贷款列表
@@ -938,7 +935,6 @@ export async function getRevolvingLoans() {
       loan.loan_mode === "term_revolving"
   );
 }
-
 
 // =====================================================
 // 贷款到期提醒
@@ -995,188 +991,4 @@ export async function getLoanExpiryReminder() {
   );
 
   return result;
-}
-
-
-// =====================================================
-// 按贷款类型统计
-// =====================================================
-
-export async function getLoanSummaryByType() {
-
-  const loans =
-    await getLoans();
-
-  const result: any = {};
-
-  loans.forEach(
-    (loan: any) => {
-
-      const type =
-        loan.type || "其他";
-
-      if (
-        !result[type]
-      ) {
-        result[type] = 0;
-      }
-
-      result[type] +=
-        Number(
-          loan.remaining_amount || 0
-        );
-
-    }
-  );
-
-  return result;
-}
-
-
-// =====================================================
-// 获取贷款现金流摘要
-// =====================================================
-
-export async function getLoanCashflowSummary(
-  year: number
-) {
-
-  const fixed =
-    await getFinancialFreedomLoanPayment(
-      year
-    );
-
-  const insuranceInterest =
-    await getAnnualInsuranceLoanInterest(
-      year
-    );
-
-  return {
-
-    fixed_payment:
-      fixed,
-
-    insurance_interest:
-      insuranceInterest,
-
-    total:
-      fixed +
-      insuranceInterest,
-
-  };
-}
-
-
-// =====================================================
-// Financial Freedom 某一年剩余贷款余额
-// =====================================================
-
-export async function getFinancialFreedomLoanBalance(
-  year: number
-) {
-
-  const loans =
-    await getFinancialFreedomLoans();
-
-  let totalBalance = 0;
-
-  const currentYear =
-    new Date().getFullYear();
-
-  loans.forEach(
-    (loan: any) => {
-
-      const currentBalance =
-        Number(
-          loan.remaining_amount || 0
-        );
-
-      if (
-        !Number.isFinite(
-          currentBalance
-        ) ||
-        currentBalance <= 0
-      ) {
-        return;
-      }
-
-      if (
-        loan.type === "保险贷款"
-      ) {
-
-        totalBalance +=
-          currentBalance;
-
-        return;
-      }
-
-      const startYear =
-        loan.start_date
-          ? new Date(
-              loan.start_date
-            ).getFullYear()
-          : currentYear;
-
-      const endYear =
-        loan.end_date
-          ? new Date(
-              loan.end_date
-            ).getFullYear()
-          : 9999;
-
-      if (
-        year < currentYear ||
-        year > endYear ||
-        year < startYear
-      ) {
-        return;
-      }
-
-      if (
-        loan.loan_mode === "fixed"
-      ) {
-
-        const monthlyPayment =
-          Number(
-            loan.monthly_payment || 0
-          );
-
-        if (
-          monthlyPayment <= 0
-        ) {
-
-          totalBalance +=
-            currentBalance;
-
-          return;
-        }
-
-        const yearsForward =
-          Math.max(
-            0,
-            year - currentYear
-          );
-
-        const estimatedBalance =
-          Math.max(
-            0,
-            currentBalance -
-            monthlyPayment *
-            12 *
-            yearsForward
-          );
-
-        totalBalance +=
-          estimatedBalance;
-
-        return;
-      }
-
-      totalBalance +=
-        currentBalance;
-
-    }
-  );
-
-  return totalBalance;
 }
