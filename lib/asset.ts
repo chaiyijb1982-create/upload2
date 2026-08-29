@@ -17,9 +17,23 @@ export type AssetHistory = {
 
   total_wealth?: number;
 
-  mainland_asset?: number;
+  // ===================================
+  // 数据库真实字段
+  // ===================================
+
+  cn_asset?: number;
+
+  cn_rate?: number;
+
+  cn_profit?: number;
 
   hk_asset?: number;
+
+  hk_rate?: number;
+
+  hk_profit?: number;
+
+  total_profit?: number;
 
   usd_cny?: number;
 
@@ -98,6 +112,62 @@ export type FixedIncomeAsset = {
   created_at?: string | null;
 
   [key: string]: any;
+
+};
+
+
+// =====================================
+// Performance 类型
+// =====================================
+
+export type PerformancePoint = {
+
+  date: string;
+
+  profit: number;
+
+  profitRate: number;
+
+};
+
+
+export type PerformanceHistory = {
+
+  mainland: {
+
+    daily: PerformancePoint[];
+
+    weekly: PerformancePoint[];
+
+    monthly: PerformancePoint[];
+
+    yearly: PerformancePoint[];
+
+  };
+
+  hk: {
+
+    daily: PerformancePoint[];
+
+    weekly: PerformancePoint[];
+
+    monthly: PerformancePoint[];
+
+    yearly: PerformancePoint[];
+
+  };
+
+  total: {
+
+    daily: PerformancePoint[];
+
+    weekly: PerformancePoint[];
+
+    monthly: PerformancePoint[];
+
+    yearly: PerformancePoint[];
+
+  };
 
 };
 
@@ -201,13 +271,9 @@ export async function getAssetHistory(): Promise<AssetHistory[]> {
 
 }
 
+
 // =====================================================
 // 获取 Holdings History 最近更新时间
-//
-// 用于 Dashboard / AssetSummary
-//
-// 来源：holdings_history.updated_at
-// updated_at 为数据库 UTC 时间
 // =====================================================
 
 export async function getLatestHoldingsHistoryUpdatedAt(): Promise<string | null> {
@@ -257,12 +323,10 @@ export async function getLatestHoldingsHistoryUpdatedAt(): Promise<string | null
   );
 
 }
+
+
 // =====================================================
 // 获取 Dashboard 当前持仓
-//
-// 只返回 active = true
-//
-// 资产管理页不要调用这个
 // =====================================================
 
 export async function getHoldings(): Promise<Holding[]> {
@@ -308,12 +372,6 @@ export async function getHoldings(): Promise<Holding[]> {
 
 // =====================================================
 // 获取全部 Holdings
-//
-// 给 Asset Management 使用
-//
-// 包括：
-// active
-// inactive
 // =====================================================
 
 export async function getAllHoldings(): Promise<Holding[]> {
@@ -493,13 +551,6 @@ export async function getHoldingById(
 
 // =====================================================
 // 获取单个资产
-//
-// code + platform
-//
-// 例如：
-// VOO + IBKR
-// VOO + ZA
-// 015736 + 天天基金
 // =====================================================
 
 export async function getHoldingByCodePlatform(
@@ -548,13 +599,6 @@ export async function getHoldingByCodePlatform(
 
 // =====================================================
 // 新增资产
-//
-// 注意：
-// 不传 id
-//
-// id 由 Supabase identity 自动生成
-//
-// UNIQUE(code, platform)
 // =====================================================
 
 export async function createHolding(
@@ -636,9 +680,7 @@ export async function createHolding(
   };
 
 
-  if (
-    !payload.code
-  ) {
+  if (!payload.code) {
 
     console.error(
       "createHolding: code 不能为空"
@@ -649,9 +691,7 @@ export async function createHolding(
   }
 
 
-  if (
-    !payload.platform
-  ) {
+  if (!payload.platform) {
 
     console.error(
       "createHolding: platform 不能为空"
@@ -697,9 +737,6 @@ export async function createHolding(
 
 // =====================================================
 // 编辑资产
-//
-// id 不允许修改
-// updated_at 数据库自动更新
 // =====================================================
 
 export async function updateHolding(
@@ -713,9 +750,7 @@ export async function updateHolding(
   > = {};
 
 
-  if (
-    holding.code !== undefined
-  ) {
+  if (holding.code !== undefined) {
 
     payload.code =
       String(
@@ -725,9 +760,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.name !== undefined
-  ) {
+  if (holding.name !== undefined) {
 
     payload.name =
       String(
@@ -737,9 +770,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.market !== undefined
-  ) {
+  if (holding.market !== undefined) {
 
     payload.market =
       String(
@@ -749,9 +780,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.category !== undefined
-  ) {
+  if (holding.category !== undefined) {
 
     payload.category =
       String(
@@ -761,9 +790,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.amount !== undefined
-  ) {
+  if (holding.amount !== undefined) {
 
     payload.amount =
       toNumber(
@@ -773,9 +800,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.cost !== undefined
-  ) {
+  if (holding.cost !== undefined) {
 
     payload.cost =
       Math.round(
@@ -787,9 +812,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.profit !== undefined
-  ) {
+  if (holding.profit !== undefined) {
 
     payload.profit =
       Math.round(
@@ -801,9 +824,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.profit_rate !== undefined
-  ) {
+  if (holding.profit_rate !== undefined) {
 
     payload.profit_rate =
       toNumber(
@@ -813,9 +834,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.currency !== undefined
-  ) {
+  if (holding.currency !== undefined) {
 
     payload.currency =
       String(
@@ -825,9 +844,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.nav !== undefined
-  ) {
+  if (holding.nav !== undefined) {
 
     payload.nav =
       toNumber(
@@ -837,9 +854,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.shares !== undefined
-  ) {
+  if (holding.shares !== undefined) {
 
     payload.shares =
       toNumber(
@@ -849,9 +864,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.platform !== undefined
-  ) {
+  if (holding.platform !== undefined) {
 
     payload.platform =
       String(
@@ -861,9 +874,7 @@ export async function updateHolding(
   }
 
 
-  if (
-    holding.active !== undefined
-  ) {
+  if (holding.active !== undefined) {
 
     payload.active =
       Boolean(
@@ -926,11 +937,6 @@ export async function updateHolding(
 
 // =====================================================
 // 停用资产
-//
-// 卖出以后：
-// active = false
-//
-// 不删除数据库记录
 // =====================================================
 
 export async function deactivateHolding(
@@ -944,10 +950,7 @@ export async function deactivateHolding(
     .from("holdings")
 
     .update({
-
-      active:
-        false,
-
+      active: false,
     })
 
     .eq(
@@ -975,22 +978,6 @@ export async function deactivateHolding(
 
 // =====================================================
 // 重新买入 / 激活资产
-//
-// 例如：
-//
-// VOO
-// 第一次买入
-// ↓
-// 卖出
-// ↓
-// active=false
-// ↓
-// 第二次买入
-// ↓
-// active=true
-//
-// code + platform
-// 仍然使用原来的记录
 // =====================================================
 
 export async function reactivateHolding(
@@ -1009,9 +996,7 @@ export async function reactivateHolding(
   };
 
 
-  if (
-    values?.amount !== undefined
-  ) {
+  if (values?.amount !== undefined) {
 
     payload.amount =
       toNumber(
@@ -1021,9 +1006,7 @@ export async function reactivateHolding(
   }
 
 
-  if (
-    values?.cost !== undefined
-  ) {
+  if (values?.cost !== undefined) {
 
     payload.cost =
       Math.round(
@@ -1035,9 +1018,7 @@ export async function reactivateHolding(
   }
 
 
-  if (
-    values?.profit !== undefined
-  ) {
+  if (values?.profit !== undefined) {
 
     payload.profit =
       Math.round(
@@ -1049,9 +1030,7 @@ export async function reactivateHolding(
   }
 
 
-  if (
-    values?.profit_rate !== undefined
-  ) {
+  if (values?.profit_rate !== undefined) {
 
     payload.profit_rate =
       toNumber(
@@ -1061,9 +1040,7 @@ export async function reactivateHolding(
   }
 
 
-  if (
-    values?.nav !== undefined
-  ) {
+  if (values?.nav !== undefined) {
 
     payload.nav =
       toNumber(
@@ -1073,9 +1050,7 @@ export async function reactivateHolding(
   }
 
 
-  if (
-    values?.shares !== undefined
-  ) {
+  if (values?.shares !== undefined) {
 
     payload.shares =
       toNumber(
@@ -1125,14 +1100,6 @@ export async function reactivateHolding(
 
 // =====================================================
 // 永久删除资产
-//
-// ⚠️ 和停用不同
-//
-// deactivate:
-// 保留记录
-//
-// delete:
-// 数据库真正删除
 // =====================================================
 
 export async function deleteHolding(
@@ -1221,7 +1188,6 @@ export async function getFixedIncomeTotal(): Promise<number> {
 
 
   return assets.reduce(
-
     (
       total,
       asset
@@ -1235,9 +1201,7 @@ export async function getFixedIncomeTotal(): Promise<number> {
       );
 
     },
-
     0
-
   );
 
 }
@@ -1245,8 +1209,6 @@ export async function getFixedIncomeTotal(): Promise<number> {
 
 // =====================================================
 // 计算真实资产配置比例
-//
-// 只统计 active holdings
 // =====================================================
 
 export async function getHoldingsAllocation() {
@@ -1313,19 +1275,15 @@ export async function getHoldingsAllocation() {
 
 
       if (
-
         category &&
-
         result[
           category as keyof typeof result
         ] !== undefined
-
       ) {
 
         result[
           category as keyof typeof result
         ] +=
-
           toNumber(
             item.amount
           );
@@ -1340,21 +1298,16 @@ export async function getHoldingsAllocation() {
     Object.values(
       result
     ).reduce(
-
       (
         sum,
         value
       ) =>
         sum + value,
-
       0
-
     );
 
 
-  if (
-    total === 0
-  ) {
+  if (total === 0) {
 
     return null;
 
@@ -1409,8 +1362,6 @@ export async function getHoldingsAllocation() {
 
 // =====================================================
 // Dashboard Total Wealth
-//
-// 这里只返回 asset_history.total_asset
 // =====================================================
 
 export async function getDashboardTotalWealth(): Promise<number> {
@@ -1470,8 +1421,6 @@ export async function getTotalWealthWithFixedIncome(): Promise<number> {
 
 // =====================================================
 // 获取资产平台汇总
-//
-// 只统计 active holdings
 // =====================================================
 
 export async function getHoldingsPlatformAllocation() {
@@ -1506,16 +1455,11 @@ export async function getHoldingsPlatformAllocation() {
 
 
   const platformMap: Record<
-
     string,
-
     {
       amount: number;
-
       count: number;
-
     }
-
   > = {};
 
 
@@ -1537,16 +1481,11 @@ export async function getHoldingsPlatformAllocation() {
         ) || 0;
 
 
-      if (
-        !platformMap[platform]
-      ) {
+      if (!platformMap[platform]) {
 
         platformMap[platform] = {
-
           amount: 0,
-
           count: 0,
-
         };
 
       }
@@ -1567,16 +1506,13 @@ export async function getHoldingsPlatformAllocation() {
     Object.values(
       platformMap
     ).reduce(
-
       (
         sum,
         item
       ) =>
         sum +
         item.amount,
-
       0
-
     );
 
 
@@ -1584,39 +1520,30 @@ export async function getHoldingsPlatformAllocation() {
     Object.entries(
       platformMap
     )
-
       .map(
         ([
           platform,
           item,
         ]) => ({
-
           platform,
-
           amount:
             item.amount,
-
           count:
             item.count,
-
           rate:
             total > 0
               ? item.amount /
                 total
               : 0,
-
         })
       )
-
       .sort(
-
         (
           a,
           b
         ) =>
           b.amount -
           a.amount
-
       );
 
 
@@ -1627,8 +1554,6 @@ export async function getHoldingsPlatformAllocation() {
 
 // =====================================================
 // 检查资产是否已经存在
-//
-// UNIQUE(code, platform)
 // =====================================================
 
 export async function holdingExists(
@@ -1675,22 +1600,13 @@ export async function holdingExists(
   );
 
 }
+
+
 // =====================================================
-// 获取 Holdings 历史比较
-//
-// 用于：
-// 投资Perf
-// TodayPerformanceTable
-//
-// 返回最近两个不同 snapshot_date 的持仓快照
+// 获取 Holdings History 最近两个不同 snapshot
 // =====================================================
 
 export async function getHoldingsHistoryComparison() {
-
-  console.log(
-    "===== getHoldingsHistoryComparison START ====="
-  );
-
 
   const {
     data,
@@ -1730,15 +1646,11 @@ export async function getHoldingsHistoryComparison() {
       }
     );
 
-  
-  // ===================================================
-  // Supabase 查询错误
-  // ===================================================
 
   if (error) {
 
     console.error(
-      "===== holdings_history QUERY ERROR =====",
+      "getHoldingsHistoryComparison error:",
       error
     );
 
@@ -1761,46 +1673,11 @@ export async function getHoldingsHistoryComparison() {
   }
 
 
-  // ===================================================
-  // 原始数据
-  // ===================================================
-
   const rows =
     data ?? [];
 
 
-  console.log(
-    "===== holdings_history ROW COUNT =====",
-    rows.length
-  );
-
-
-  console.log(
-    "===== holdings_history FIRST ROW =====",
-    rows[0]
-  );
-
-
-  console.log(
-    "===== holdings_history SNAPSHOT DATES =====",
-    rows.map(
-      (row: any) =>
-        row?.snapshot_date
-    )
-  );
-
-
-  // ===================================================
-  // 没有数据
-  // ===================================================
-
-  if (
-    rows.length === 0
-  ) {
-
-    console.error(
-      "===== holdings_history EMPTY ====="
-    );
+  if (rows.length === 0) {
 
     return {
 
@@ -1821,54 +1698,22 @@ export async function getHoldingsHistoryComparison() {
   }
 
 
-  // ===================================================
-  // 找出所有不同 snapshot_date
-  // ===================================================
-
   const dates =
     Array.from(
-
       new Set(
-
         rows
-
           .map(
-            (row: any) => {
-
-              const value =
-                row?.snapshot_date;
-
-              if (
-                value === null ||
-                value === undefined
-              ) {
-
-                return null;
-
-              }
-
-              return String(
-                value
-              ).trim();
-
-            }
+            (row: any) =>
+              row?.snapshot_date
+                ? String(
+                    row.snapshot_date
+                  ).trim()
+                : ""
           )
-
-          .filter(
-            (
-              value
-            ) =>
-              Boolean(value)
-          )
-
+          .filter(Boolean)
       )
-
     );
 
-
-  // ===================================================
-  // 日期排序
-  // ===================================================
 
   dates.sort(
     (
@@ -1881,82 +1726,38 @@ export async function getHoldingsHistoryComparison() {
   );
 
 
-  console.log(
-    "===== holdings_history DISTINCT DATES =====",
-    dates
-  );
-
-
-  // ===================================================
-  // 最近两个日期
-  // ===================================================
-
   const latestDate =
-    dates[0] ??
-    null;
+    dates[0] ?? null;
 
 
   const previousDate =
-    dates[1] ??
-    null;
+    dates[1] ?? null;
 
-
-  console.log(
-    "===== holdings_history COMPARISON DATES =====",
-    {
-      latestDate,
-      previousDate,
-    }
-  );
-
-
-  // ===================================================
-  // 最新快照
-  // ===================================================
 
   const latest =
     latestDate
-
       ? rows.filter(
           (row: any) =>
             String(
-              row?.snapshot_date ?? ""
+              row?.snapshot_date ??
+              ""
             ).trim() ===
             latestDate
         )
-
       : [];
 
-
-  // ===================================================
-  // 上一个快照
-  // ===================================================
 
   const previous =
     previousDate
-
       ? rows.filter(
           (row: any) =>
             String(
-              row?.snapshot_date ?? ""
+              row?.snapshot_date ??
+              ""
             ).trim() ===
             previousDate
         )
-
       : [];
-
-
-  console.log(
-    "===== holdings_history FINAL =====",
-    {
-      latestDate,
-      previousDate,
-      latestCount:
-        latest.length,
-      previousCount:
-        previous.length,
-    }
-  );
 
 
   return {
@@ -1968,6 +1769,577 @@ export async function getHoldingsHistoryComparison() {
     latest,
 
     previous,
+
+  };
+
+}
+
+
+// =====================================================
+// Performance
+//
+// 历史收益使用 asset_history
+//
+// 大陆：market = CN
+// 香港：market = HK / US / LU
+//
+// 注意：
+// asset_history 本身已经记录：
+// cn_profit
+// hk_profit
+// total_profit
+//
+// 每一期的收益额：
+// 当前累计 profit - 上一期累计 profit
+//
+// 收益率：
+// 本期收益额 / 上一期资产成本
+// =====================================================
+
+
+// =====================================================
+// 日期工具
+// =====================================================
+
+function parseLocalDate(
+  value: string
+): Date {
+
+  const [
+    year,
+    month,
+    day,
+  ] =
+    value
+      .slice(
+        0,
+        10
+      )
+      .split("-")
+      .map(Number);
+
+
+  return new Date(
+    year,
+    month - 1,
+    day
+  );
+
+}
+
+
+function dateKey(
+  date: Date
+): string {
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(
+      2,
+      "0"
+    );
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(
+      2,
+      "0"
+    );
+
+
+  return (
+    `${year}-${month}-${day}`
+  );
+
+}
+
+
+function startOfWeek(
+  date: Date
+): Date {
+
+  const result =
+    new Date(
+      date
+    );
+
+  const day =
+    result.getDay();
+
+  const diff =
+    day === 0
+      ? -6
+      : 1 - day;
+
+
+  result.setDate(
+    result.getDate() +
+    diff
+  );
+
+
+  result.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+
+  return result;
+
+}
+
+
+function endOfWeek(
+  date: Date
+): Date {
+
+  const result =
+    startOfWeek(
+      date
+    );
+
+
+  result.setDate(
+    result.getDate() +
+    6
+  );
+
+
+  return result;
+
+}
+
+
+// =====================================================
+// 根据日期选择每个周期最后一个 snapshot
+// =====================================================
+
+function groupLastSnapshots(
+  history: AssetHistory[],
+  type:
+    | "weekly"
+    | "monthly"
+    | "yearly"
+): AssetHistory[] {
+
+  const map =
+    new Map<
+      string,
+      AssetHistory
+    >();
+
+
+  for (
+    const row of history
+  ) {
+
+    if (
+      !row.snapshot_date
+    ) {
+
+      continue;
+
+    }
+
+
+    const date =
+      parseLocalDate(
+        row.snapshot_date
+      );
+
+
+    let key = "";
+
+
+    if (
+      type === "weekly"
+    ) {
+
+      const weekStart =
+        startOfWeek(
+          date
+        );
+
+
+      key =
+        dateKey(
+          weekStart
+        );
+
+    }
+    else if (
+      type === "monthly"
+    ) {
+
+      key =
+        `${date.getFullYear()}-${String(
+          date.getMonth() + 1
+        ).padStart(
+          2,
+          "0"
+        )}`;
+
+    }
+    else {
+
+      key =
+        String(
+          date.getFullYear()
+        );
+
+    }
+
+
+    const existing =
+      map.get(
+        key
+      );
+
+
+    if (
+      !existing ||
+      String(
+        existing.snapshot_date
+      ) <
+      String(
+        row.snapshot_date
+      )
+    ) {
+
+      map.set(
+        key,
+        row
+      );
+
+    }
+
+  }
+
+
+  return Array
+    .from(
+      map.values()
+    )
+    .sort(
+      (
+        a,
+        b
+      ) =>
+        String(
+          b.snapshot_date
+        )
+        .localeCompare(
+          String(
+            a.snapshot_date
+          )
+        )
+    );
+
+}
+
+
+// =====================================================
+// 计算 Performance
+// =====================================================
+
+function calculatePerformancePoints(
+  snapshots: AssetHistory[],
+  profitField:
+    | "cn_profit"
+    | "hk_profit"
+    | "total_profit",
+  assetField:
+    | "cn_asset"
+    | "hk_asset"
+    | "total_asset"
+): PerformancePoint[] {
+
+  const sorted =
+    [...snapshots]
+      .filter(
+        row =>
+          Boolean(
+            row.snapshot_date
+          )
+      )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          String(
+            a.snapshot_date
+          )
+          .localeCompare(
+            String(
+              b.snapshot_date
+            )
+          )
+      );
+
+
+  const result:
+    PerformancePoint[] = [];
+
+
+  for (
+    let i = 1;
+    i < sorted.length;
+    i++
+  ) {
+
+    const previous =
+      sorted[i - 1];
+
+
+    const current =
+      sorted[i];
+
+
+    const currentProfit =
+      toNumber(
+        current[
+          profitField
+        ]
+      );
+
+
+    const previousProfit =
+      toNumber(
+        previous[
+          profitField
+        ]
+      );
+
+
+    const profit =
+      currentProfit -
+      previousProfit;
+
+
+    const previousAsset =
+      toNumber(
+        previous[
+          assetField
+        ]
+      );
+
+
+    const previousCumulativeProfit =
+      previousProfit;
+
+
+    const previousCost =
+      previousAsset -
+      previousCumulativeProfit;
+
+
+    const profitRate =
+      previousCost > 0
+        ? (
+            profit /
+            previousCost
+          ) *
+          100
+        : 0;
+
+
+    result.push({
+
+      date:
+        String(
+          current.snapshot_date
+        ).slice(
+          0,
+          10
+        ),
+
+      profit:
+        Math.round(
+          profit
+        ),
+
+      profitRate,
+
+    });
+
+  }
+
+
+  return result.reverse();
+
+}
+
+
+// =====================================================
+// 获取 Performance 历史
+// =====================================================
+
+export async function getPerformanceHistory(): Promise<PerformanceHistory> {
+
+  const history =
+    await getAssetHistory();
+
+
+  if (
+    history.length === 0
+  ) {
+
+    return {
+
+      mainland: {
+        daily: [],
+        weekly: [],
+        monthly: [],
+        yearly: [],
+      },
+
+      hk: {
+        daily: [],
+        weekly: [],
+        monthly: [],
+        yearly: [],
+      },
+
+      total: {
+        daily: [],
+        weekly: [],
+        monthly: [],
+        yearly: [],
+      },
+
+    };
+
+  }
+
+
+  const weekly =
+    groupLastSnapshots(
+      history,
+      "weekly"
+    );
+
+
+  const monthly =
+    groupLastSnapshots(
+      history,
+      "monthly"
+    );
+
+
+  const yearly =
+    groupLastSnapshots(
+      history,
+      "yearly"
+    );
+
+
+  return {
+
+    mainland: {
+
+      daily:
+        calculatePerformancePoints(
+          history,
+          "cn_profit",
+          "cn_asset"
+        ),
+
+      weekly:
+        calculatePerformancePoints(
+          weekly,
+          "cn_profit",
+          "cn_asset"
+        ),
+
+      monthly:
+        calculatePerformancePoints(
+          monthly,
+          "cn_profit",
+          "cn_asset"
+        ),
+
+      yearly:
+        calculatePerformancePoints(
+          yearly,
+          "cn_profit",
+          "cn_asset"
+        ),
+
+    },
+
+
+    hk: {
+
+      daily:
+        calculatePerformancePoints(
+          history,
+          "hk_profit",
+          "hk_asset"
+        ),
+
+      weekly:
+        calculatePerformancePoints(
+          weekly,
+          "hk_profit",
+          "hk_asset"
+        ),
+
+      monthly:
+        calculatePerformancePoints(
+          monthly,
+          "hk_profit",
+          "hk_asset"
+        ),
+
+      yearly:
+        calculatePerformancePoints(
+          yearly,
+          "hk_profit",
+          "hk_asset"
+        ),
+
+    },
+
+
+    total: {
+
+      daily:
+        calculatePerformancePoints(
+          history,
+          "total_profit",
+          "total_asset"
+        ),
+
+      weekly:
+        calculatePerformancePoints(
+          weekly,
+          "total_profit",
+          "total_asset"
+        ),
+
+      monthly:
+        calculatePerformancePoints(
+          monthly,
+          "total_profit",
+          "total_asset"
+        ),
+
+      yearly:
+        calculatePerformancePoints(
+          yearly,
+          "total_profit",
+          "total_asset"
+        ),
+
+    },
 
   };
 

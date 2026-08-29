@@ -13,6 +13,25 @@ import { supabase } from "@/lib/supabase";
 // 类型
 // =====================================================
 
+type SortKey =
+  | "name"
+  | "market"
+  | "category"
+  | "platform"
+  | "shares"
+  | "nav"
+  | "amount"
+  | "cost"
+  | "profit"
+  | "profit_rate";
+
+type SortDirection = "asc" | "desc";
+
+type SortState = {
+  key: SortKey | null;
+  direction: SortDirection;
+};
+
 type Holding = {
 
   id: number;
@@ -327,6 +346,39 @@ export default function AssetManagementPage() {
     setSearch,
   ] = useState("");
 
+  // ===================================================
+  // 大陆 / 香港分别排序
+  //
+  // Mainland = market === CN
+  // Hong Kong = HK / US / GLOBAL
+  //
+  // 两个区域各自保存排序状态，互不影响
+  // ===================================================
+
+  const [
+    mainlandSort,
+    setMainlandSort,
+  ] = useState<SortState>({
+    key: "amount",
+    direction: "desc",
+  });
+
+  const [
+    hongKongSort,
+    setHongKongSort,
+  ] = useState<SortState>({
+    key: "amount",
+    direction: "desc",
+  });
+
+  const [
+    inactiveSort,
+    setInactiveSort,
+  ] = useState<SortState>({
+    key: "amount",
+    direction: "desc",
+  });
+
 
   // ===================================================
   // 单独保存停止更新状态时
@@ -577,14 +629,13 @@ export default function AssetManagementPage() {
   // 当前资产
   // ===================================================
 
-  const activeHoldings =
+  const filteredActiveHoldings =
     useMemo(() => {
 
       const keyword =
         search
           .trim()
           .toLowerCase();
-
 
       return holdings
 
@@ -597,32 +648,19 @@ export default function AssetManagementPage() {
           item => {
 
             if (!keyword) {
-
               return true;
-
             }
 
-
             return [
-
               item.code,
-
               item.name,
-
               item.market,
-
               item.category,
-
               item.platform,
-
               item.currency,
-
             ]
-
               .join(" ")
-
               .toLowerCase()
-
               .includes(keyword);
 
           }
@@ -633,6 +671,149 @@ export default function AssetManagementPage() {
       search,
     ]);
 
+  // ===================================================
+  // 大陆资产
+  // CN = 中国大陆
+  // ===================================================
+
+  const mainlandHoldings =
+    useMemo(
+      () =>
+        filteredActiveHoldings.filter(
+          item =>
+            String(item.market || "")
+              .trim()
+              .toUpperCase() === "CN"
+        ),
+      [filteredActiveHoldings]
+    );
+
+  // ===================================================
+  // 香港资产
+  //
+  // 当前 holdings 没有单独的“账户所在地”字段，
+  // 因此按现有 market 做分组：
+  // CN -> 大陆
+  // HK / US / GLOBAL -> 香港
+  // ===================================================
+
+  const hongKongHoldings =
+    useMemo(
+      () =>
+        filteredActiveHoldings.filter(
+          item =>
+            String(item.market || "")
+              .trim()
+              .toUpperCase() !== "CN"
+        ),
+      [filteredActiveHoldings]
+    );
+
+  // ===================================================
+  // 排序工具
+  // ===================================================
+
+  function compareHolding(
+    a: Holding,
+    b: Holding,
+    key: SortKey
+  ) {
+
+    const numericKeys: SortKey[] = [
+      "shares",
+      "nav",
+      "amount",
+      "cost",
+      "profit",
+      "profit_rate",
+    ];
+
+    if (numericKeys.includes(key)) {
+
+      const av =
+        numberValue(a[key]);
+
+      const bv =
+        numberValue(b[key]);
+
+      // 空值始终排在最后
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+
+      return av - bv;
+    }
+
+    const av =
+      String(a[key] ?? "")
+        .toLowerCase();
+
+    const bv =
+      String(b[key] ?? "")
+        .toLowerCase();
+
+    return av.localeCompare(
+      bv,
+      "zh-CN",
+      {
+        numeric: true,
+        sensitivity: "base",
+      }
+    );
+  }
+
+  function sortHoldings(
+    items: Holding[],
+    sort: SortState
+  ) {
+
+    if (!sort.key) {
+      return items;
+    }
+
+    return [...items].sort(
+      (a, b) => {
+
+        const result =
+          compareHolding(
+            a,
+            b,
+            sort.key!
+          );
+
+        return sort.direction === "asc"
+          ? result
+          : -result;
+
+      }
+    );
+  }
+
+  const sortedMainlandHoldings =
+    useMemo(
+      () =>
+        sortHoldings(
+          mainlandHoldings,
+          mainlandSort
+        ),
+      [
+        mainlandHoldings,
+        mainlandSort,
+      ]
+    );
+
+  const sortedHongKongHoldings =
+    useMemo(
+      () =>
+        sortHoldings(
+          hongKongHoldings,
+          hongKongSort
+        ),
+      [
+        hongKongHoldings,
+        hongKongSort,
+      ]
+    );
 
   // ===================================================
   // 已停用资产
@@ -641,60 +822,51 @@ export default function AssetManagementPage() {
   const inactiveHoldings =
     useMemo(() => {
 
-      return holdings
+      const keyword =
+        search
+          .trim()
+          .toLowerCase();
 
-        .filter(
-          item =>
-            item.active === false
-        )
+      const filtered =
+        holdings
 
-        .filter(
-          item => {
+          .filter(
+            item =>
+              item.active === false
+          )
 
-            const keyword =
-              search
-                .trim()
-                .toLowerCase();
+          .filter(
+            item => {
 
+              if (!keyword) {
+                return true;
+              }
 
-            if (!keyword) {
-
-              return true;
+              return [
+                item.code,
+                item.name,
+                item.market,
+                item.category,
+                item.platform,
+                item.currency,
+              ]
+                .join(" ")
+                .toLowerCase()
+                .includes(keyword);
 
             }
+          );
 
-
-            return [
-
-              item.code,
-
-              item.name,
-
-              item.market,
-
-              item.category,
-
-              item.platform,
-
-              item.currency,
-
-            ]
-
-              .join(" ")
-
-              .toLowerCase()
-
-              .includes(keyword);
-
-          }
-
-        );
+      return sortHoldings(
+        filtered,
+        inactiveSort
+      );
 
     }, [
       holdings,
       search,
+      inactiveSort,
     ]);
-
 
   // ===================================================
   // 当前资产总市值
@@ -703,7 +875,7 @@ export default function AssetManagementPage() {
   const activeTotal =
     useMemo(() => {
 
-      return activeHoldings.reduce(
+      return filteredActiveHoldings.reduce(
 
         (
           total,
@@ -725,7 +897,7 @@ export default function AssetManagementPage() {
       );
 
     }, [
-      activeHoldings,
+      filteredActiveHoldings,
     ]);
 
 
@@ -1587,7 +1759,7 @@ export default function AssetManagementPage() {
                 text-gray-900
               "
             >
-              {activeHoldings.length}
+              {filteredActiveHoldings.length}
             </span>
 
             <span
@@ -1655,7 +1827,6 @@ export default function AssetManagementPage() {
                 Current Holdings
               </h2>
 
-
               <p
                 className="
                   mt-0.5
@@ -1663,11 +1834,10 @@ export default function AssetManagementPage() {
                   text-gray-500
                 "
               >
-                当前正在持有的资产
+                当前正在持有的资产 · 大陆 / 香港分开管理
               </p>
 
             </div>
-
 
             <span
               className="
@@ -1680,7 +1850,7 @@ export default function AssetManagementPage() {
                 text-emerald-600
               "
             >
-              {activeHoldings.length} Assets
+              {filteredActiveHoldings.length} Assets
             </span>
 
           </div>
@@ -1700,7 +1870,7 @@ export default function AssetManagementPage() {
               Loading...
             </div>
 
-          ) : activeHoldings.length === 0 ? (
+          ) : filteredActiveHoldings.length === 0 ? (
 
             <div
               className="
@@ -1743,358 +1913,44 @@ export default function AssetManagementPage() {
 
           ) : (
 
-            <div
-              className="
-                overflow-x-auto
-              "
-            >
-
-              <table
-                className="
-                  min-w-[1450px]
-                  w-full
-                  text-sm
-                "
-              >
-
-                <thead>
-
-                  <tr
-                    className="
-                      border-b
-                      border-gray-100
-                      bg-gray-50/70
-                      text-xs
-                      text-gray-500
-                    "
-                  >
-
-                    <th className="px-5 py-3 text-left font-medium">
-                      Asset
-                    </th>
-
-                    <th className="px-4 py-3 text-left font-medium">
-                      Market
-                    </th>
-
-                    <th className="px-4 py-3 text-left font-medium">
-                      Category
-                    </th>
-
-                    <th className="px-4 py-3 text-left font-medium">
-                      Platform
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      Shares
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      NAV
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      Amount
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      Cost
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      Profit
-                    </th>
-
-                    <th className="px-4 py-3 text-right font-medium">
-                      Profit %
-                    </th>
-
-                    {/* =================================================
-                        停止更新
-                    ================================================= */}
-
-                    <th className="px-4 py-3 text-center font-medium">
-                      停止更新
-                    </th>
-
-                    <th className="px-5 py-3 text-right font-medium">
-                      Actions
-                    </th>
-
-                  </tr>
-
-                </thead>
-
-
-                <tbody>
-
-                  {activeHoldings.map(
-                    item => (
-
-                      <tr
-                        key={item.id}
-                        className="
-                          border-b
-                          border-gray-100
-                          last:border-b-0
-                          hover:bg-gray-50/60
-                        "
-                      >
-
-                        <td className="px-5 py-4">
-
-                          <div className="font-medium text-gray-900">
-                            {item.name || "—"}
-                          </div>
-
-                          <div className="mt-0.5 text-xs text-gray-400">
-                            {item.code || "—"}
-                          </div>
-
-                          <div className="mt-0.5 text-[11px] text-gray-400">
-                            {item.currency || "—"}
-                          </div>
-
-                        </td>
-
-
-                        <td className="px-4 py-4 text-gray-600">
-                          {item.market || "—"}
-                        </td>
-
-
-                        <td className="px-4 py-4">
-
-                          <span
-                            className="
-                              rounded-md
-                              bg-gray-100
-                              px-2
-                              py-1
-                              text-xs
-                              text-gray-600
-                            "
-                          >
-                            {item.category || "—"}
-                          </span>
-
-                        </td>
-
-
-                        <td className="px-4 py-4 text-gray-600">
-                          {item.platform || "—"}
-                        </td>
-
-
-                        <td
-                          className="
-                            px-4
-                            py-4
-                            text-right
-                            tabular-nums
-                            text-gray-700
-                          "
-                        >
-                          {formatNumber(item.shares)}
-                        </td>
-
-
-                        <td
-                          className="
-                            px-4
-                            py-4
-                            text-right
-                            tabular-nums
-                            text-gray-700
-                          "
-                        >
-                          {formatNumber(item.nav)}
-                        </td>
-
-
-                        <td
-                          className="
-                            px-4
-                            py-4
-                            text-right
-                            font-medium
-                            tabular-nums
-                            text-gray-900
-                          "
-                        >
-                          ¥{formatMoney(item.amount)}
-                        </td>
-
-
-                        <td
-                          className="
-                            px-4
-                            py-4
-                            text-right
-                            tabular-nums
-                            text-gray-600
-                          "
-                        >
-                          ¥{formatMoney(item.cost)}
-                        </td>
-
-
-                        <td
-                          className={`
-                            px-4
-                            py-4
-                            text-right
-                            font-medium
-                            tabular-nums
-                            ${getProfitClass(item.profit)}
-                          `}
-                        >
-                          ¥{formatMoney(item.profit)}
-                        </td>
-
-
-                        <td
-                          className={`
-                            px-4
-                            py-4
-                            text-right
-                            font-medium
-                            tabular-nums
-                            ${getProfitClass(item.profit_rate)}
-                          `}
-                        >
-                          {formatPercent(item.profit_rate)}
-                        </td>
-
-
-                        {/* =================================================
-                            停止更新 Checkbox
-                        ================================================= */}
-
-                        <td
-                          className="
-                            px-4
-                            py-4
-                            text-center
-                          "
-                        >
-
-                          <label
-                            className="
-                              inline-flex
-                              cursor-pointer
-                              items-center
-                              justify-center
-                            "
-                            title={
-                              item.skip_update
-                                ? "已停止自动更新，点击恢复"
-                                : "当前正常自动更新，点击停止"
-                            }
-                          >
-
-                            <input
-                              type="checkbox"
-
-                              checked={
-                                Boolean(
-                                  item.skip_update
-                                )
-                              }
-
-                              disabled={
-                                updatingSkipId ===
-                                item.id
-                              }
-
-                              onChange={() =>
-                                toggleSkipUpdate(
-                                  item
-                                )
-                              }
-
-                              className="
-                                h-4
-                                w-4
-                                cursor-pointer
-                                rounded
-                                border-gray-300
-                                text-gray-900
-                                focus:ring-2
-                                focus:ring-gray-300
-                                disabled:cursor-not-allowed
-                                disabled:opacity-50
-                              "
-                            />
-
-                          </label>
-
-                        </td>
-
-
-                        <td className="px-5 py-4">
-
-                          <div
-                            className="
-                              flex
-                              justify-end
-                              gap-2
-                            "
-                          >
-
-                            <button
-                              onClick={() =>
-                                openEdit(item)
-                              }
-                              className="
-                                rounded-md
-                                border
-                                border-gray-200
-                                bg-white
-                                px-3
-                                py-1.5
-                                text-xs
-                                font-medium
-                                text-gray-700
-                                hover:bg-gray-50
-                              "
-                            >
-                              编辑
-                            </button>
-
-
-                            <button
-                              onClick={() =>
-                                deactivateAsset(item)
-                              }
-                              className="
-                                rounded-md
-                                border
-                                border-amber-200
-                                bg-amber-50
-                                px-3
-                                py-1.5
-                                text-xs
-                                font-medium
-                                text-amber-700
-                                hover:bg-amber-100
-                              "
-                            >
-                              停用
-                            </button>
-
-                          </div>
-
-                        </td>
-
-                      </tr>
-
-                    )
-                  )}
-
-                </tbody>
-
-              </table>
+            <div className="space-y-6 p-4 md:p-5">
+
+              {/* =================================================
+                  大陆资产
+              ================================================= */}
+
+              <AssetRegionTable
+                title="大陆资产"
+                subtitle="Market = CN"
+                badgeCount={mainlandHoldings.length}
+                items={sortedMainlandHoldings}
+                sort={mainlandSort}
+                setSort={setMainlandSort}
+                openEdit={openEdit}
+                toggleSkipUpdate={toggleSkipUpdate}
+                deactivateAsset={deactivateAsset}
+                updatingSkipId={updatingSkipId}
+                emptyText="暂无大陆资产"
+              />
+
+
+              {/* =================================================
+                  香港资产
+              ================================================= */}
+
+              <AssetRegionTable
+                title="香港资产"
+                subtitle="Market = HK / US / GLOBAL"
+                badgeCount={hongKongHoldings.length}
+                items={sortedHongKongHoldings}
+                sort={hongKongSort}
+                setSort={setHongKongSort}
+                openEdit={openEdit}
+                toggleSkipUpdate={toggleSkipUpdate}
+                deactivateAsset={deactivateAsset}
+                updatingSkipId={updatingSkipId}
+                emptyText="暂无香港资产"
+              />
 
             </div>
 
@@ -2216,29 +2072,49 @@ export default function AssetManagementPage() {
                     "
                   >
 
-                    <th className="px-5 py-3 text-left font-medium">
-                      Asset
-                    </th>
+                    <SortableHeader
+                      label="Asset"
+                      sort={inactiveSort}
+                      sortKey="name"
+                      setter={setInactiveSort}
+                    />
 
-                    <th className="px-4 py-3 text-left font-medium">
-                      Market
-                    </th>
+                    <SortableHeader
+                      label="Market"
+                      sort={inactiveSort}
+                      sortKey="market"
+                      setter={setInactiveSort}
+                    />
 
-                    <th className="px-4 py-3 text-left font-medium">
-                      Category
-                    </th>
+                    <SortableHeader
+                      label="Category"
+                      sort={inactiveSort}
+                      sortKey="category"
+                      setter={setInactiveSort}
+                    />
 
-                    <th className="px-4 py-3 text-left font-medium">
-                      Platform
-                    </th>
+                    <SortableHeader
+                      label="Platform"
+                      sort={inactiveSort}
+                      sortKey="platform"
+                      setter={setInactiveSort}
+                    />
 
-                    <th className="px-4 py-3 text-right font-medium">
-                      Last Amount
-                    </th>
+                    <SortableHeader
+                      label="Last Amount"
+                      sort={inactiveSort}
+                      sortKey="amount"
+                      setter={setInactiveSort}
+                      align="right"
+                    />
 
-                    <th className="px-4 py-3 text-right font-medium">
-                      Profit
-                    </th>
+                    <SortableHeader
+                      label="Profit"
+                      sort={inactiveSort}
+                      sortKey="profit"
+                      setter={setInactiveSort}
+                      align="right"
+                    />
 
                     <th className="px-4 py-3 text-center font-medium">
                       停止更新
@@ -2971,6 +2847,707 @@ export default function AssetManagementPage() {
 
   );
 
+}
+
+
+// ===================================================
+// 排序按钮
+//
+// 第一次点击：升序
+// 第二次点击：降序
+// 第三次点击：恢复默认（Amount ↓）
+// ===================================================
+
+function toggleSort(
+  setter: React.Dispatch<
+    React.SetStateAction<SortState>
+  >,
+  key: SortKey
+) {
+
+  setter(previous => {
+
+    if (previous.key !== key) {
+      return {
+        key,
+        direction: "asc",
+      };
+    }
+
+    if (previous.direction === "asc") {
+      return {
+        key,
+        direction: "desc",
+      };
+    }
+
+    return {
+      key: "amount",
+      direction: "desc",
+    };
+
+  });
+}
+
+function sortIcon(
+  sort: SortState,
+  key: SortKey
+) {
+
+  if (sort.key !== key) {
+    return "↕";
+  }
+
+  return sort.direction === "asc"
+    ? "↑"
+    : "↓";
+}
+
+function SortableHeader({
+  label,
+  sort,
+  sortKey,
+  setter,
+  align = "left",
+}: {
+  label: string;
+  sort: SortState;
+  sortKey: SortKey;
+  setter: React.Dispatch<
+    React.SetStateAction<SortState>
+  >;
+  align?: "left" | "right" | "center";
+}) {
+
+  const alignment =
+    align === "right"
+      ? "justify-end"
+      : align === "center"
+        ? "justify-center"
+        : "justify-start";
+
+  return (
+    <th
+      className={`
+        px-4
+        py-3
+        ${align === "right" ? "text-right" : ""}
+        ${align === "center" ? "text-center" : "text-left"}
+        font-medium
+      `}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          toggleSort(
+            setter,
+            sortKey
+          )
+        }
+        title="点击排序：升序 → 降序 → 默认"
+        className={`
+          inline-flex
+          w-full
+          items-center
+          ${alignment}
+          gap-1
+          rounded-md
+          px-1
+          py-1
+          transition
+          hover:bg-gray-100
+          hover:text-gray-900
+        `}
+      >
+        <span>{label}</span>
+
+        <span
+          className={`
+            text-[11px]
+            ${
+              sort.key === sortKey
+                ? "font-bold text-gray-900"
+                : "text-gray-300"
+            }
+          `}
+        >
+          {sortIcon(
+            sort,
+            sortKey
+          )}
+        </span>
+      </button>
+    </th>
+  );
+}
+
+// =====================================================
+// 资产区域表格
+//
+// 大陆 / 香港使用同一套表格组件，
+// 但 sorting state 完全独立。
+// =====================================================
+
+function AssetRegionTable({
+  title,
+  subtitle,
+  badgeCount,
+  items,
+  sort,
+  setSort,
+  openEdit,
+  toggleSkipUpdate,
+  deactivateAsset,
+  updatingSkipId,
+  emptyText,
+}: {
+  title: string;
+  subtitle: string;
+  badgeCount: number;
+  items: Holding[];
+  sort: SortState;
+  setSort: React.Dispatch<
+    React.SetStateAction<SortState>
+  >;
+  openEdit: (
+    item: Holding
+  ) => void;
+  toggleSkipUpdate: (
+    item: Holding
+  ) => void;
+  deactivateAsset: (
+    item: Holding
+  ) => void;
+  updatingSkipId: number | null;
+  emptyText: string;
+}) {
+
+  return (
+    <div
+      className="
+        overflow-hidden
+        rounded-xl
+        border
+        border-gray-200
+        bg-white
+      "
+    >
+
+      <div
+        className="
+          flex
+          items-center
+          justify-between
+          border-b
+          border-gray-200
+          bg-gray-50/60
+          px-5
+          py-4
+        "
+      >
+
+        <div>
+
+          <div
+            className="
+              flex
+              items-center
+              gap-3
+            "
+          >
+
+            <h3
+              className="
+                text-base
+                font-semibold
+                text-gray-900
+              "
+            >
+              {title}
+            </h3>
+
+            <span
+              className="
+                rounded-full
+                bg-white
+                px-2.5
+                py-1
+                text-xs
+                font-medium
+                text-gray-500
+                ring-1
+                ring-gray-200
+              "
+            >
+              {badgeCount} Assets
+            </span>
+
+          </div>
+
+          <p
+            className="
+              mt-1
+              text-xs
+              text-gray-500
+            "
+          >
+            {subtitle}
+          </p>
+
+        </div>
+
+        <div
+          className="
+            hidden
+            text-xs
+            text-gray-400
+            sm:block
+          "
+        >
+          点击表头可排序
+        </div>
+
+      </div>
+
+
+      {items.length === 0 ? (
+
+        <div
+          className="
+            px-5
+            py-10
+            text-center
+            text-sm
+            text-gray-400
+          "
+        >
+          {emptyText}
+        </div>
+
+      ) : (
+
+        <div className="overflow-x-auto">
+
+          <table
+            className="
+              min-w-[1450px]
+              w-full
+              text-sm
+            "
+          >
+
+            <thead>
+
+              <tr
+                className="
+                  border-b
+                  border-gray-100
+                  bg-gray-50/70
+                  text-xs
+                  text-gray-500
+                "
+              >
+
+                <SortableHeader
+                  label="Asset"
+                  sort={sort}
+                  sortKey="name"
+                  setter={setSort}
+                />
+
+                <SortableHeader
+                  label="Market"
+                  sort={sort}
+                  sortKey="market"
+                  setter={setSort}
+                />
+
+                <SortableHeader
+                  label="Category"
+                  sort={sort}
+                  sortKey="category"
+                  setter={setSort}
+                />
+
+                <SortableHeader
+                  label="Platform"
+                  sort={sort}
+                  sortKey="platform"
+                  setter={setSort}
+                />
+
+                <SortableHeader
+                  label="Shares"
+                  sort={sort}
+                  sortKey="shares"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <SortableHeader
+                  label="NAV"
+                  sort={sort}
+                  sortKey="nav"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <SortableHeader
+                  label="Amount"
+                  sort={sort}
+                  sortKey="amount"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <SortableHeader
+                  label="Cost"
+                  sort={sort}
+                  sortKey="cost"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <SortableHeader
+                  label="Profit"
+                  sort={sort}
+                  sortKey="profit"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <SortableHeader
+                  label="Profit %"
+                  sort={sort}
+                  sortKey="profit_rate"
+                  setter={setSort}
+                  align="right"
+                />
+
+                <th
+                  className="
+                    px-4
+                    py-3
+                    text-center
+                    font-medium
+                  "
+                >
+                  停止更新
+                </th>
+
+                <th
+                  className="
+                    px-5
+                    py-3
+                    text-right
+                    font-medium
+                  "
+                >
+                  Actions
+                </th>
+
+              </tr>
+
+            </thead>
+
+
+            <tbody>
+
+              {items.map(
+                item => (
+
+                  <tr
+                    key={item.id}
+                    className="
+                      border-b
+                      border-gray-100
+                      last:border-b-0
+                      hover:bg-gray-50/60
+                    "
+                  >
+
+                    <td className="px-5 py-4">
+
+                      <div
+                        className="
+                          font-medium
+                          text-gray-900
+                        "
+                      >
+                        {item.name || "—"}
+                      </div>
+
+                      <div
+                        className="
+                          mt-0.5
+                          text-xs
+                          text-gray-400
+                        "
+                      >
+                        {item.code || "—"}
+                      </div>
+
+                      <div
+                        className="
+                          mt-0.5
+                          text-[11px]
+                          text-gray-400
+                        "
+                      >
+                        {item.currency || "—"}
+                      </div>
+
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-gray-600
+                      "
+                    >
+                      {item.market || "—"}
+                    </td>
+
+
+                    <td className="px-4 py-4">
+
+                      <span
+                        className="
+                          rounded-md
+                          bg-gray-100
+                          px-2
+                          py-1
+                          text-xs
+                          text-gray-600
+                        "
+                      >
+                        {item.category || "—"}
+                      </span>
+
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-gray-600
+                      "
+                    >
+                      {item.platform || "—"}
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-right
+                        tabular-nums
+                        text-gray-700
+                      "
+                    >
+                      {formatNumber(item.shares)}
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-right
+                        tabular-nums
+                        text-gray-700
+                      "
+                    >
+                      {formatNumber(item.nav)}
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-right
+                        font-medium
+                        tabular-nums
+                        text-gray-900
+                      "
+                    >
+                      ¥{formatMoney(item.amount)}
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-right
+                        tabular-nums
+                        text-gray-600
+                      "
+                    >
+                      ¥{formatMoney(item.cost)}
+                    </td>
+
+
+                    <td
+                      className={`
+                        px-4
+                        py-4
+                        text-right
+                        font-medium
+                        tabular-nums
+                        ${getProfitClass(item.profit)}
+                      `}
+                    >
+                      ¥{formatMoney(item.profit)}
+                    </td>
+
+
+                    <td
+                      className={`
+                        px-4
+                        py-4
+                        text-right
+                        font-medium
+                        tabular-nums
+                        ${getProfitClass(item.profit_rate)}
+                      `}
+                    >
+                      {formatPercent(item.profit_rate)}
+                    </td>
+
+
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-center
+                      "
+                    >
+
+                      <label
+                        className="
+                          inline-flex
+                          cursor-pointer
+                          items-center
+                          justify-center
+                        "
+                        title={
+                          item.skip_update
+                            ? "已停止自动更新，点击恢复"
+                            : "当前正常自动更新，点击停止"
+                        }
+                      >
+
+                        <input
+                          type="checkbox"
+                          checked={
+                            Boolean(
+                              item.skip_update
+                            )
+                          }
+                          disabled={
+                            updatingSkipId ===
+                            item.id
+                          }
+                          onChange={() =>
+                            toggleSkipUpdate(
+                              item
+                            )
+                          }
+                          className="
+                            h-4
+                            w-4
+                            cursor-pointer
+                            rounded
+                            border-gray-300
+                            text-gray-900
+                            focus:ring-2
+                            focus:ring-gray-300
+                            disabled:cursor-not-allowed
+                            disabled:opacity-50
+                          "
+                        />
+
+                      </label>
+
+                    </td>
+
+
+                    <td className="px-5 py-4">
+
+                      <div
+                        className="
+                          flex
+                          justify-end
+                          gap-2
+                        "
+                      >
+
+                        <button
+                          onClick={() =>
+                            openEdit(item)
+                          }
+                          className="
+                            rounded-md
+                            border
+                            border-gray-200
+                            bg-white
+                            px-3
+                            py-1.5
+                            text-xs
+                            font-medium
+                            text-gray-700
+                            hover:bg-gray-50
+                          "
+                        >
+                          编辑
+                        </button>
+
+
+                        <button
+                          onClick={() =>
+                            deactivateAsset(item)
+                          }
+                          className="
+                            rounded-md
+                            border
+                            border-amber-200
+                            bg-amber-50
+                            px-3
+                            py-1.5
+                            text-xs
+                            font-medium
+                            text-amber-700
+                            hover:bg-amber-100
+                          "
+                        >
+                          停用
+                        </button>
+
+                      </div>
+
+                    </td>
+
+                  </tr>
+
+                )
+              )}
+
+            </tbody>
+
+          </table>
+
+        </div>
+
+      )}
+
+    </div>
+  );
 }
 
 
