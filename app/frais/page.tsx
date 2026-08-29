@@ -1,3144 +1,451 @@
 "use client";
 
-import {
-  ChangeEvent,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-
-import { PDFDocument } from "pdf-lib";
-import { createWorker } from "tesseract.js";
+import { supabase } from "@/lib/supabase";
 
 // =====================================================
 // 类型
 // =====================================================
 
-type InvoiceStatus =
-  | "waiting"
-  | "processing"
-  | "success"
-  | "failed";
-
-type Invoice = {
+export type FraisInvoiceRow = {
   id: string;
-  file: File;
-  name: string;
+  file_name: string;
+  file_path: string;
+  file_hash: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
   amount: number | null;
-  ocrText: string;
-  status: InvoiceStatus;
+  project_name: string | null;
+  project_category: string | null;
+  ocr_text: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FraisProjectRule = {
+  id: string;
+  project_key: string;
+  project_name: string;
+  category: string | null;
+  allowed: boolean;
+  updated_at: string;
+};
+
+export type FraisUsedInvoice = {
+  id: string;
+  invoice_number: string | null;
+  file_hash: string | null;
+  invoice_date: string | null;
+  amount: number | null;
+  project_name: string | null;
+  project_category: string | null;
+  used_at: string;
+  frais_pdf_name: string;
+};
+
+export type FraisInvoice = {
+  id: string;
+  file_name: string;
+  file_path: string;
+  file_hash: string | null;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  amount: number | null;
+  project_name: string | null;
+  project_category: string | null;
+  ocr_text: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+
   selected: boolean;
-};
 
-type MatchResult = {
-  indexes: number[];
-  total: number;
-  difference: number;
+  // 前端显示
+  file_url?: string | null;
 };
 
 // =====================================================
-// 常量
+// Storage Bucket
+//
+// 如果你的 Bucket 不是 invoices，
+// 只修改这里。
 // =====================================================
 
-const DEFAULT_TARGET = 4590;
-const MAX_COMBINATION_RESULTS = 5;
+export const FRAIS_STORAGE_BUCKET = "invoices";
 
 // =====================================================
-// 金额格式
+// 获取所有发票
 // =====================================================
 
-function formatMoney(value: number) {
-  return value.toLocaleString("zh-CN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
-// =====================================================
-// 判断 PDF
-// =====================================================
-
-function isPdfFile(file: File) {
-  return (
-    file.type === "application/pdf" ||
-    file.name.toLowerCase().endsWith(".pdf")
-  );
-}
-
-// =====================================================
-// OCR 金额
-// =====================================================
-
-function parseAmountFromText(
-  text: string
-): number | null {
-  if (!text) {
-    return null;
-  }
-
-  const normalized = text
-    .replace(/，/g, ",")
-    .replace(/￥/g, "¥")
-    .replace(/\s+/g, " ");
-
-  const patterns = [
-    /价税合计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /价税合计[^\d]{0,30}([\d,]+(?:\.\d{1,2})?)/i,
-    /小写[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /合\s*计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /金额[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = normalized.match(pattern);
-
-    if (match?.[1]) {
-      const value = Number(
-        match[1].replace(/,/g, "")
-      );
-
-      if (
-        Number.isFinite(value) &&
-        value > 0
-      ) {
-        return value;
-      }
-    }
-  }
-
-  const matches = normalized.match(
-    /(?:¥|￥)?\s*\d[\d,]*\.\d{2}/g
-  );
-
-  if (!matches || matches.length === 0) {
-    return null;
-  }
-
-  const numbers = matches
-    .map((item) =>
-      Number(
-        item
-          .replace(/[¥￥\s]/g, "")
-          .replace(/,/g, "")
-      )
-    )
-    .filter(
-      (value) =>
-        Number.isFinite(value) &&
-        value > 0
-    );
-
-  if (numbers.length === 0) {
-    return null;
-  }
-
-  return Math.max(...numbers);
-}
-
-// =====================================================
-// PDF 转图片
-// =====================================================
-
-async function renderPdfToImages(
-  file: File
-): Promise<string[]> {
-  const pdfjsLib =
-    await import("pdfjs-dist");
-
-  const arrayBuffer =
-    await file.arrayBuffer();
-
-  const loadingTask =
-    pdfjsLib.getDocument({
-      data: arrayBuffer,
+export async function getFraisInvoices(): Promise<FraisInvoiceRow[]> {
+  const { data, error } = await supabase
+    .from("frais_invoices")
+    .select("*")
+    .order("created_at", {
+      ascending: false,
     });
 
-  const pdf =
-    await loadingTask.promise;
+  if (error) {
+    console.error(
+      "getFraisInvoices error:",
+      error
+    );
 
-  const images: string[] = [];
-
-  for (
-    let pageNumber = 1;
-    pageNumber <= pdf.numPages;
-    pageNumber++
-  ) {
-    const page =
-      await pdf.getPage(pageNumber);
-
-    const viewport =
-      page.getViewport({
-        scale: 2,
-      });
-
-    const canvas =
-      document.createElement("canvas");
-
-    const context =
-      canvas.getContext("2d");
-
-    if (!context) {
-      continue;
-    }
-
-    canvas.width =
-      Math.ceil(viewport.width);
-
-    canvas.height =
-      Math.ceil(viewport.height);
-
-    await page.render({
-      canvas,
-      canvasContext: context,
-      viewport,
-    }).promise;
-
-    images.push(
-      canvas.toDataURL(
-        "image/jpeg",
-        0.9
-      )
+    throw new Error(
+      `读取发票失败：${error.message}`
     );
   }
 
-  return images;
+  return (data || []) as FraisInvoiceRow[];
 }
 
 // =====================================================
-// OCR
+// 获取已经使用的发票
 // =====================================================
 
-async function recognizeInvoice(
-  file: File,
-  worker: any
-): Promise<string> {
-  if (isPdfFile(file)) {
-    const images =
-      await renderPdfToImages(file);
+export async function getFraisUsedInvoices(): Promise<FraisUsedInvoice[]> {
+  const { data, error } = await supabase
+    .from("frais_used_invoices")
+    .select("*")
+    .order("used_at", {
+      ascending: false,
+    });
 
-    if (images.length === 0) {
-      throw new Error(
-        "PDF 无法转换为图片"
-      );
-    }
+  if (error) {
+    console.error(
+      "getFraisUsedInvoices error:",
+      error
+    );
 
-    let result = "";
-
-    for (
-      let i = 0;
-      i < images.length;
-      i++
-    ) {
-      const pageResult =
-        await worker.recognize(
-          images[i]
-        );
-
-      result +=
-        "\n" +
-        pageResult.data.text;
-    }
-
-    return result;
+    throw new Error(
+      `读取已使用发票失败：${error.message}`
+    );
   }
 
-  const result =
-    await worker.recognize(file);
-
-  return result.data.text;
+  return (data || []) as FraisUsedInvoice[];
 }
 
 // =====================================================
-// 组合算法
+// 获取项目规则
 // =====================================================
 
-function findBestMatches(
-  invoices: Invoice[],
-  target: number
-): MatchResult[] {
-  const validInvoices =
-    invoices
-      .map((invoice, index) => ({
-        invoice,
-        index,
-      }))
-      .filter(
-        ({ invoice }) =>
-          invoice.amount !== null &&
-          invoice.amount > 0
-      );
+export async function getFraisProjectRules(): Promise<FraisProjectRule[]> {
+  const { data, error } = await supabase
+    .from("frais_project_rules")
+    .select("*")
+    .order("project_name", {
+      ascending: true,
+    });
 
-  if (
-    validInvoices.length === 0
-  ) {
-    return [];
-  }
-
-  const MAX_ITEMS = 36;
-
-  let workingItems =
-    validInvoices;
-
-  if (
-    workingItems.length >
-    MAX_ITEMS
-  ) {
-    workingItems =
-      [...workingItems]
-        .sort(
-          (a, b) =>
-            Math.abs(
-              (a.invoice.amount || 0) -
-                target
-            ) -
-            Math.abs(
-              (b.invoice.amount || 0) -
-                target
-            )
-        )
-        .slice(
-          0,
-          MAX_ITEMS
-        );
-  }
-
-  const mid =
-    Math.floor(
-      workingItems.length / 2
+  if (error) {
+    console.error(
+      "getFraisProjectRules error:",
+      error
     );
 
-  const left =
-    workingItems.slice(
-      0,
-      mid
+    throw new Error(
+      `读取项目规则失败：${error.message}`
+    );
+  }
+
+  return (data || []) as FraisProjectRule[];
+}
+
+// =====================================================
+// 判断是否已经使用
+//
+// 优先：invoice_number
+// 其次：file_hash
+// =====================================================
+
+export function isFraisInvoiceUsed(
+  invoice: FraisInvoiceRow,
+  usedInvoices: FraisUsedInvoice[]
+): boolean {
+  if (
+    invoice.invoice_number &&
+    invoice.invoice_number.trim()
+  ) {
+    const number =
+      invoice.invoice_number.trim();
+
+    return usedInvoices.some(
+      (used) =>
+        used.invoice_number &&
+        used.invoice_number.trim() === number
+    );
+  }
+
+  if (
+    invoice.file_hash &&
+    invoice.file_hash.trim()
+  ) {
+    const hash =
+      invoice.file_hash.trim();
+
+    return usedInvoices.some(
+      (used) =>
+        used.file_hash &&
+        used.file_hash.trim() === hash
+    );
+  }
+
+  return false;
+}
+
+// =====================================================
+// 项目是否允许
+// =====================================================
+
+export function isFraisProjectAllowed(
+  invoice: FraisInvoiceRow,
+  rules: FraisProjectRule[]
+): boolean {
+  // 没有项目名称
+  // 暂时保留，避免 OCR 数据消失
+  if (
+    !invoice.project_name ||
+    !invoice.project_name.trim()
+  ) {
+    return true;
+  }
+
+  const projectName =
+    invoice.project_name.trim();
+
+  // 精确项目名称
+  const exactRule =
+    rules.find(
+      (rule) =>
+        rule.project_name.trim() ===
+        projectName
     );
 
-  const right =
-    workingItems.slice(mid);
+  if (exactRule) {
+    return exactRule.allowed;
+  }
 
-  type Subset = {
-    total: number;
-    indexes: number[];
+  // project_key
+  const projectKey =
+    projectName
+      .toLowerCase()
+      .replace(/\s+/g, "");
+
+  const keyRule =
+    rules.find(
+      (rule) =>
+        rule.project_key
+          ?.toLowerCase()
+          .replace(/\s+/g, "") ===
+        projectKey
+    );
+
+  if (keyRule) {
+    return keyRule.allowed;
+  }
+
+  // 如果没有规则，默认允许
+  return true;
+}
+
+// =====================================================
+// 转换成前端 Invoice
+// =====================================================
+
+export function convertFraisInvoice(
+  invoice: FraisInvoiceRow
+): FraisInvoice {
+  return {
+    ...invoice,
+    selected: false,
+    file_url: null,
   };
+}
 
-  function generateSubsets(
-    array: typeof left
-  ): Subset[] {
-    const result: Subset[] = [
-      {
-        total: 0,
-        indexes: [],
-      },
-    ];
+// =====================================================
+// 获取 Storage 临时 URL
+//
+// file_path 可以是：
+// 1. 完整 http URL
+// 2. Storage path
+// =====================================================
 
-    for (
-      const item of array
-    ) {
-      const originalLength =
-        result.length;
-
-      for (
-        let i = 0;
-        i < originalLength;
-        i++
-      ) {
-        const subset =
-          result[i];
-
-        const amount =
-          item.invoice.amount || 0;
-
-        result.push({
-          total:
-            subset.total +
-            amount,
-
-          indexes: [
-            ...subset.indexes,
-            item.index,
-          ],
-        });
-      }
-
-      if (
-        result.length >
-        1_000_000
-      ) {
-        break;
-      }
-    }
-
-    return result;
+export async function getFraisFileUrl(
+  filePath: string
+): Promise<string | null> {
+  if (!filePath) {
+    return null;
   }
 
-  const leftSubsets =
-    generateSubsets(left);
-
-  const rightSubsets =
-    generateSubsets(right);
-
-  rightSubsets.sort(
-    (a, b) =>
-      a.total - b.total
-  );
-
-  function lowerBound(
-    array: Subset[],
-    targetValue: number
+  if (
+    filePath.startsWith("http://") ||
+    filePath.startsWith("https://")
   ) {
-    let low = 0;
-    let high =
-      array.length;
-
-    while (low < high) {
-      const middle =
-        Math.floor(
-          (low + high) / 2
-        );
-
-      if (
-        array[middle].total <
-        targetValue
-      ) {
-        low =
-          middle + 1;
-      } else {
-        high = middle;
-      }
-    }
-
-    return low;
+    return filePath;
   }
 
-  const matches: MatchResult[] =
-    [];
+  const {
+    data,
+    error,
+  } = await supabase.storage
+    .from(FRAIS_STORAGE_BUCKET)
+    .createSignedUrl(
+      filePath,
+      60 * 60
+    );
 
-  const seen =
-    new Set<string>();
+  if (error) {
+    console.error(
+      "createSignedUrl error:",
+      error
+    );
 
-  for (
-    const leftSubset of
-      leftSubsets
-  ) {
-    const wanted =
-      target -
-      leftSubset.total;
+    return null;
+  }
 
-    const position =
-      lowerBound(
-        rightSubsets,
-        wanted
-      );
+  return data?.signedUrl || null;
+}
 
-    const candidates = [
-      position - 2,
-      position - 1,
-      position,
-      position + 1,
-      position + 2,
-    ];
+// =====================================================
+// 保存项目规则
+// =====================================================
 
-    for (
-      const candidateIndex of
-        candidates
-    ) {
-      if (
-        candidateIndex < 0 ||
-        candidateIndex >=
-          rightSubsets.length
-      ) {
-        continue;
-      }
+export async function updateFraisProjectRule(
+  id: string,
+  allowed: boolean
+) {
+  const { error } =
+    await supabase
+      .from("frais_project_rules")
+      .update({
+        allowed,
+        updated_at:
+          new Date().toISOString(),
+      })
+      .eq("id", id);
 
-      const rightSubset =
-        rightSubsets[
-          candidateIndex
-        ];
+  if (error) {
+    console.error(
+      "updateFraisProjectRule error:",
+      error
+    );
 
-      const total =
-        leftSubset.total +
-        rightSubset.total;
+    throw new Error(
+      `保存项目规则失败：${error.message}`
+    );
+  }
+}
 
-      if (total <= 0) {
-        continue;
-      }
+// =====================================================
+// 记录已使用发票
+// =====================================================
 
-      const indexes = [
-        ...leftSubset.indexes,
-        ...rightSubset.indexes,
-      ].sort(
-        (a, b) => a - b
-      );
+export async function markFraisInvoicesUsed(
+  invoices: FraisInvoice[],
+  pdfName: string
+) {
+  const rows =
+    invoices.map((invoice) => ({
+      invoice_number:
+        invoice.invoice_number || null,
 
-      const key =
-        indexes.join(",");
+      file_hash:
+        invoice.file_hash || null,
 
-      if (seen.has(key)) {
-        continue;
-      }
+      invoice_date:
+        invoice.invoice_date || null,
 
-      seen.add(key);
+      amount:
+        invoice.amount ?? null,
 
-      matches.push({
-        indexes,
-        total,
+      project_name:
+        invoice.project_name || null,
+
+      project_category:
+        invoice.project_category || null,
+
+      used_at:
+        new Date().toISOString(),
+
+      frais_pdf_name:
+        pdfName,
+    }));
+
+  if (rows.length === 0) {
+    return;
+  }
+
+  const { error } =
+    await supabase
+      .from("frais_used_invoices")
+      .insert(rows);
+
+  if (error) {
+    console.error(
+      "markFraisInvoicesUsed error:",
+      error
+    );
+
+    throw new Error(
+      `记录已使用发票失败：${error.message}`
+    );
+  }
+}
+
+// =====================================================
+// PDF 历史
+// =====================================================
+
+export async function saveFraisPdfHistory(params: {
+  pdfName: string;
+  year: number;
+  month: number;
+  targetAmount: number;
+  actualAmount: number;
+  difference: number;
+  invoiceCount: number;
+  mode?: string;
+}) {
+  const { error } =
+    await supabase
+      .from("frais_pdf_history")
+      .insert({
+        pdf_name:
+          params.pdfName,
+
+        year:
+          params.year,
+
+        month:
+          params.month,
+
+        target_amount:
+          params.targetAmount,
+
+        actual_amount:
+          params.actualAmount,
+
         difference:
-          total - target,
+          params.difference,
+
+        invoice_count:
+          params.invoiceCount,
+
+        mode:
+          params.mode || "manual",
+
+        created_at:
+          new Date().toISOString(),
       });
-    }
-  }
 
-  matches.sort(
-    (a, b) => {
-      const difference =
-        Math.abs(
-          a.difference
-        ) -
-        Math.abs(
-          b.difference
-        );
-
-      if (
-        Math.abs(difference) >
-        0.000001
-      ) {
-        return difference;
-      }
-
-      return (
-        a.indexes.length -
-        b.indexes.length
-      );
-    }
-  );
-
-  return matches.slice(
-    0,
-    MAX_COMBINATION_RESULTS
-  );
-}
-
-// =====================================================
-// 创建 PDF
-// =====================================================
-
-async function createCombinedPdf(
-  invoices: Invoice[],
-  selectedIndexes: number[]
-): Promise<Uint8Array> {
-  const outputPdf =
-    await PDFDocument.create();
-
-  for (
-    const index of
-      selectedIndexes
-  ) {
-    const invoice =
-      invoices[index];
-
-    if (!invoice) {
-      continue;
-    }
-
-    const file =
-      invoice.file;
-
-    // =================================================
-    // PDF
-    // =================================================
-
-    if (isPdfFile(file)) {
-      const bytes =
-        await file.arrayBuffer();
-
-      const sourcePdf =
-        await PDFDocument.load(
-          bytes
-        );
-
-      const copiedPages =
-        await outputPdf.copyPages(
-          sourcePdf,
-          sourcePdf.getPageIndices()
-        );
-
-      for (
-        const page of
-          copiedPages
-      ) {
-        outputPdf.addPage(page);
-      }
-
-      continue;
-    }
-
-    // =================================================
-    // 图片
-    // =================================================
-
-    const bytes =
-      await file.arrayBuffer();
-
-    const isPng =
-      file.type ===
-        "image/png" ||
-      file.name
-        .toLowerCase()
-        .endsWith(".png");
-
-    const image =
-      isPng
-        ? await outputPdf.embedPng(
-            bytes
-          )
-        : await outputPdf.embedJpg(
-            bytes
-          );
-
-    const originalWidth =
-      image.width;
-
-    const originalHeight =
-      image.height;
-
-    const pageWidth = 595;
-    const pageHeight = 842;
-
-    const scale =
-      Math.min(
-        pageWidth /
-          originalWidth,
-        pageHeight /
-          originalHeight
-      );
-
-    const width =
-      originalWidth * scale;
-
-    const height =
-      originalHeight * scale;
-
-    const page =
-      outputPdf.addPage([
-        pageWidth,
-        pageHeight,
-      ]);
-
-    page.drawImage(
-      image,
-      {
-        x:
-          (pageWidth -
-            width) /
-          2,
-
-        y:
-          (pageHeight -
-            height) /
-          2,
-
-        width,
-        height,
-      }
-    );
-  }
-
-  return await outputPdf.save();
-}
-
-// =====================================================
-// 页面
-// =====================================================
-
-export default function FraisPage() {
-  const [
-    invoices,
-    setInvoices,
-  ] = useState<Invoice[]>([]);
-
-  const [
-    target,
-    setTarget,
-  ] = useState(
-    String(DEFAULT_TARGET)
-  );
-
-  const [
-    year,
-    setYear,
-  ] = useState(
-    String(
-      new Date().getFullYear()
-    )
-  );
-
-  const [
-    month,
-    setMonth,
-  ] = useState("");
-
-  const [
-    processing,
-    setProcessing,
-  ] = useState(false);
-
-  const [
-    processingText,
-    setProcessingText,
-  ] = useState("");
-
-  const [
-    matches,
-    setMatches,
-  ] = useState<MatchResult[]>([]);
-
-  const [
-    selectedMatchIndex,
-    setSelectedMatchIndex,
-  ] = useState(0);
-
-  const [
-    confirmed,
-    setConfirmed,
-  ] = useState(false);
-
-  const [
-    generating,
-    setGenerating,
-  ] = useState(false);
-
-  const [
-    generatedUrl,
-    setGeneratedUrl,
-  ] = useState<string | null>(
-    null
-  );
-
-  const [
-    generatedFileName,
-    setGeneratedFileName,
-  ] = useState("");
-
-  const inputRef =
-    useRef<HTMLInputElement>(
-      null
+  if (error) {
+    console.error(
+      "saveFraisPdfHistory error:",
+      error
     );
 
-  // =====================================================
-  // 清理 URL
-  // =====================================================
-
-  useEffect(() => {
-    return () => {
-      if (generatedUrl) {
-        URL.revokeObjectURL(
-          generatedUrl
-        );
-      }
-    };
-  }, [generatedUrl]);
-
-  // =====================================================
-  // 当前选择金额
-  // =====================================================
-
-  const manualTotal =
-    useMemo(() => {
-      return invoices
-        .filter(
-          (invoice) =>
-            invoice.selected &&
-            invoice.amount !== null
-        )
-        .reduce(
-          (sum, invoice) =>
-            sum +
-            (invoice.amount || 0),
-          0
-        );
-    }, [invoices]);
-
-  const selectedCount =
-    invoices.filter(
-      (invoice) =>
-        invoice.selected
-    ).length;
-
-  const targetValue =
-    Number(target) || 0;
-
-  const selectedDifference =
-    manualTotal -
-    targetValue;
-
-  // =====================================================
-  // 上传
-  // =====================================================
-
-  function handleFiles(
-    event: ChangeEvent<HTMLInputElement>
-  ) {
-    const files =
-      Array.from(
-        event.target.files || []
-      );
-
-    if (
-      files.length === 0
-    ) {
-      return;
-    }
-
-    const validFiles =
-      files.filter(
-        (file) =>
-          isPdfFile(file) ||
-          file.type.startsWith(
-            "image/"
-          )
-      );
-
-    const newInvoices =
-      validFiles.map(
-        (file, index) => ({
-          id:
-            `${Date.now()}-${index}-${Math.random()}`,
-
-          file,
-
-          name:
-            file.name,
-
-          amount:
-            null,
-
-          ocrText:
-            "",
-
-          status:
-            "waiting" as InvoiceStatus,
-
-          selected:
-            false,
-        })
-      );
-
-    setInvoices(
-      (previous) => [
-        ...previous,
-        ...newInvoices,
-      ]
-    );
-
-    setMatches([]);
-
-    setConfirmed(false);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-
-    event.target.value = "";
-  }
-
-  // =====================================================
-  // 删除
-  // =====================================================
-
-  function removeInvoice(
-    id: string
-  ) {
-    setInvoices(
-      (previous) =>
-        previous.filter(
-          (invoice) =>
-            invoice.id !== id
-        )
-    );
-
-    setMatches([]);
-
-    setConfirmed(false);
-
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-  }
-
-  // =====================================================
-  // 修改金额
-  // =====================================================
-
-  function updateAmount(
-    id: string,
-    value: string
-  ) {
-    if (value === "") {
-      setInvoices(
-        (previous) =>
-          previous.map(
-            (invoice) =>
-              invoice.id === id
-                ? {
-                    ...invoice,
-                    amount: null,
-                    status:
-                      "waiting",
-                  }
-                : invoice
-          )
-      );
-    } else {
-      const amount =
-        Number(value);
-
-      setInvoices(
-        (previous) =>
-          previous.map(
-            (invoice) =>
-              invoice.id === id
-                ? {
-                    ...invoice,
-                    amount:
-                      Number.isFinite(
-                        amount
-                      )
-                        ? amount
-                        : null,
-                    status:
-                      "success",
-                  }
-                : invoice
-          )
-      );
-    }
-
-    setMatches([]);
-
-    setConfirmed(false);
-
-    setGeneratedUrl(null);
-  }
-
-  // =====================================================
-  // OCR
-  // =====================================================
-
-  async function startOCR() {
-    if (
-      invoices.length === 0
-    ) {
-      alert(
-        "请先上传发票。"
-      );
-      return;
-    }
-
-    setProcessing(true);
-
-    setConfirmed(false);
-
-    setMatches([]);
-
-    setGeneratedUrl(null);
-
-    let worker: any = null;
-
-    try {
-      setProcessingText(
-        "正在启动 OCR..."
-      );
-
-      worker =
-        await createWorker(
-          "chi_sim+eng",
-          1,
-          {
-            logger: (
-              message: any
-            ) => {
-              if (
-                message.status ===
-                "recognizing text"
-              ) {
-                const progress =
-                  Math.round(
-                    (message.progress ||
-                      0) *
-                      100
-                  );
-
-                setProcessingText(
-                  `正在 OCR：${progress}%`
-                );
-              }
-            },
-          }
-        );
-
-      for (
-        let i = 0;
-        i < invoices.length;
-        i++
-      ) {
-        const invoice =
-          invoices[i];
-
-        setInvoices(
-          (previous) =>
-            previous.map(
-              (item) =>
-                item.id ===
-                invoice.id
-                  ? {
-                      ...item,
-                      status:
-                        "processing",
-                    }
-                  : item
-            )
-        );
-
-        setProcessingText(
-          `正在识别第 ${
-            i + 1
-          } / ${
-            invoices.length
-          } 张：${invoice.name}`
-        );
-
-        try {
-          const text =
-            await recognizeInvoice(
-              invoice.file,
-              worker
-            );
-
-          const amount =
-            parseAmountFromText(
-              text
-            );
-
-          setInvoices(
-            (previous) =>
-              previous.map(
-                (item) =>
-                  item.id ===
-                  invoice.id
-                    ? {
-                        ...item,
-                        amount,
-                        ocrText:
-                          text,
-                        status:
-                          amount !==
-                          null
-                            ? "success"
-                            : "failed",
-                      }
-                    : item
-              )
-          );
-        } catch (error) {
-          console.error(
-            `OCR failed: ${invoice.name}`,
-            error
-          );
-
-          setInvoices(
-            (previous) =>
-              previous.map(
-                (item) =>
-                  item.id ===
-                  invoice.id
-                    ? {
-                        ...item,
-                        status:
-                          "failed",
-                      }
-                    : item
-              )
-          );
-        }
-      }
-
-      setProcessingText(
-        "OCR 识别完成"
-      );
-    } catch (error) {
-      console.error(error);
-
-      alert(
-        "OCR 初始化失败，请检查 tesseract.js。"
-      );
-    } finally {
-      if (worker) {
-        try {
-          await worker.terminate();
-        } catch {}
-      }
-
-      setProcessing(false);
-    }
-  }
-
-  // =====================================================
-  // 计算组合
-  // =====================================================
-
-  function calculateMatches() {
-    const targetValue =
-      Number(target);
-
-    if (
-      !Number.isFinite(
-        targetValue
-      ) ||
-      targetValue <= 0
-    ) {
-      alert(
-        "请输入正确的目标金额。"
-      );
-      return;
-    }
-
-    const result =
-      findBestMatches(
-        invoices,
-        targetValue
-      );
-
-    if (
-      result.length === 0
-    ) {
-      alert(
-        "没有找到可计算的发票，请先 OCR 或手动填写金额。"
-      );
-      return;
-    }
-
-    setMatches(result);
-
-    setSelectedMatchIndex(0);
-
-    setConfirmed(false);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-
-    const best =
-      result[0];
-
-    const selectedIds =
-      new Set(
-        best.indexes.map(
-          (index) =>
-            invoices[index]?.id
-        )
-      );
-
-    setInvoices(
-      (previous) =>
-        previous.map(
-          (invoice) => ({
-            ...invoice,
-            selected:
-              selectedIds.has(
-                invoice.id
-              ),
-          })
-        )
+    throw new Error(
+      `保存 PDF 历史失败：${error.message}`
     );
   }
-
-  // =====================================================
-  // 选择方案
-  // =====================================================
-
-  function chooseMatch(
-    matchIndex: number
-  ) {
-    const match =
-      matches[matchIndex];
-
-    if (!match) {
-      return;
-    }
-
-    setSelectedMatchIndex(
-      matchIndex
-    );
-
-    const selectedIds =
-      new Set(
-        match.indexes.map(
-          (invoiceIndex) =>
-            invoices[
-              invoiceIndex
-            ]?.id
-        )
-      );
-
-    setInvoices(
-      (previous) =>
-        previous.map(
-          (invoice) => ({
-            ...invoice,
-            selected:
-              selectedIds.has(
-                invoice.id
-              ),
-          })
-        )
-    );
-
-    setConfirmed(false);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-  }
-
-  // =====================================================
-  // 手动选择
-  // =====================================================
-
-  function toggleInvoice(
-    id: string
-  ) {
-    setInvoices(
-      (previous) =>
-        previous.map(
-          (invoice) =>
-            invoice.id === id
-              ? {
-                  ...invoice,
-                  selected:
-                    !invoice.selected,
-                }
-              : invoice
-        )
-    );
-
-    setConfirmed(false);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-  }
-
-  // =====================================================
-  // 确认
-  // =====================================================
-
-  function confirmSelection() {
-    const selected =
-      invoices.filter(
-        (invoice) =>
-          invoice.selected
-      );
-
-    if (
-      selected.length === 0
-    ) {
-      alert(
-        "请先选择发票。"
-      );
-      return;
-    }
-
-    const invalid =
-      selected.some(
-        (invoice) =>
-          invoice.amount === null ||
-          invoice.amount <= 0
-      );
-
-    if (invalid) {
-      alert(
-        "当前选择中存在没有金额的发票，请先填写金额。"
-      );
-      return;
-    }
-
-    const total =
-      selected.reduce(
-        (sum, invoice) =>
-          sum +
-          (invoice.amount || 0),
-        0
-      );
-
-    const targetValue =
-      Number(target);
-
-    const difference =
-      total -
-      targetValue;
-
-    const message =
-      `确认使用 ${selected.length} 张发票？\n\n` +
-      `目标金额：${formatMoney(
-        targetValue
-      )}\n` +
-      `发票合计：${formatMoney(
-        total
-      )}\n` +
-      `差额：${
-        difference >=
-        0
-          ? "+"
-          : ""
-      }${formatMoney(
-        difference
-      )}\n\n` +
-      `确认后可以生成 PDF。`;
-
-    if (
-      !window.confirm(
-        message
-      )
-    ) {
-      return;
-    }
-
-    setConfirmed(true);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-
-    setProcessingText(
-      "发票组合已确认，可以生成 PDF。"
-    );
-  }
-
-  // =====================================================
-  // 生成 PDF
-  // =====================================================
-
-  async function generatePdf() {
-    console.log(
-      "开始生成 PDF"
-    );
-
-    // ---------------------------------------------------
-    // 1. 检查确认
-    // ---------------------------------------------------
-
-    if (!confirmed) {
-      alert(
-        "请先点击「确认这组发票」。"
-      );
-      return;
-    }
-
-    // ---------------------------------------------------
-    // 2. 检查年份
-    // ---------------------------------------------------
-
-    if (!year.trim()) {
-      alert(
-        "请填写年份。"
-      );
-      return;
-    }
-
-    // ---------------------------------------------------
-    // 3. 检查月份
-    // ---------------------------------------------------
-
-    if (!month) {
-      alert(
-        "请选择月份。"
-      );
-      return;
-    }
-
-    // ---------------------------------------------------
-    // 4. 找出选择的发票
-    // ---------------------------------------------------
-
-    const selectedIndexes =
-      invoices
-        .map(
-          (invoice, index) => ({
-            invoice,
-            index,
-          })
-        )
-        .filter(
-          ({ invoice }) =>
-            invoice.selected
-        )
-        .map(
-          ({ index }) =>
-            index
-        );
-
-    if (
-      selectedIndexes.length ===
-      0
-    ) {
-      alert(
-        "没有选择发票。"
-      );
-      return;
-    }
-
-    // ---------------------------------------------------
-    // 5. 防止重复点击
-    // ---------------------------------------------------
-
-    if (generating) {
-      return;
-    }
-
-    setGenerating(true);
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-
-    try {
-      setProcessingText(
-        "正在生成 PDF，请稍候..."
-      );
-
-      // -------------------------------------------------
-      // 真正生成 PDF
-      // -------------------------------------------------
-
-      const pdfBytes =
-        await createCombinedPdf(
-          invoices,
-          selectedIndexes
-        );
-
-      if (
-        !pdfBytes ||
-        pdfBytes.length === 0
-      ) {
-        throw new Error(
-          "生成的 PDF 是空文件"
-        );
-      }
-
-      // -------------------------------------------------
-      // 转成标准 ArrayBuffer
-      // -------------------------------------------------
-
-      const pdfBuffer =
-        new ArrayBuffer(
-          pdfBytes.byteLength
-        );
-
-      new Uint8Array(
-        pdfBuffer
-      ).set(pdfBytes);
-
-      // -------------------------------------------------
-      // Blob
-      // -------------------------------------------------
-
-      const blob =
-        new Blob(
-          [pdfBuffer],
-          {
-            type:
-              "application/pdf",
-          }
-        );
-
-      if (blob.size === 0) {
-        throw new Error(
-          "PDF 文件大小为 0"
-        );
-      }
-
-      // -------------------------------------------------
-      // URL
-      // -------------------------------------------------
-
-      const url =
-        URL.createObjectURL(
-          blob
-        );
-
-      const fileName =
-        `frais ${year.trim()} ${String(
-          month
-        ).padStart(
-          2,
-          "0"
-        )}.pdf`;
-
-      setGeneratedUrl(url);
-
-      setGeneratedFileName(
-        fileName
-      );
-
-      setProcessingText(
-        "✓ PDF 生成完成，可以下载。"
-      );
-    } catch (error) {
-      console.error(
-        "PDF generation error:",
-        error
-      );
-
-      alert(
-        `PDF 生成失败：${
-          error instanceof Error
-            ? error.message
-            : "未知错误"
-        }`
-      );
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  // =====================================================
-  // 下载 PDF
-  // =====================================================
-
-  function downloadPdf() {
-    if (
-      !generatedUrl ||
-      !generatedFileName
-    ) {
-      alert(
-        "请先生成 PDF。"
-      );
-      return;
-    }
-
-    const link =
-      document.createElement(
-        "a"
-      );
-
-    link.href =
-      generatedUrl;
-
-    link.download =
-      generatedFileName;
-
-    document.body.appendChild(
-      link
-    );
-
-    link.click();
-
-    document.body.removeChild(
-      link
-    );
-  }
-
-  // =====================================================
-  // 清空
-  // =====================================================
-
-  function clearAll() {
-    if (
-      !window.confirm(
-        "确定清空全部发票吗？"
-      )
-    ) {
-      return;
-    }
-
-    setInvoices([]);
-
-    setMatches([]);
-
-    setConfirmed(false);
-
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
-    setGeneratedUrl(null);
-
-    setGeneratedFileName("");
-
-    setProcessingText("");
-  }
-
-  // =====================================================
-  // UI
-  // =====================================================
-
-  return (
-    <div
-      style={{
-        minHeight:
-          "100vh",
-        background:
-          "#f5f7fa",
-        padding:
-          "32px",
-        color:
-          "#111827",
-      }}
-    >
-      <div
-        style={{
-          maxWidth:
-            "1200px",
-          margin:
-            "0 auto",
-        }}
-      >
-        {/* ================================================= */}
-        {/* 标题 */}
-        {/* ================================================= */}
-
-        <div
-          style={{
-            marginBottom:
-              "28px",
-          }}
-        >
-          <h1
-            style={{
-              fontSize:
-                "30px",
-              fontWeight:
-                700,
-              margin:
-                "0 0 8px",
-            }}
-          >
-            FRAIS 发票匹配
-          </h1>
-
-          <div
-            style={{
-              color:
-                "#6b7280",
-            }}
-          >
-            批量上传发票 → OCR 识别 → 自动寻找目标金额组合 → 人工确认 → 合并 PDF
-          </div>
-        </div>
-
-        {/* ================================================= */}
-        {/* ① 设置 */}
-        {/* ================================================= */}
-
-        <div
-          style={{
-            background:
-              "#ffffff",
-            borderRadius:
-              "16px",
-            padding:
-              "24px",
-            marginBottom:
-              "20px",
-            boxShadow:
-              "0 2px 10px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h2
-            style={{
-              margin:
-                "0 0 18px",
-              fontSize:
-                "19px",
-            }}
-          >
-            ① 设置
-          </h2>
-
-          <div
-            style={{
-              display:
-                "grid",
-              gridTemplateColumns:
-                "repeat(3, 1fr)",
-              gap:
-                "16px",
-            }}
-          >
-            {/* 目标金额 */}
-
-            <div>
-              <label
-                style={{
-                  display:
-                    "block",
-                  marginBottom:
-                    "7px",
-                  fontWeight:
-                    600,
-                }}
-              >
-                目标金额
-              </label>
-
-              <input
-                value={target}
-                onChange={(e) => {
-                  setTarget(
-                    e.target.value
-                  );
-                  setConfirmed(
-                    false
-                  );
-                  setGeneratedUrl(
-                    null
-                  );
-                }}
-                type="number"
-                step="0.01"
-                style={{
-                  width:
-                    "100%",
-                  padding:
-                    "11px 12px",
-                  border:
-                    "1px solid #d1d5db",
-                  borderRadius:
-                    "8px",
-                  fontSize:
-                    "16px",
-                  boxSizing:
-                    "border-box",
-                }}
-              />
-            </div>
-
-            {/* 年份 */}
-
-            <div>
-              <label
-                style={{
-                  display:
-                    "block",
-                  marginBottom:
-                    "7px",
-                  fontWeight:
-                    600,
-                }}
-              >
-                年份
-              </label>
-
-              <input
-                value={year}
-                onChange={(e) => {
-                  setYear(
-                    e.target.value
-                  );
-                  setGeneratedUrl(
-                    null
-                  );
-                }}
-                type="number"
-                placeholder="2026"
-                style={{
-                  width:
-                    "100%",
-                  padding:
-                    "11px 12px",
-                  border:
-                    "1px solid #d1d5db",
-                  borderRadius:
-                    "8px",
-                  fontSize:
-                    "16px",
-                  boxSizing:
-                    "border-box",
-                }}
-              />
-            </div>
-
-            {/* 月份 */}
-
-            <div>
-              <label
-                style={{
-                  display:
-                    "block",
-                  marginBottom:
-                    "7px",
-                  fontWeight:
-                    600,
-                }}
-              >
-                月份
-              </label>
-
-              <select
-                value={month}
-                onChange={(e) => {
-                  setMonth(
-                    e.target.value
-                  );
-                  setGeneratedUrl(
-                    null
-                  );
-                }}
-                style={{
-                  width:
-                    "100%",
-                  padding:
-                    "11px 12px",
-                  border:
-                    "1px solid #d1d5db",
-                  borderRadius:
-                    "8px",
-                  fontSize:
-                    "16px",
-                  boxSizing:
-                    "border-box",
-                  background:
-                    "#ffffff",
-                }}
-              >
-                <option value="">
-                  请选择月份
-                </option>
-
-                {Array.from(
-                  {
-                    length: 12,
-                  },
-                  (_, i) => (
-                    <option
-                      key={i + 1}
-                      value={String(
-                        i + 1
-                      )}
-                    >
-                      {i + 1} 月
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
-          </div>
-
-          <div
-            style={{
-              marginTop:
-                "16px",
-              padding:
-                "12px 14px",
-              background:
-                "#f3f4f6",
-              borderRadius:
-                "8px",
-              fontSize:
-                "14px",
-              color:
-                "#4b5563",
-            }}
-          >
-            最终文件名：
-
-            <strong
-              style={{
-                color:
-                  "#111827",
-                marginLeft:
-                  "5px",
-              }}
-            >
-              frais{" "}
-              {year || "XXXX"}{" "}
-              {month
-                ? String(
-                    month
-                  ).padStart(
-                    2,
-                    "0"
-                  )
-                : "XX"}
-              .pdf
-            </strong>
-          </div>
-        </div>
-
-        {/* ================================================= */}
-        {/* ② 上传 */}
-        {/* ================================================= */}
-
-        <div
-          style={{
-            background:
-              "#ffffff",
-            borderRadius:
-              "16px",
-            padding:
-              "24px",
-            marginBottom:
-              "20px",
-            boxShadow:
-              "0 2px 10px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h2
-            style={{
-              margin:
-                "0 0 18px",
-              fontSize:
-                "19px",
-            }}
-          >
-            ② 上传发票
-          </h2>
-
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            accept="application/pdf,image/png,image/jpeg,image/jpg"
-            onChange={
-              handleFiles
-            }
-            style={{
-              display:
-                "none",
-            }}
-          />
-
-          <button
-            type="button"
-            onClick={() =>
-              inputRef.current?.click()
-            }
-            style={{
-              width:
-                "100%",
-              padding:
-                "22px",
-              border:
-                "2px dashed #9ca3af",
-              borderRadius:
-                "12px",
-              background:
-                "#fafafa",
-              cursor:
-                "pointer",
-              fontSize:
-                "16px",
-              fontWeight:
-                600,
-            }}
-          >
-            ＋ 一次选择多张发票
-          </button>
-
-          <div
-            style={{
-              marginTop:
-                "10px",
-              fontSize:
-                "13px",
-              color:
-                "#6b7280",
-            }}
-          >
-            支持 PDF、JPG、JPEG、PNG，可以一次选择多张。
-          </div>
-
-          {invoices.length >
-            0 && (
-            <div
-              style={{
-                marginTop:
-                  "18px",
-                display:
-                  "flex",
-                gap:
-                  "10px",
-              }}
-            >
-              <button
-                type="button"
-                onClick={
-                  startOCR
-                }
-                disabled={
-                  processing
-                }
-                style={{
-                  padding:
-                    "11px 18px",
-                  border:
-                    "none",
-                  borderRadius:
-                    "8px",
-                  background:
-                    processing
-                      ? "#9ca3af"
-                      : "#111827",
-                  color:
-                    "#ffffff",
-                  cursor:
-                    processing
-                      ? "not-allowed"
-                      : "pointer",
-                  fontWeight:
-                    600,
-                }}
-              >
-                {processing
-                  ? "正在 OCR..."
-                  : "开始识别金额"}
-              </button>
-
-              <button
-                type="button"
-                onClick={
-                  clearAll
-                }
-                disabled={
-                  processing
-                }
-                style={{
-                  padding:
-                    "11px 18px",
-                  border:
-                    "1px solid #d1d5db",
-                  borderRadius:
-                    "8px",
-                  background:
-                    "#ffffff",
-                  cursor:
-                    processing
-                      ? "not-allowed"
-                      : "pointer",
-                }}
-              >
-                清空全部
-              </button>
-            </div>
-          )}
-
-          {processingText && (
-            <div
-              style={{
-                marginTop:
-                  "14px",
-                padding:
-                  "12px",
-                background:
-                  "#eff6ff",
-                borderRadius:
-                  "8px",
-                color:
-                  "#1d4ed8",
-              }}
-            >
-              {processingText}
-            </div>
-          )}
-        </div>
-
-        {/* ================================================= */}
-        {/* ③ 发票列表 */}
-        {/* ================================================= */}
-
-        {invoices.length >
-          0 && (
-          <div
-            style={{
-              background:
-                "#ffffff",
-              borderRadius:
-                "16px",
-              padding:
-                "24px",
-              marginBottom:
-                "20px",
-              boxShadow:
-                "0 2px 10px rgba(0,0,0,0.05)",
-            }}
-          >
-            <h2
-              style={{
-                margin:
-                  "0 0 18px",
-                fontSize:
-                  "19px",
-              }}
-            >
-              ③ 发票识别结果
-            </h2>
-
-            <div
-              style={{
-                overflowX:
-                  "auto",
-              }}
-            >
-              <table
-                style={{
-                  width:
-                    "100%",
-                  borderCollapse:
-                    "collapse",
-                }}
-              >
-                <thead>
-                  <tr>
-                    <th
-                      style={{
-                        textAlign:
-                          "left",
-                        padding:
-                          "10px",
-                        borderBottom:
-                          "1px solid #e5e7eb",
-                      }}
-                    >
-                      选择
-                    </th>
-
-                    <th
-                      style={{
-                        textAlign:
-                          "left",
-                        padding:
-                          "10px",
-                        borderBottom:
-                          "1px solid #e5e7eb",
-                      }}
-                    >
-                      发票
-                    </th>
-
-                    <th
-                      style={{
-                        textAlign:
-                          "right",
-                        padding:
-                          "10px",
-                        borderBottom:
-                          "1px solid #e5e7eb",
-                      }}
-                    >
-                      金额
-                    </th>
-
-                    <th
-                      style={{
-                        textAlign:
-                          "center",
-                        padding:
-                          "10px",
-                        borderBottom:
-                          "1px solid #e5e7eb",
-                      }}
-                    >
-                      状态
-                    </th>
-
-                    <th
-                      style={{
-                        padding:
-                          "10px",
-                        borderBottom:
-                          "1px solid #e5e7eb",
-                      }}
-                    >
-                      操作
-                    </th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {invoices.map(
-                    (
-                      invoice
-                    ) => (
-                      <tr
-                        key={
-                          invoice.id
-                        }
-                      >
-                        <td
-                          style={{
-                            padding:
-                              "10px",
-                            borderBottom:
-                              "1px solid #f0f0f0",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={
-                              invoice.selected
-                            }
-                            onChange={() =>
-                              toggleInvoice(
-                                invoice.id
-                              )
-                            }
-                            style={{
-                              width:
-                                "18px",
-                              height:
-                                "18px",
-                            }}
-                          />
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              "10px",
-                            borderBottom:
-                              "1px solid #f0f0f0",
-                            maxWidth:
-                              "420px",
-                          }}
-                        >
-                          <div
-                            style={{
-                              fontWeight:
-                                500,
-                              overflow:
-                                "hidden",
-                              textOverflow:
-                                "ellipsis",
-                              whiteSpace:
-                                "nowrap",
-                            }}
-                          >
-                            {
-                              invoice.name
-                            }
-                          </div>
-
-                          <div
-                            style={{
-                              fontSize:
-                                "12px",
-                              color:
-                                "#9ca3af",
-                              marginTop:
-                                "3px",
-                            }}
-                          >
-                            {(
-                              invoice
-                                .file
-                                .size /
-                              1024
-                            ).toFixed(
-                              1
-                            )}{" "}
-                            KB
-                          </div>
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              "10px",
-                            borderBottom:
-                              "1px solid #f0f0f0",
-                            textAlign:
-                              "right",
-                          }}
-                        >
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={
-                              invoice.amount ??
-                              ""
-                            }
-                            onChange={(
-                              e
-                            ) =>
-                              updateAmount(
-                                invoice.id,
-                                e.target
-                                  .value
-                              )
-                            }
-                            style={{
-                              width:
-                                "130px",
-                              padding:
-                                "8px",
-                              border:
-                                "1px solid #d1d5db",
-                              borderRadius:
-                                "6px",
-                              textAlign:
-                                "right",
-                            }}
-                          />
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              "10px",
-                            borderBottom:
-                              "1px solid #f0f0f0",
-                            textAlign:
-                              "center",
-                          }}
-                        >
-                          {invoice.status ===
-                            "waiting" &&
-                            "待识别"}
-
-                          {invoice.status ===
-                            "processing" &&
-                            "识别中..."}
-
-                          {invoice.status ===
-                            "success" &&
-                            "✓ 已识别"}
-
-                          {invoice.status ===
-                            "failed" &&
-                            "⚠ 请手动填写"}
-                        </td>
-
-                        <td
-                          style={{
-                            padding:
-                              "10px",
-                            borderBottom:
-                              "1px solid #f0f0f0",
-                            textAlign:
-                              "center",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              removeInvoice(
-                                invoice.id
-                              )
-                            }
-                            style={{
-                              border:
-                                "none",
-                              background:
-                                "transparent",
-                              color:
-                                "#dc2626",
-                              cursor:
-                                "pointer",
-                            }}
-                          >
-                            删除
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ================================================= */}
-        {/* ④ 匹配 */}
-        {/* ================================================= */}
-
-        {invoices.length >
-          0 && (
-          <div
-            style={{
-              background:
-                "#ffffff",
-              borderRadius:
-                "16px",
-              padding:
-                "24px",
-              marginBottom:
-                "20px",
-              boxShadow:
-                "0 2px 10px rgba(0,0,0,0.05)",
-            }}
-          >
-            <h2
-              style={{
-                margin:
-                  "0 0 18px",
-                fontSize:
-                  "19px",
-              }}
-            >
-              ④ 自动寻找最接近{" "}
-              {formatMoney(
-                targetValue
-              )}
-            </h2>
-
-            <button
-              type="button"
-              onClick={
-                calculateMatches
-              }
-              disabled={
-                processing
-              }
-              style={{
-                padding:
-                  "12px 20px",
-                border:
-                  "none",
-                borderRadius:
-                  "8px",
-                background:
-                  processing
-                    ? "#9ca3af"
-                    : "#2563eb",
-                color:
-                  "#ffffff",
-                cursor:
-                  processing
-                    ? "not-allowed"
-                    : "pointer",
-                fontWeight:
-                  600,
-              }}
-            >
-              🔍 计算最佳组合
-            </button>
-
-            {matches.length >
-              0 && (
-              <div
-                style={{
-                  marginTop:
-                    "20px",
-                }}
-              >
-                <div
-                  style={{
-                    fontWeight:
-                      600,
-                    marginBottom:
-                      "12px",
-                  }}
-                >
-                  推荐组合
-                </div>
-
-                {matches.map(
-                  (
-                    match,
-                    index
-                  ) => {
-                    const exact =
-                      Math.abs(
-                        match.difference
-                      ) < 0.01;
-
-                    return (
-                      <button
-                        type="button"
-                        key={
-                          index
-                        }
-                        onClick={() =>
-                          chooseMatch(
-                            index
-                          )
-                        }
-                        style={{
-                          width:
-                            "100%",
-                          textAlign:
-                            "left",
-                          padding:
-                            "14px",
-                          marginBottom:
-                            "8px",
-                          border:
-                            selectedMatchIndex ===
-                            index
-                              ? "2px solid #2563eb"
-                              : "1px solid #e5e7eb",
-                          borderRadius:
-                            "10px",
-                          background:
-                            selectedMatchIndex ===
-                            index
-                              ? "#eff6ff"
-                              : "#ffffff",
-                          cursor:
-                            "pointer",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display:
-                              "flex",
-                            justifyContent:
-                              "space-between",
-                            alignItems:
-                              "center",
-                          }}
-                        >
-                          <div>
-                            <strong>
-                              {index ===
-                              0
-                                ? "🎯 最佳方案"
-                                : `方案 ${
-                                    index +
-                                    1
-                                  }`}
-                            </strong>
-
-                            {exact && (
-                              <span
-                                style={{
-                                  marginLeft:
-                                    "10px",
-                                  color:
-                                    "#16a34a",
-                                  fontWeight:
-                                    700,
-                                }}
-                              >
-                                精确匹配
-                              </span>
-                            )}
-
-                            <span
-                              style={{
-                                marginLeft:
-                                  "12px",
-                                color:
-                                  "#6b7280",
-                              }}
-                            >
-                              {
-                                match
-                                  .indexes
-                                  .length
-                              }{" "}
-                              张
-                            </span>
-                          </div>
-
-                          <div
-                            style={{
-                              fontWeight:
-                                700,
-                              fontSize:
-                                "18px",
-                            }}
-                          >
-                            {formatMoney(
-                              match.total
-                            )}
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop:
-                              "6px",
-                            fontSize:
-                              "13px",
-                            color:
-                              exact
-                                ? "#16a34a"
-                                : "#6b7280",
-                          }}
-                        >
-                          差额：
-                          {match.difference >=
-                          0
-                            ? "+"
-                            : ""}
-                          {formatMoney(
-                            match.difference
-                          )}
-                        </div>
-                      </button>
-                    );
-                  }
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ================================================= */}
-        {/* ⑤ 确认 */}
-        {/* ================================================= */}
-
-        {invoices.length >
-          0 && (
-          <div
-            style={{
-              background:
-                "#ffffff",
-              borderRadius:
-                "16px",
-              padding:
-                "24px",
-              marginBottom:
-                "20px",
-              boxShadow:
-                "0 2px 10px rgba(0,0,0,0.05)",
-            }}
-          >
-            <h2
-              style={{
-                margin:
-                  "0 0 18px",
-                fontSize:
-                  "19px",
-              }}
-            >
-              ⑤ 确认发票
-            </h2>
-
-            <div
-              style={{
-                display:
-                  "grid",
-                gridTemplateColumns:
-                  "repeat(3, 1fr)",
-                gap:
-                  "12px",
-                marginBottom:
-                  "18px",
-              }}
-            >
-              <div
-                style={{
-                  padding:
-                    "16px",
-                  background:
-                    "#f9fafb",
-                  borderRadius:
-                    "10px",
-                }}
-              >
-                <div
-                  style={{
-                    color:
-                      "#6b7280",
-                    fontSize:
-                      "13px",
-                  }}
-                >
-                  目标金额
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      "24px",
-                    fontWeight:
-                      700,
-                    marginTop:
-                      "5px",
-                  }}
-                >
-                  {formatMoney(
-                    targetValue
-                  )}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding:
-                    "16px",
-                  background:
-                    "#f9fafb",
-                  borderRadius:
-                    "10px",
-                }}
-              >
-                <div
-                  style={{
-                    color:
-                      "#6b7280",
-                    fontSize:
-                      "13px",
-                  }}
-                >
-                  当前选择
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      "24px",
-                    fontWeight:
-                      700,
-                    marginTop:
-                      "5px",
-                  }}
-                >
-                  {formatMoney(
-                    manualTotal
-                  )}
-                </div>
-              </div>
-
-              <div
-                style={{
-                  padding:
-                    "16px",
-                  background:
-                    Math.abs(
-                      selectedDifference
-                    ) < 0.01
-                      ? "#f0fdf4"
-                      : "#f9fafb",
-                  borderRadius:
-                    "10px",
-                }}
-              >
-                <div
-                  style={{
-                    color:
-                      "#6b7280",
-                    fontSize:
-                      "13px",
-                  }}
-                >
-                  差额
-                </div>
-
-                <div
-                  style={{
-                    fontSize:
-                      "24px",
-                    fontWeight:
-                      700,
-                    marginTop:
-                      "5px",
-                    color:
-                      Math.abs(
-                        selectedDifference
-                      ) < 0.01
-                        ? "#16a34a"
-                        : "#111827",
-                  }}
-                >
-                  {selectedDifference >=
-                  0
-                    ? "+"
-                    : ""}
-                  {formatMoney(
-                    selectedDifference
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                marginBottom:
-                  "15px",
-                color:
-                  "#4b5563",
-              }}
-            >
-              已选择{" "}
-              <strong>
-                {selectedCount}
-              </strong>{" "}
-              张发票。
-              <br />
-              OCR 如果识别错误，可以直接修改金额，然后重新计算。
-            </div>
-
-            <button
-              type="button"
-              onClick={
-                confirmSelection
-              }
-              disabled={
-                selectedCount ===
-                0
-              }
-              style={{
-                padding:
-                  "13px 22px",
-                border:
-                  "none",
-                borderRadius:
-                  "8px",
-                background:
-                  selectedCount ===
-                  0
-                    ? "#9ca3af"
-                    : confirmed
-                    ? "#16a34a"
-                    : "#111827",
-                color:
-                  "#ffffff",
-                cursor:
-                  selectedCount ===
-                  0
-                    ? "not-allowed"
-                    : "pointer",
-                fontWeight:
-                  700,
-                fontSize:
-                  "15px",
-              }}
-            >
-              {confirmed
-                ? "✓ 已确认"
-                : "确认这组发票"}
-            </button>
-
-            {confirmed && (
-              <div
-                style={{
-                  marginTop:
-                    "15px",
-                  padding:
-                    "13px",
-                  background:
-                    "#f0fdf4",
-                  border:
-                    "1px solid #bbf7d0",
-                  borderRadius:
-                    "8px",
-                  color:
-                    "#166534",
-                }}
-              >
-                ✓ 已确认。
-
-                <br />
-
-                下一步可以生成：
-
-                <strong>
-                  {" "}
-                  frais{" "}
-                  {year || "XXXX"}{" "}
-                  {month
-                    ? String(
-                        month
-                      ).padStart(
-                        2,
-                        "0"
-                      )
-                    : "XX"}
-                  .pdf
-                </strong>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ================================================= */}
-        {/* ⑥ 生成 PDF */}
-        {/* ================================================= */}
-
-        <div
-          style={{
-            background:
-              "#ffffff",
-            borderRadius:
-              "16px",
-            padding:
-              "24px",
-            marginBottom:
-              "20px",
-            boxShadow:
-              "0 2px 10px rgba(0,0,0,0.05)",
-          }}
-        >
-          <h2
-            style={{
-              margin:
-                "0 0 18px",
-              fontSize:
-                "19px",
-            }}
-          >
-            ⑥ 生成 PDF
-          </h2>
-
-          <div
-            style={{
-              marginBottom:
-                "12px",
-              color:
-                "#4b5563",
-            }}
-          >
-            文件名：
-
-            <strong
-              style={{
-                color:
-                  "#111827",
-                marginLeft:
-                  "5px",
-              }}
-            >
-              frais{" "}
-              {year || "XXXX"}{" "}
-              {month
-                ? String(
-                    month
-                  ).padStart(
-                    2,
-                    "0"
-                  )
-                : "XX"}
-              .pdf
-            </strong>
-          </div>
-
-          {/* 状态提示 */}
-
-          {!confirmed && (
-            <div
-              style={{
-                marginBottom:
-                  "16px",
-                padding:
-                  "12px 14px",
-                background:
-                  "#fff7ed",
-                border:
-                  "1px solid #fed7aa",
-                borderRadius:
-                  "8px",
-                color:
-                  "#9a3412",
-              }}
-            >
-              ⚠️ 请先在第⑤步确认发票组合。
-            </div>
-          )}
-
-          {confirmed &&
-            !year && (
-              <div
-                style={{
-                  marginBottom:
-                    "16px",
-                  padding:
-                    "12px 14px",
-                  background:
-                    "#fff7ed",
-                  border:
-                    "1px solid #fed7aa",
-                  borderRadius:
-                    "8px",
-                  color:
-                    "#9a3412",
-                }}
-              >
-                ⚠️ 请填写年份。
-              </div>
-            )}
-
-          {confirmed &&
-            year &&
-            !month && (
-              <div
-                style={{
-                  marginBottom:
-                    "16px",
-                  padding:
-                    "12px 14px",
-                  background:
-                    "#fff7ed",
-                  border:
-                    "1px solid #fed7aa",
-                  borderRadius:
-                    "8px",
-                  color:
-                    "#9a3412",
-                }}
-              >
-                ⚠️ 请先选择月份。
-              </div>
-            )}
-
-          {/* =================================================
-              关键修改：
-
-              不再使用：
-
-              disabled={
-                generating ||
-                !confirmed ||
-                !year ||
-                !month
-              }
-
-              现在只有正在生成的时候按钮才 disabled。
-
-              因此：
-              - 未确认 → 按钮可以按
-              - 没年份 → 按钮可以按
-              - 没月份 → 按钮可以按
-              - 点击后弹出具体提示
-              - 条件全部满足 → 真正生成 PDF
-          ================================================= */}
-
-          <button
-            type="button"
-            onClick={
-              generatePdf
-            }
-            disabled={
-              generating
-            }
-            style={{
-              padding:
-                "15px 28px",
-              border:
-                "none",
-              borderRadius:
-                "9px",
-
-              // 只有 generating 才灰色
-              background:
-                generating
-                  ? "#9ca3af"
-                  : "#7c3aed",
-
-              color:
-                "#ffffff",
-
-              cursor:
-                generating
-                  ? "not-allowed"
-                  : "pointer",
-
-              fontWeight:
-                700,
-
-              fontSize:
-                "16px",
-
-              minWidth:
-                "190px",
-
-              boxShadow:
-                generating
-                  ? "none"
-                  : "0 4px 12px rgba(124,58,237,0.25)",
-            }}
-          >
-            {generating
-              ? "⏳ 正在生成 PDF..."
-              : "📄 生成 PDF"}
-          </button>
-
-          {/* =================================================
-              PDF 已生成
-          ================================================= */}
-
-          {generatedUrl && (
-            <div
-              style={{
-                marginTop:
-                  "20px",
-                padding:
-                  "20px",
-                background:
-                  "#f0fdf4",
-                border:
-                  "1px solid #bbf7d0",
-                borderRadius:
-                  "10px",
-              }}
-            >
-              <div
-                style={{
-                  fontWeight:
-                    700,
-                  color:
-                    "#166534",
-                  marginBottom:
-                    "10px",
-                  fontSize:
-                    "18px",
-                }}
-              >
-                ✓ PDF 已成功生成
-              </div>
-
-              <div
-                style={{
-                  marginBottom:
-                    "15px",
-                  fontSize:
-                    "14px",
-                }}
-              >
-                文件：
-
-                <strong>
-                  {" "}
-                  {
-                    generatedFileName
-                  }
-                </strong>
-              </div>
-
-              <button
-                type="button"
-                onClick={
-                  downloadPdf
-                }
-                style={{
-                  padding:
-                    "14px 24px",
-                  border:
-                    "none",
-                  borderRadius:
-                    "8px",
-                  background:
-                    "#16a34a",
-                  color:
-                    "#ffffff",
-                  cursor:
-                    "pointer",
-                  fontWeight:
-                    700,
-                  fontSize:
-                    "16px",
-                  minWidth:
-                    "180px",
-                }}
-              >
-                ⬇ 下载 PDF
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 }
