@@ -8,34 +8,26 @@ import {
   useState,
 } from "react";
 
-import {
-  PDFDocument,
-} from "pdf-lib";
-
-import {
-  createWorker,
-} from "tesseract.js";
-
+import { PDFDocument } from "pdf-lib";
+import { createWorker } from "tesseract.js";
 
 // =====================================================
 // 类型
 // =====================================================
 
+type InvoiceStatus =
+  | "waiting"
+  | "processing"
+  | "success"
+  | "failed";
+
 type Invoice = {
   id: string;
   file: File;
   name: string;
-
   amount: number | null;
-
   ocrText: string;
-
-  status:
-    | "waiting"
-    | "processing"
-    | "success"
-    | "failed";
-
+  status: InvoiceStatus;
   selected: boolean;
 };
 
@@ -45,18 +37,15 @@ type MatchResult = {
   difference: number;
 };
 
-
 // =====================================================
 // 常量
 // =====================================================
 
 const DEFAULT_TARGET = 4590;
-
 const MAX_COMBINATION_RESULTS = 5;
 
-
 // =====================================================
-// 工具函数
+// 金额格式
 // =====================================================
 
 function formatMoney(value: number) {
@@ -66,8 +55,24 @@ function formatMoney(value: number) {
   });
 }
 
+// =====================================================
+// 判断 PDF
+// =====================================================
 
-function parseAmountFromText(text: string): number | null {
+function isPdfFile(file: File) {
+  return (
+    file.type === "application/pdf" ||
+    file.name.toLowerCase().endsWith(".pdf")
+  );
+}
+
+// =====================================================
+// OCR 文本提取金额
+// =====================================================
+
+function parseAmountFromText(
+  text: string
+): number | null {
   if (!text) {
     return null;
   }
@@ -78,15 +83,19 @@ function parseAmountFromText(text: string): number | null {
     .replace(/\s+/g, " ");
 
   // ---------------------------------------------------
-  // 优先寻找常见金额字段
+  // 优先寻找价税合计
   // ---------------------------------------------------
 
   const patterns = [
-    /价税合计[^\d]{0,20}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /小写[^\d]{0,20}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /合\s*计[^\d]{0,20}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /金额[^\d]{0,20}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /价税合计[^0-9]{0,20}([0-9][0-9,]*\.[0-9]{2})/i,
+    /价税合计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
+
+    /价税合计[^\d]{0,30}([\d,]+(?:\.\d{1,2})?)/i,
+
+    /小写[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
+
+    /合\s*计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
+
+    /金额[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
   ];
 
   for (const pattern of patterns) {
@@ -106,9 +115,8 @@ function parseAmountFromText(text: string): number | null {
     }
   }
 
-
   // ---------------------------------------------------
-  // 如果没找到，扫描所有金额
+  // 扫描所有带两位小数的金额
   // ---------------------------------------------------
 
   const matches = normalized.match(
@@ -137,14 +145,12 @@ function parseAmountFromText(text: string): number | null {
     return null;
   }
 
-  // 发票中通常价税合计较大，
-  // 没有明确字段时暂时取最大金额。
+  // 没有明确字段时，暂时取最大金额。
   return Math.max(...numbers);
 }
 
-
 // =====================================================
-// PDF -> 图片
+// PDF 转图片
 // =====================================================
 
 async function renderPdfToImages(
@@ -156,10 +162,13 @@ async function renderPdfToImages(
   const arrayBuffer =
     await file.arrayBuffer();
 
-  const pdf =
-    await pdfjsLib.getDocument({
+  const loadingTask =
+    pdfjsLib.getDocument({
       data: arrayBuffer,
-    }).promise;
+    });
+
+  const pdf =
+    await loadingTask.promise;
 
   const images: string[] = [];
 
@@ -177,7 +186,9 @@ async function renderPdfToImages(
       });
 
     const canvas =
-      document.createElement("canvas");
+      document.createElement(
+        "canvas"
+      );
 
     const context =
       canvas.getContext("2d");
@@ -187,12 +198,19 @@ async function renderPdfToImages(
     }
 
     canvas.width =
-      viewport.width;
+      Math.ceil(viewport.width);
 
     canvas.height =
-      viewport.height;
+      Math.ceil(viewport.height);
+
+    // =================================================
+    // 关键修复：
+    // 新版 pdfjs-dist 的 RenderParameters
+    // 要求 canvas
+    // =================================================
 
     await page.render({
+      canvas,
       canvasContext: context,
       viewport,
     }).promise;
@@ -208,39 +226,28 @@ async function renderPdfToImages(
   return images;
 }
 
-
 // =====================================================
 // OCR
 // =====================================================
 
 async function recognizeInvoice(
   file: File,
-  worker: any,
-  onProgress?: (
-    progress: number
-  ) => void
+  worker: any
 ): Promise<string> {
-  let imageSource: string | File =
-    file;
+  // ---------------------------------------------------
+  // PDF
+  // ---------------------------------------------------
 
-  if (
-    file.type ===
-      "application/pdf" ||
-    file.name
-      .toLowerCase()
-      .endsWith(".pdf")
-  ) {
+  if (isPdfFile(file)) {
     const images =
       await renderPdfToImages(file);
 
     if (images.length === 0) {
       throw new Error(
-        "PDF 无法读取"
+        "PDF 无法转换为图片"
       );
     }
 
-    // 多页 PDF：
-    // 将所有页面依次 OCR
     let result = "";
 
     for (
@@ -256,26 +263,20 @@ async function recognizeInvoice(
       result +=
         "\n" +
         pageResult.data.text;
-
-      onProgress?.(
-        (i + 1) /
-          images.length
-      );
     }
 
     return result;
   }
 
-  const result =
-    await worker.recognize(
-      imageSource
-    );
+  // ---------------------------------------------------
+  // 图片
+  // ---------------------------------------------------
 
-  onProgress?.(1);
+  const result =
+    await worker.recognize(file);
 
   return result.data.text;
 }
-
 
 // =====================================================
 // 组合算法
@@ -303,21 +304,14 @@ function findBestMatches(
     return [];
   }
 
-  /*
-   * 为了避免大量发票导致组合爆炸，
-   * 采用 Meet-in-the-middle。
-   *
-   * 对于常见的几十张发票，
-   * 可以比较可靠地找到最接近目标的组合。
-   */
-
-  const items =
-    validInvoices;
+  // ---------------------------------------------------
+  // 如果票据数量特别大，限制计算数量
+  // ---------------------------------------------------
 
   const MAX_ITEMS = 36;
 
-  // 太多发票时，优先保留金额较合理的票据
-  let workingItems = items;
+  let workingItems =
+    validInvoices;
 
   if (
     workingItems.length >
@@ -356,12 +350,10 @@ function findBestMatches(
   const right =
     workingItems.slice(mid);
 
-
   type Subset = {
     total: number;
     indexes: number[];
   };
-
 
   function generateSubsets(
     array: typeof left
@@ -376,12 +368,17 @@ function findBestMatches(
     for (
       const item of array
     ) {
-      const current =
-        [...result];
+      const originalLength =
+        result.length;
 
       for (
-        const subset of current
+        let i = 0;
+        i < originalLength;
+        i++
       ) {
+        const subset =
+          result[i];
+
         const amount =
           item.invoice.amount || 0;
 
@@ -397,7 +394,7 @@ function findBestMatches(
         });
       }
 
-      // 防止内存过大
+      // 防止极端情况下浏览器爆内存
       if (
         result.length >
         1_000_000
@@ -409,19 +406,16 @@ function findBestMatches(
     return result;
   }
 
-
   const leftSubsets =
     generateSubsets(left);
 
   const rightSubsets =
     generateSubsets(right);
 
-
   rightSubsets.sort(
     (a, b) =>
       a.total - b.total
   );
-
 
   function lowerBound(
     array: Subset[],
@@ -432,32 +426,30 @@ function findBestMatches(
       array.length;
 
     while (low < high) {
-      const mid =
+      const middle =
         Math.floor(
           (low + high) / 2
         );
 
       if (
-        array[mid].total <
+        array[middle].total <
         targetValue
       ) {
         low =
-          mid + 1;
+          middle + 1;
       } else {
-        high = mid;
+        high = middle;
       }
     }
 
     return low;
   }
 
-
   const matches: MatchResult[] =
     [];
 
   const seen =
     new Set<string>();
-
 
   for (
     const leftSubset of
@@ -480,7 +472,6 @@ function findBestMatches(
       position + 1,
       position + 2,
     ];
-
 
     for (
       const candidateIndex of
@@ -532,10 +523,9 @@ function findBestMatches(
     }
   }
 
-
   matches.sort(
     (a, b) => {
-      const diff =
+      const difference =
         Math.abs(
           a.difference
         ) -
@@ -543,11 +533,13 @@ function findBestMatches(
           b.difference
         );
 
-      if (diff !== 0) {
-        return diff;
+      if (
+        Math.abs(difference) >
+        0.000001
+      ) {
+        return difference;
       }
 
-      // 同样差距时，优先票据少的方案
       return (
         a.indexes.length -
         b.indexes.length
@@ -555,17 +547,14 @@ function findBestMatches(
     }
   );
 
-
-  return matches
-    .slice(
-      0,
-      MAX_COMBINATION_RESULTS
-    );
+  return matches.slice(
+    0,
+    MAX_COMBINATION_RESULTS
+  );
 }
 
-
 // =====================================================
-// 生成最终 PDF
+// 创建最终 PDF
 // =====================================================
 
 async function createCombinedPdf(
@@ -574,7 +563,6 @@ async function createCombinedPdf(
 ): Promise<Uint8Array> {
   const outputPdf =
     await PDFDocument.create();
-
 
   for (
     const index of
@@ -586,18 +574,11 @@ async function createCombinedPdf(
     const file =
       invoice.file;
 
-
     // -------------------------------------------------
-    // PDF
+    // 原始 PDF
     // -------------------------------------------------
 
-    if (
-      file.type ===
-        "application/pdf" ||
-      file.name
-        .toLowerCase()
-        .endsWith(".pdf")
-    ) {
+    if (isPdfFile(file)) {
       const bytes =
         await file.arrayBuffer();
 
@@ -624,7 +605,6 @@ async function createCombinedPdf(
       continue;
     }
 
-
     // -------------------------------------------------
     // 图片
     // -------------------------------------------------
@@ -634,13 +614,14 @@ async function createCombinedPdf(
 
     let image;
 
-    if (
+    const isPng =
       file.type ===
         "image/png" ||
       file.name
         .toLowerCase()
-        .endsWith(".png")
-    ) {
+        .endsWith(".png");
+
+    if (isPng) {
       image =
         await outputPdf.embedPng(
           bytes
@@ -652,17 +633,15 @@ async function createCombinedPdf(
         );
     }
 
-
     const originalWidth =
       image.width;
 
     const originalHeight =
       image.height;
 
-
+    // A4
     const pageWidth = 595;
     const pageHeight = 842;
-
 
     const scale =
       Math.min(
@@ -672,7 +651,6 @@ async function createCombinedPdf(
           originalHeight
       );
 
-
     const width =
       originalWidth *
       scale;
@@ -681,13 +659,11 @@ async function createCombinedPdf(
       originalHeight *
       scale;
 
-
     const page =
       outputPdf.addPage([
         pageWidth,
         pageHeight,
       ]);
-
 
     page.drawImage(
       image,
@@ -708,10 +684,8 @@ async function createCombinedPdf(
     );
   }
 
-
   return outputPdf.save();
 }
-
 
 // =====================================================
 // 页面
@@ -723,14 +697,12 @@ export default function FraisPage() {
     setInvoices,
   ] = useState<Invoice[]>([]);
 
-
   const [
     target,
     setTarget,
   ] = useState(
     String(DEFAULT_TARGET)
   );
-
 
   const [
     year,
@@ -741,73 +713,60 @@ export default function FraisPage() {
     )
   );
 
-
   const [
     month,
     setMonth,
   ] = useState("");
-
 
   const [
     processing,
     setProcessing,
   ] = useState(false);
 
-
   const [
     processingText,
     setProcessingText,
   ] = useState("");
 
-
   const [
     matches,
     setMatches,
-  ] = useState<MatchResult[]>(
-    []
-  );
-
+  ] = useState<MatchResult[]>([]);
 
   const [
     selectedMatchIndex,
     setSelectedMatchIndex,
   ] = useState(0);
 
-
   const [
     confirmed,
     setConfirmed,
   ] = useState(false);
-
 
   const [
     generating,
     setGenerating,
   ] = useState(false);
 
-
   const [
     generatedUrl,
     setGeneratedUrl,
-  ] = useState<
-    string | null
-  >(null);
-
+  ] = useState<string | null>(
+    null
+  );
 
   const [
     generatedFileName,
     setGeneratedFileName,
   ] = useState("");
 
-
   const inputRef =
     useRef<HTMLInputElement>(
       null
     );
 
-
   // ---------------------------------------------------
-  // 清理 Blob URL
+  // 清理 URL
   // ---------------------------------------------------
 
   useEffect(() => {
@@ -820,16 +779,9 @@ export default function FraisPage() {
     };
   }, [generatedUrl]);
 
-
   // ---------------------------------------------------
-  // 选择的组合
+  // 当前手工选择总额
   // ---------------------------------------------------
-
-  const selectedCombination =
-    matches[
-      selectedMatchIndex
-    ];
-
 
   const manualTotal =
     useMemo(() => {
@@ -847,9 +799,8 @@ export default function FraisPage() {
         );
     }, [invoices]);
 
-
   // ---------------------------------------------------
-  // 添加文件
+  // 上传文件
   // ---------------------------------------------------
 
   function handleFiles(
@@ -857,8 +808,7 @@ export default function FraisPage() {
   ) {
     const files =
       Array.from(
-        event.target.files ||
-          []
+        event.target.files || []
       );
 
     if (
@@ -867,29 +817,20 @@ export default function FraisPage() {
       return;
     }
 
-
     const validFiles =
       files.filter(
         (file) => {
-          const isPdf =
-            file.type ===
-              "application/pdf" ||
-            file.name
-              .toLowerCase()
-              .endsWith(".pdf");
+          const pdf =
+            isPdfFile(file);
 
-          const isImage =
+          const image =
             file.type.startsWith(
               "image/"
             );
 
-          return (
-            isPdf ||
-            isImage
-          );
+          return pdf || image;
         }
       );
-
 
     const newInvoices =
       validFiles.map(
@@ -899,19 +840,22 @@ export default function FraisPage() {
 
           file,
 
-          name: file.name,
+          name:
+            file.name,
 
-          amount: null,
+          amount:
+            null,
 
-          ocrText: "",
+          ocrText:
+            "",
 
           status:
-            "waiting" as const,
+            "waiting" as InvoiceStatus,
 
-          selected: false,
+          selected:
+            false,
         })
       );
-
 
     setInvoices(
       (previous) => [
@@ -919,7 +863,6 @@ export default function FraisPage() {
         ...newInvoices,
       ]
     );
-
 
     setMatches([]);
 
@@ -929,14 +872,11 @@ export default function FraisPage() {
 
     setGeneratedFileName("");
 
-
-    // 允许重复选择同一个文件
     event.target.value = "";
   }
 
-
   // ---------------------------------------------------
-  // 删除单张发票
+  // 删除
   // ---------------------------------------------------
 
   function removeInvoice(
@@ -953,8 +893,9 @@ export default function FraisPage() {
     setMatches([]);
 
     setConfirmed(false);
-  }
 
+    setGeneratedUrl(null);
+  }
 
   // ---------------------------------------------------
   // 修改金额
@@ -964,38 +905,53 @@ export default function FraisPage() {
     id: string,
     value: string
   ) {
-    const amount =
-      Number(value);
+    if (value === "") {
+      setInvoices(
+        (previous) =>
+          previous.map(
+            (invoice) =>
+              invoice.id === id
+                ? {
+                    ...invoice,
+                    amount:
+                      null,
+                    status:
+                      "waiting",
+                  }
+                : invoice
+          )
+      );
+    } else {
+      const amount =
+        Number(value);
 
-    setInvoices(
-      (previous) =>
-        previous.map(
-          (invoice) =>
-            invoice.id === id
-              ? {
-                  ...invoice,
-                  amount:
-                    value === ""
-                      ? null
-                      : Number.isFinite(
-                          amount
-                        )
-                      ? amount
-                      : null,
-                  status:
-                    value === ""
-                      ? "waiting"
-                      : "success",
-                }
-              : invoice
-        )
-    );
+      setInvoices(
+        (previous) =>
+          previous.map(
+            (invoice) =>
+              invoice.id === id
+                ? {
+                    ...invoice,
+                    amount:
+                      Number.isFinite(
+                        amount
+                      )
+                        ? amount
+                        : null,
+                    status:
+                      "success",
+                  }
+                : invoice
+          )
+      );
+    }
 
     setMatches([]);
 
     setConfirmed(false);
-  }
 
+    setGeneratedUrl(null);
+  }
 
   // ---------------------------------------------------
   // OCR
@@ -1011,7 +967,6 @@ export default function FraisPage() {
       return;
     }
 
-
     setProcessing(true);
 
     setConfirmed(false);
@@ -1020,11 +975,13 @@ export default function FraisPage() {
 
     setGeneratedUrl(null);
 
-
     let worker: any = null;
 
-
     try {
+      setProcessingText(
+        "正在启动 OCR..."
+      );
+
       worker =
         await createWorker(
           "chi_sim+eng",
@@ -1043,18 +1000,12 @@ export default function FraisPage() {
                   );
 
                 setProcessingText(
-                  `正在识别…… ${progress}%`
-                );
-              } else {
-                setProcessingText(
-                  message.status ||
-                    "正在处理……"
+                  `正在 OCR：${progress}%`
                 );
               }
             },
           }
         );
-
 
       for (
         let i = 0;
@@ -1063,7 +1014,6 @@ export default function FraisPage() {
       ) {
         const invoice =
           invoices[i];
-
 
         setInvoices(
           (previous) =>
@@ -1080,7 +1030,6 @@ export default function FraisPage() {
             )
         );
 
-
         setProcessingText(
           `正在识别第 ${
             i + 1
@@ -1089,7 +1038,6 @@ export default function FraisPage() {
           } 张：${invoice.name}`
         );
 
-
         try {
           const text =
             await recognizeInvoice(
@@ -1097,12 +1045,10 @@ export default function FraisPage() {
               worker
             );
 
-
           const amount =
             parseAmountFromText(
               text
             );
-
 
           setInvoices(
             (previous) =>
@@ -1126,9 +1072,9 @@ export default function FraisPage() {
           );
         } catch (error) {
           console.error(
+            `OCR failed: ${invoice.name}`,
             error
           );
-
 
           setInvoices(
             (previous) =>
@@ -1147,7 +1093,6 @@ export default function FraisPage() {
         }
       }
 
-
       setProcessingText(
         "OCR 识别完成"
       );
@@ -1157,7 +1102,7 @@ export default function FraisPage() {
       );
 
       alert(
-        "OCR 初始化失败，请检查依赖是否安装。"
+        "OCR 初始化失败。请检查 tesseract.js 是否正常安装。"
       );
     } finally {
       if (worker) {
@@ -1170,15 +1115,13 @@ export default function FraisPage() {
     }
   }
 
-
   // ---------------------------------------------------
-  // 自动寻找组合
+  // 计算最佳组合
   // ---------------------------------------------------
 
   function calculateMatches() {
     const targetValue =
       Number(target);
-
 
     if (
       !Number.isFinite(
@@ -1192,23 +1135,20 @@ export default function FraisPage() {
       return;
     }
 
-
     const result =
       findBestMatches(
         invoices,
         targetValue
       );
 
-
     if (
       result.length === 0
     ) {
       alert(
-        "没有找到可以计算的发票，请确认发票金额已经识别。"
+        "没有找到可计算的发票。请先 OCR，或者手动填写发票金额。"
       );
       return;
     }
-
 
     setMatches(result);
 
@@ -1218,11 +1158,8 @@ export default function FraisPage() {
 
     setGeneratedUrl(null);
 
-
-    // 自动勾选最佳方案
     const best =
       result[0];
-
 
     const selectedIds =
       new Set(
@@ -1231,7 +1168,6 @@ export default function FraisPage() {
             invoices[index]?.id
         )
       );
-
 
     setInvoices(
       (previous) =>
@@ -1247,26 +1183,23 @@ export default function FraisPage() {
     );
   }
 
-
   // ---------------------------------------------------
-  // 选择某个推荐方案
+  // 选择推荐方案
   // ---------------------------------------------------
 
   function chooseMatch(
-    index: number
+    matchIndex: number
   ) {
     const match =
-      matches[index];
+      matches[matchIndex];
 
     if (!match) {
       return;
     }
 
-
     setSelectedMatchIndex(
-      index
+      matchIndex
     );
-
 
     const selectedIds =
       new Set(
@@ -1278,7 +1211,6 @@ export default function FraisPage() {
         )
       );
 
-
     setInvoices(
       (previous) =>
         previous.map(
@@ -1292,13 +1224,13 @@ export default function FraisPage() {
         )
     );
 
-
     setConfirmed(false);
+
+    setGeneratedUrl(null);
   }
 
-
   // ---------------------------------------------------
-  // 手动勾选
+  // 手动选择
   // ---------------------------------------------------
 
   function toggleInvoice(
@@ -1323,7 +1255,6 @@ export default function FraisPage() {
     setGeneratedUrl(null);
   }
 
-
   // ---------------------------------------------------
   // 确认
   // ---------------------------------------------------
@@ -1335,7 +1266,6 @@ export default function FraisPage() {
           invoice.selected
       );
 
-
     if (
       selected.length === 0
     ) {
@@ -1345,25 +1275,20 @@ export default function FraisPage() {
       return;
     }
 
-
     const total =
       selected.reduce(
         (sum, invoice) =>
           sum +
-          (invoice.amount ||
-            0),
+          (invoice.amount || 0),
         0
       );
-
 
     const targetValue =
       Number(target);
 
-
     const difference =
       total -
       targetValue;
-
 
     const message =
       `确认使用 ${selected.length} 张发票？\n\n` +
@@ -1373,11 +1298,14 @@ export default function FraisPage() {
       `发票合计：${formatMoney(
         total
       )}\n` +
-      `差额：${difference >= 0 ? "+" : ""}${formatMoney(
+      `差额：${
+        difference >= 0
+          ? "+"
+          : ""
+      }${formatMoney(
         difference
       )}\n\n` +
-      `确认后将生成最终 PDF。`;
-
+      `确认后才会生成最终 PDF。`;
 
     if (
       !window.confirm(
@@ -1387,10 +1315,8 @@ export default function FraisPage() {
       return;
     }
 
-
     setConfirmed(true);
   }
-
 
   // ---------------------------------------------------
   // 生成 PDF
@@ -1404,6 +1330,15 @@ export default function FraisPage() {
       return;
     }
 
+    if (
+      !year ||
+      !month
+    ) {
+      alert(
+        "请填写年份和月份。"
+      );
+      return;
+    }
 
     const selectedIndexes =
       invoices
@@ -1425,7 +1360,6 @@ export default function FraisPage() {
           }) => index
         );
 
-
     if (
       selectedIndexes.length ===
       0
@@ -1436,20 +1370,7 @@ export default function FraisPage() {
       return;
     }
 
-
-    if (
-      !year ||
-      !month
-    ) {
-      alert(
-        "请填写年份和月份。"
-      );
-      return;
-    }
-
-
     setGenerating(true);
-
 
     try {
       const pdfBytes =
@@ -1458,22 +1379,34 @@ export default function FraisPage() {
           selectedIndexes
         );
 
+      // =================================================
+      // 关键修复：
+      // Uint8Array<ArrayBufferLike>
+      // -> 标准 ArrayBuffer
+      // =================================================
+
+      const pdfBuffer =
+        new ArrayBuffer(
+          pdfBytes.byteLength
+        );
+
+      new Uint8Array(
+        pdfBuffer
+      ).set(pdfBytes);
 
       const blob =
         new Blob(
-          [pdfBytes],
+          [pdfBuffer],
           {
             type:
               "application/pdf",
           }
         );
 
-
       const url =
         URL.createObjectURL(
           blob
         );
-
 
       const fileName =
         `frais ${year} ${String(
@@ -1483,13 +1416,11 @@ export default function FraisPage() {
           "0"
         )}.pdf`;
 
-
       if (generatedUrl) {
         URL.revokeObjectURL(
           generatedUrl
         );
       }
-
 
       setGeneratedUrl(url);
 
@@ -1502,16 +1433,15 @@ export default function FraisPage() {
       );
 
       alert(
-        "PDF 生成失败，请检查发票文件格式。"
+        "PDF 生成失败，请检查发票文件。"
       );
     } finally {
       setGenerating(false);
     }
   }
 
-
   // ---------------------------------------------------
-  // 下载
+  // 下载 PDF
   // ---------------------------------------------------
 
   function downloadPdf() {
@@ -1521,7 +1451,6 @@ export default function FraisPage() {
     ) {
       return;
     }
-
 
     const link =
       document.createElement(
@@ -1545,7 +1474,6 @@ export default function FraisPage() {
     );
   }
 
-
   // ---------------------------------------------------
   // 清空
   // ---------------------------------------------------
@@ -1559,12 +1487,17 @@ export default function FraisPage() {
       return;
     }
 
-
     setInvoices([]);
 
     setMatches([]);
 
     setConfirmed(false);
+
+    if (generatedUrl) {
+      URL.revokeObjectURL(
+        generatedUrl
+      );
+    }
 
     setGeneratedUrl(null);
 
@@ -1573,9 +1506,8 @@ export default function FraisPage() {
     setProcessingText("");
   }
 
-
   // ---------------------------------------------------
-  // 当前选择金额
+  // 当前数据
   // ---------------------------------------------------
 
   const selectedCount =
@@ -1584,23 +1516,16 @@ export default function FraisPage() {
         invoice.selected
     ).length;
 
-
   const targetValue =
-    Number(target);
-
+    Number(target) || 0;
 
   const selectedDifference =
     manualTotal -
-    (Number.isFinite(
-      targetValue
-    )
-      ? targetValue
-      : 0);
+    targetValue;
 
-
-  // ===================================================
+  // =====================================================
   // UI
-  // ===================================================
+  // =====================================================
 
   return (
     <div
@@ -1623,9 +1548,9 @@ export default function FraisPage() {
             "0 auto",
         }}
       >
-        {/* ========================================= */}
+        {/* ================================================= */}
         {/* 标题 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
 
         <div
           style={{
@@ -1652,14 +1577,13 @@ export default function FraisPage() {
                 "#6b7280",
             }}
           >
-            上传多张发票 → 自动识别金额 → 匹配目标金额 → 确认 → 合并 PDF
+            批量上传发票 → OCR 识别 → 自动寻找目标金额组合 → 人工确认 → 合并 PDF
           </div>
         </div>
 
-
-        {/* ========================================= */}
-        {/* 参数 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ① 设置 */}
+        {/* ================================================= */}
 
         <div
           style={{
@@ -1686,7 +1610,6 @@ export default function FraisPage() {
             ① 设置
           </h2>
 
-
           <div
             style={{
               display:
@@ -1697,6 +1620,7 @@ export default function FraisPage() {
                 "16px",
             }}
           >
+            {/* 目标金额 */}
             <div>
               <label
                 style={{
@@ -1715,8 +1639,7 @@ export default function FraisPage() {
                 value={target}
                 onChange={(e) =>
                   setTarget(
-                    e.target
-                      .value
+                    e.target.value
                   )
                 }
                 type="number"
@@ -1738,7 +1661,7 @@ export default function FraisPage() {
               />
             </div>
 
-
+            {/* 年份 */}
             <div>
               <label
                 style={{
@@ -1757,8 +1680,7 @@ export default function FraisPage() {
                 value={year}
                 onChange={(e) =>
                   setYear(
-                    e.target
-                      .value
+                    e.target.value
                   )
                 }
                 type="number"
@@ -1774,13 +1696,13 @@ export default function FraisPage() {
                     "8px",
                   fontSize:
                     "16px",
-                  boxSizing:
+                    boxSizing:
                     "border-box",
                 }}
               />
             </div>
 
-
+            {/* 月份 */}
             <div>
               <label
                 style={{
@@ -1799,8 +1721,7 @@ export default function FraisPage() {
                 value={month}
                 onChange={(e) =>
                   setMonth(
-                    e.target
-                      .value
+                    e.target.value
                   )
                 }
                 style={{
@@ -1845,7 +1766,6 @@ export default function FraisPage() {
             </div>
           </div>
 
-
           <div
             style={{
               marginTop:
@@ -1863,6 +1783,7 @@ export default function FraisPage() {
             }}
           >
             最终文件名：
+
             <strong
               style={{
                 color:
@@ -1886,10 +1807,9 @@ export default function FraisPage() {
           </div>
         </div>
 
-
-        {/* ========================================= */}
-        {/* 上传 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ② 上传 */}
+        {/* ================================================= */}
 
         <div
           style={{
@@ -1916,7 +1836,6 @@ export default function FraisPage() {
             ② 上传发票
           </h2>
 
-
           <input
             ref={inputRef}
             type="file"
@@ -1930,7 +1849,6 @@ export default function FraisPage() {
                 "none",
             }}
           />
-
 
           <button
             onClick={() =>
@@ -1958,7 +1876,6 @@ export default function FraisPage() {
             ＋ 一次选择多张发票
           </button>
 
-
           <div
             style={{
               marginTop:
@@ -1969,9 +1886,8 @@ export default function FraisPage() {
                 "#6b7280",
             }}
           >
-            支持 PDF、JPG、JPEG、PNG，可以一次选择几十张。
+            支持 PDF、JPG、JPEG、PNG，可以一次选择多张。
           </div>
-
 
           {invoices.length >
             0 && (
@@ -2018,7 +1934,6 @@ export default function FraisPage() {
                   : "开始识别金额"}
               </button>
 
-
               <button
                 onClick={
                   clearAll
@@ -2044,7 +1959,6 @@ export default function FraisPage() {
             </div>
           )}
 
-
           {processingText && (
             <div
               style={{
@@ -2065,10 +1979,9 @@ export default function FraisPage() {
           )}
         </div>
 
-
-        {/* ========================================= */}
-        {/* 发票列表 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ③ 发票列表 */}
+        {/* ================================================= */}
 
         {invoices.length >
           0 && (
@@ -2096,7 +2009,6 @@ export default function FraisPage() {
             >
               ③ 发票识别结果
             </h2>
-
 
             <div
               style={{
@@ -2173,10 +2085,11 @@ export default function FraisPage() {
                         borderBottom:
                           "1px solid #e5e7eb",
                       }}
-                    />
+                    >
+                      操作
+                    </th>
                   </tr>
                 </thead>
-
 
                 <tbody>
                   {invoices.map(
@@ -2215,7 +2128,6 @@ export default function FraisPage() {
                           />
                         </td>
 
-
                         <td
                           style={{
                             padding:
@@ -2223,7 +2135,7 @@ export default function FraisPage() {
                             borderBottom:
                               "1px solid #f0f0f0",
                             maxWidth:
-                              "400px",
+                              "420px",
                           }}
                         >
                           <div
@@ -2265,7 +2177,6 @@ export default function FraisPage() {
                           </div>
                         </td>
 
-
                         <td
                           style={{
                             padding:
@@ -2288,8 +2199,7 @@ export default function FraisPage() {
                             ) =>
                               updateAmount(
                                 invoice.id,
-                                e
-                                  .target
+                                e.target
                                   .value
                               )
                             }
@@ -2307,7 +2217,6 @@ export default function FraisPage() {
                             }}
                           />
                         </td>
-
 
                         <td
                           style={{
@@ -2335,7 +2244,6 @@ export default function FraisPage() {
                             "failed" &&
                             "⚠ 请手动填写"}
                         </td>
-
 
                         <td
                           style={{
@@ -2376,10 +2284,9 @@ export default function FraisPage() {
           </div>
         )}
 
-
-        {/* ========================================= */}
-        {/* 匹配 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ④ 匹配 */}
+        {/* ================================================= */}
 
         {invoices.length >
           0 && (
@@ -2405,13 +2312,11 @@ export default function FraisPage() {
                   "19px",
               }}
             >
-              ④ 自动寻找最接近 {formatMoney(
-                Number(
-                  target
-                ) || 0
-              )} 的组合
+              ④ 自动寻找最接近{" "}
+              {formatMoney(
+                targetValue
+              )}
             </h2>
-
 
             <button
               onClick={
@@ -2440,7 +2345,6 @@ export default function FraisPage() {
               🔍 计算最佳组合
             </button>
 
-
             {matches.length >
               0 && (
               <div
@@ -2460,15 +2364,15 @@ export default function FraisPage() {
                   推荐组合
                 </div>
 
-
                 {matches.map(
                   (
                     match,
                     index
                   ) => {
-                    const isBest =
-                      index ===
-                      0;
+                    const exact =
+                      Math.abs(
+                        match.difference
+                      ) < 0.01;
 
                     return (
                       <button
@@ -2517,13 +2421,29 @@ export default function FraisPage() {
                         >
                           <div>
                             <strong>
-                              {isBest
+                              {index ===
+                              0
                                 ? "🎯 最佳方案"
                                 : `方案 ${
                                     index +
                                     1
                                   }`}
                             </strong>
+
+                            {exact && (
+                              <span
+                                style={{
+                                  marginLeft:
+                                    "10px",
+                                  color:
+                                    "#16a34a",
+                                  fontWeight:
+                                    700,
+                                }}
+                              >
+                                精确匹配
+                              </span>
+                            )}
 
                             <span
                               style={{
@@ -2538,10 +2458,9 @@ export default function FraisPage() {
                                   .indexes
                                   .length
                               }{" "}
-                              张发票
+                              张
                             </span>
                           </div>
-
 
                           <div
                             style={{
@@ -2557,7 +2476,6 @@ export default function FraisPage() {
                           </div>
                         </div>
 
-
                         <div
                           style={{
                             marginTop:
@@ -2565,10 +2483,7 @@ export default function FraisPage() {
                             fontSize:
                               "13px",
                             color:
-                              Math.abs(
-                                match.difference
-                              ) <
-                              0.01
+                              exact
                                 ? "#16a34a"
                                 : "#6b7280",
                           }}
@@ -2591,10 +2506,9 @@ export default function FraisPage() {
           </div>
         )}
 
-
-        {/* ========================================= */}
-        {/* 当前选择 */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ⑤ 确认 */}
+        {/* ================================================= */}
 
         {invoices.length >
           0 && (
@@ -2622,7 +2536,6 @@ export default function FraisPage() {
             >
               ⑤ 确认发票
             </h2>
-
 
             <div
               style={{
@@ -2668,13 +2581,10 @@ export default function FraisPage() {
                   }}
                 >
                   {formatMoney(
-                    Number(
-                      target
-                    ) || 0
+                    targetValue
                   )}
                 </div>
               </div>
-
 
               <div
                 style={{
@@ -2713,7 +2623,6 @@ export default function FraisPage() {
                 </div>
               </div>
 
-
               <div
                 style={{
                   padding:
@@ -2721,8 +2630,7 @@ export default function FraisPage() {
                   background:
                     Math.abs(
                       selectedDifference
-                    ) <
-                    0.01
+                    ) < 0.01
                       ? "#f0fdf4"
                       : "#f9fafb",
                   borderRadius:
@@ -2751,8 +2659,7 @@ export default function FraisPage() {
                     color:
                       Math.abs(
                         selectedDifference
-                      ) <
-                      0.01
+                      ) < 0.01
                         ? "#16a34a"
                         : "#111827",
                   }}
@@ -2768,7 +2675,6 @@ export default function FraisPage() {
               </div>
             </div>
 
-
             <div
               style={{
                 marginBottom:
@@ -2782,10 +2688,11 @@ export default function FraisPage() {
                 {selectedCount}
               </strong>{" "}
               张发票。
-              <br />
-              如果 OCR 金额识别错误，可以直接修改上面的金额，然后重新计算组合。
-            </div>
 
+              <br />
+
+              OCR 如果识别错误，可以直接修改金额，然后重新计算。
+            </div>
 
             <button
               onClick={
@@ -2793,8 +2700,7 @@ export default function FraisPage() {
               }
               disabled={
                 selectedCount ===
-                  0 ||
-                processing
+                0
               }
               style={{
                 padding:
@@ -2822,7 +2728,6 @@ export default function FraisPage() {
                 : "确认这组发票"}
             </button>
 
-
             {confirmed && (
               <div
                 style={{
@@ -2841,8 +2746,11 @@ export default function FraisPage() {
                 }}
               >
                 已确认。
+
                 <br />
-                下一步可以生成：
+
+                下一步生成：
+
                 <strong>
                   {" "}
                   frais{" "}
@@ -2862,10 +2770,9 @@ export default function FraisPage() {
           </div>
         )}
 
-
-        {/* ========================================= */}
-        {/* PDF */}
-        {/* ========================================= */}
+        {/* ================================================= */}
+        {/* ⑥ PDF */}
+        {/* ================================================= */}
 
         {confirmed && (
           <div
@@ -2893,7 +2800,6 @@ export default function FraisPage() {
               ⑥ 生成 PDF
             </h2>
 
-
             <div
               style={{
                 marginBottom:
@@ -2903,6 +2809,7 @@ export default function FraisPage() {
               }}
             >
               文件名：
+
               <strong
                 style={{
                   color:
@@ -2922,7 +2829,6 @@ export default function FraisPage() {
                 .pdf
               </strong>
             </div>
-
 
             <button
               onClick={
@@ -2961,7 +2867,6 @@ export default function FraisPage() {
                 : "生成 PDF"}
             </button>
 
-
             {generatedUrl && (
               <div
                 style={{
@@ -2990,7 +2895,6 @@ export default function FraisPage() {
                   ✓ PDF 已生成
                 </div>
 
-
                 <div
                   style={{
                     marginBottom:
@@ -2999,9 +2903,10 @@ export default function FraisPage() {
                       "14px",
                   }}
                 >
-                  {generatedFileName}
+                  {
+                    generatedFileName
+                  }
                 </div>
-
 
                 <button
                   onClick={
@@ -3034,3 +2939,4 @@ export default function FraisPage() {
     </div>
   );
 }
+ 
