@@ -67,28 +67,10 @@ function isPdfFile(file: File) {
 }
 
 // =====================================================
-// 判断图片
-// =====================================================
-
-function isImageFile(file: File) {
-  const name = file.name.toLowerCase();
-
-  return (
-    file.type.startsWith("image/") ||
-    name.endsWith(".jpg") ||
-    name.endsWith(".jpeg") ||
-    name.endsWith(".png") ||
-    name.endsWith(".webp")
-  );
-}
-
-// =====================================================
 // OCR 文本提取金额
 // =====================================================
 
-function parseAmountFromText(
-  text: string
-): number | null {
+function parseAmountFromText(text: string): number | null {
   if (!text) {
     return null;
   }
@@ -98,24 +80,12 @@ function parseAmountFromText(
     .replace(/￥/g, "¥")
     .replace(/\s+/g, " ");
 
-  // ---------------------------------------------------
-  // 优先寻找价税合计
-  // ---------------------------------------------------
-
   const patterns = [
     /价税合计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-
     /价税合计[^\d]{0,30}([\d,]+(?:\.\d{1,2})?)/i,
-
     /小写[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-
     /合\s*计[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-
     /金额[^\d]{0,30}¥?\s*([\d,]+(?:\.\d{1,2})?)/i,
-
-    /¥\s*([\d,]+(?:\.\d{1,2})?)/i,
-
-    /￥\s*([\d,]+(?:\.\d{1,2})?)/i,
   ];
 
   for (const pattern of patterns) {
@@ -134,10 +104,6 @@ function parseAmountFromText(
       }
     }
   }
-
-  // ---------------------------------------------------
-  // 扫描所有带两位小数的金额
-  // ---------------------------------------------------
 
   const matches = normalized.match(
     /(?:¥|￥)?\s*\d[\d,]*\.\d{2}/g
@@ -175,19 +141,16 @@ function parseAmountFromText(
 async function renderPdfToImages(
   file: File
 ): Promise<string[]> {
-  const pdfjsLib =
-    await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjsLib = await import("pdfjs-dist");
 
-  const arrayBuffer =
-    await file.arrayBuffer();
+  const arrayBuffer = await file.arrayBuffer();
 
   const loadingTask =
     pdfjsLib.getDocument({
-      data: new Uint8Array(arrayBuffer),
+      data: arrayBuffer,
     });
 
-  const pdf =
-    await loadingTask.promise;
+  const pdf = await loadingTask.promise;
 
   const images: string[] = [];
 
@@ -205,9 +168,7 @@ async function renderPdfToImages(
       });
 
     const canvas =
-      document.createElement(
-        "canvas"
-      );
+      document.createElement("canvas");
 
     const context =
       canvas.getContext("2d");
@@ -234,9 +195,6 @@ async function renderPdfToImages(
         0.9
       )
     );
-
-    canvas.width = 1;
-    canvas.height = 1;
   }
 
   return images;
@@ -250,10 +208,6 @@ async function recognizeInvoice(
   file: File,
   worker: any
 ): Promise<string> {
-  // ---------------------------------------------------
-  // PDF
-  // ---------------------------------------------------
-
   if (isPdfFile(file)) {
     const images =
       await renderPdfToImages(file);
@@ -284,20 +238,10 @@ async function recognizeInvoice(
     return result;
   }
 
-  // ---------------------------------------------------
-  // 图片
-  // ---------------------------------------------------
+  const result =
+    await worker.recognize(file);
 
-  if (isImageFile(file)) {
-    const result =
-      await worker.recognize(file);
-
-    return result.data.text;
-  }
-
-  throw new Error(
-    "不支持的文件格式"
-  );
+  return result.data.text;
 }
 
 // =====================================================
@@ -483,13 +427,11 @@ function findBestMatches(
       );
 
     const candidates = [
-      position - 3,
       position - 2,
       position - 1,
       position,
       position + 1,
       position + 2,
-      position + 3,
     ];
 
     for (
@@ -573,140 +515,6 @@ function findBestMatches(
 }
 
 // =====================================================
-// 将图片转换成 JPEG ArrayBuffer
-// =====================================================
-
-async function imageFileToJpeg(
-  file: File
-): Promise<ArrayBuffer> {
-  const objectUrl =
-    URL.createObjectURL(file);
-
-  try {
-    const image =
-      new Image();
-
-    await new Promise<void>(
-      (resolve, reject) => {
-        image.onload = () =>
-          resolve();
-
-        image.onerror = () =>
-          reject(
-            new Error(
-              `图片无法读取：${file.name}`
-            )
-          );
-
-        image.src =
-          objectUrl;
-      }
-    );
-
-    const maxWidth = 2400;
-    const maxHeight = 3400;
-
-    let width =
-      image.naturalWidth;
-
-    let height =
-      image.naturalHeight;
-
-    if (
-      width <= 0 ||
-      height <= 0
-    ) {
-      throw new Error(
-        `图片尺寸无效：${file.name}`
-      );
-    }
-
-    const scale =
-      Math.min(
-        1,
-        maxWidth / width,
-        maxHeight / height
-      );
-
-    width =
-      Math.max(
-        1,
-        Math.round(
-          width * scale
-        )
-      );
-
-    height =
-      Math.max(
-        1,
-        Math.round(
-          height * scale
-        )
-      );
-
-    const canvas =
-      document.createElement(
-        "canvas"
-      );
-
-    canvas.width =
-      width;
-
-    canvas.height =
-      height;
-
-    const context =
-      canvas.getContext("2d");
-
-    if (!context) {
-      throw new Error(
-        "无法创建 Canvas"
-      );
-    }
-
-    context.fillStyle =
-      "#ffffff";
-
-    context.fillRect(
-      0,
-      0,
-      width,
-      height
-    );
-
-    context.drawImage(
-      image,
-      0,
-      0,
-      width,
-      height
-    );
-
-    const blob =
-      await new Promise<Blob | null>(
-        (resolve) =>
-          canvas.toBlob(
-            resolve,
-            "image/jpeg",
-            0.92
-          )
-      );
-
-    if (!blob) {
-      throw new Error(
-        `图片转换失败：${file.name}`
-      );
-    }
-
-    return await blob.arrayBuffer();
-  } finally {
-    URL.revokeObjectURL(
-      objectUrl
-    );
-  }
-}
-
-// =====================================================
 // 创建最终 PDF
 // =====================================================
 
@@ -731,9 +539,9 @@ async function createCombinedPdf(
     const file =
       invoice.file;
 
-    // -------------------------------------------------
+    // =================================================
     // 原始 PDF
-    // -------------------------------------------------
+    // =================================================
 
     if (isPdfFile(file)) {
       const bytes =
@@ -754,106 +562,87 @@ async function createCombinedPdf(
         const page of
           copiedPages
       ) {
-        outputPdf.addPage(
-          page
-        );
+        outputPdf.addPage(page);
       }
 
       continue;
     }
 
-    // -------------------------------------------------
+    // =================================================
     // 图片
-    // -------------------------------------------------
+    // =================================================
 
-    if (isImageFile(file)) {
-      const jpegBytes =
-        await imageFileToJpeg(
-          file
-        );
+    const bytes =
+      await file.arrayBuffer();
 
-      const image =
-        await outputPdf.embedJpg(
-          jpegBytes
-        );
+    const isPng =
+      file.type ===
+        "image/png" ||
+      file.name
+        .toLowerCase()
+        .endsWith(".png");
 
-      const originalWidth =
-        image.width;
+    const image =
+      isPng
+        ? await outputPdf.embedPng(
+            bytes
+          )
+        : await outputPdf.embedJpg(
+            bytes
+          );
 
-      const originalHeight =
-        image.height;
+    const originalWidth =
+      image.width;
 
-      const pageWidth = 595;
-      const pageHeight = 842;
+    const originalHeight =
+      image.height;
 
-      const margin = 20;
+    const pageWidth = 595;
+    const pageHeight = 842;
 
-      const availableWidth =
-        pageWidth -
-        margin * 2;
-
-      const availableHeight =
-        pageHeight -
-        margin * 2;
-
-      const scale =
-        Math.min(
-          availableWidth /
-            originalWidth,
-          availableHeight /
-            originalHeight
-        );
-
-      const width =
-        originalWidth *
-        scale;
-
-      const height =
-        originalHeight *
-        scale;
-
-      const page =
-        outputPdf.addPage([
-          pageWidth,
-          pageHeight,
-        ]);
-
-      page.drawImage(
-        image,
-        {
-          x:
-            (pageWidth -
-              width) /
-            2,
-
-          y:
-            (pageHeight -
-              height) /
-            2,
-
-          width,
-          height,
-        }
+    const scale =
+      Math.min(
+        pageWidth /
+          originalWidth,
+        pageHeight /
+          originalHeight
       );
 
-      continue;
-    }
+    const width =
+      originalWidth * scale;
 
-    throw new Error(
-      `不支持的发票格式：${file.name}`
+    const height =
+      originalHeight * scale;
+
+    const page =
+      outputPdf.addPage([
+        pageWidth,
+        pageHeight,
+      ]);
+
+    page.drawImage(
+      image,
+      {
+        x:
+          (pageWidth -
+            width) /
+          2,
+
+        y:
+          (pageHeight -
+            height) /
+          2,
+
+        width,
+        height,
+      }
     );
   }
 
-  if (
-    outputPdf.getPageCount() ===
-    0
-  ) {
-    throw new Error(
-      "没有可以写入 PDF 的页面"
-    );
-  }
+  const result =
+    await outputPdf.save();
 
-  return await outputPdf.save();
+  return result;
 }
 
 // =====================================================
@@ -934,9 +723,9 @@ export default function FraisPage() {
       null
     );
 
-  // ---------------------------------------------------
-  // 清理 URL
-  // ---------------------------------------------------
+  // =====================================================
+  // 清理 Blob URL
+  // =====================================================
 
   useEffect(() => {
     return () => {
@@ -948,9 +737,9 @@ export default function FraisPage() {
     };
   }, [generatedUrl]);
 
-  // ---------------------------------------------------
-  // 当前选择总额
-  // ---------------------------------------------------
+  // =====================================================
+  // 当前选择金额
+  // =====================================================
 
   const manualTotal =
     useMemo(() => {
@@ -968,9 +757,9 @@ export default function FraisPage() {
         );
     }, [invoices]);
 
-  // ---------------------------------------------------
-  // 上传文件
-  // ---------------------------------------------------
+  // =====================================================
+  // 上传
+  // =====================================================
 
   function handleFiles(
     event: ChangeEvent<HTMLInputElement>
@@ -988,22 +777,15 @@ export default function FraisPage() {
 
     const validFiles =
       files.filter(
-        (file) =>
-          isPdfFile(file) ||
-          isImageFile(file)
+        (file) => {
+          return (
+            isPdfFile(file) ||
+            file.type.startsWith(
+              "image/"
+            )
+          );
+        }
       );
-
-    if (
-      validFiles.length === 0
-    ) {
-      alert(
-        "没有找到支持的发票文件。支持 PDF、JPG、JPEG、PNG、WEBP。"
-      );
-
-      event.target.value = "";
-
-      return;
-    }
 
     const newInvoices =
       validFiles.map(
@@ -1041,12 +823,6 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
 
     setGeneratedFileName("");
@@ -1054,9 +830,9 @@ export default function FraisPage() {
     event.target.value = "";
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 删除
-  // ---------------------------------------------------
+  // =====================================================
 
   function removeInvoice(
     id: string
@@ -1073,20 +849,12 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 修改金额
-  // ---------------------------------------------------
+  // =====================================================
 
   function updateAmount(
     id: string,
@@ -1100,8 +868,7 @@ export default function FraisPage() {
               invoice.id === id
                 ? {
                     ...invoice,
-                    amount:
-                      null,
+                    amount: null,
                     status:
                       "waiting",
                   }
@@ -1137,20 +904,12 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // OCR
-  // ---------------------------------------------------
+  // =====================================================
 
   async function startOCR() {
     if (
@@ -1159,7 +918,6 @@ export default function FraisPage() {
       alert(
         "请先上传发票。"
       );
-
       return;
     }
 
@@ -1169,15 +927,7 @@ export default function FraisPage() {
 
     setMatches([]);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
 
     let worker: any = null;
 
@@ -1298,16 +1048,13 @@ export default function FraisPage() {
       }
 
       setProcessingText(
-        "OCR 识别完成。请检查金额，必要时手动修改。"
+        "OCR 识别完成"
       );
     } catch (error) {
-      console.error(
-        "OCR initialization failed",
-        error
-      );
+      console.error(error);
 
       alert(
-        "OCR 初始化失败，请刷新页面后重试。"
+        "OCR 初始化失败，请检查 tesseract.js。"
       );
     } finally {
       if (worker) {
@@ -1320,9 +1067,9 @@ export default function FraisPage() {
     }
   }
 
-  // ---------------------------------------------------
-  // 计算最佳组合
-  // ---------------------------------------------------
+  // =====================================================
+  // 计算组合
+  // =====================================================
 
   function calculateMatches() {
     const targetValue =
@@ -1337,7 +1084,6 @@ export default function FraisPage() {
       alert(
         "请输入正确的目标金额。"
       );
-
       return;
     }
 
@@ -1351,9 +1097,8 @@ export default function FraisPage() {
       result.length === 0
     ) {
       alert(
-        "没有找到可计算的发票。请先 OCR，或者手动填写发票金额。"
+        "没有找到可计算的发票，请先 OCR 或手动填写金额。"
       );
-
       return;
     }
 
@@ -1363,15 +1108,7 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
 
     const best =
       result[0];
@@ -1398,9 +1135,9 @@ export default function FraisPage() {
     );
   }
 
-  // ---------------------------------------------------
-  // 选择推荐方案
-  // ---------------------------------------------------
+  // =====================================================
+  // 选择方案
+  // =====================================================
 
   function chooseMatch(
     matchIndex: number
@@ -1441,20 +1178,12 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 手动选择
-  // ---------------------------------------------------
+  // =====================================================
 
   function toggleInvoice(
     id: string
@@ -1475,20 +1204,12 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
-    if (generatedUrl) {
-      URL.revokeObjectURL(
-        generatedUrl
-      );
-    }
-
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 确认
-  // ---------------------------------------------------
+  // =====================================================
 
   function confirmSelection() {
     const selected =
@@ -1503,21 +1224,6 @@ export default function FraisPage() {
       alert(
         "请先选择发票。"
       );
-
-      return;
-    }
-
-    const missingAmount =
-      selected.some(
-        (invoice) =>
-          invoice.amount === null
-      );
-
-    if (missingAmount) {
-      alert(
-        "选择的发票中存在未填写金额的发票，请先补充金额。"
-      );
-
       return;
     }
 
@@ -1551,7 +1257,7 @@ export default function FraisPage() {
       }${formatMoney(
         difference
       )}\n\n` +
-      `确认后才会生成最终 PDF。`;
+      `确认后才能生成 PDF。`;
 
     if (
       !window.confirm(
@@ -1564,31 +1270,33 @@ export default function FraisPage() {
     setConfirmed(true);
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 生成 PDF
-  // ---------------------------------------------------
+  // =====================================================
 
   async function generatePdf() {
     console.log(
-      "[FRAIS] generatePdf clicked"
+      "开始生成 PDF"
     );
 
     if (!confirmed) {
       alert(
         "请先确认发票组合。"
       );
-
       return;
     }
 
-    if (
-      !year ||
-      !month
-    ) {
+    if (!year.trim()) {
       alert(
-        "请填写年份和月份。"
+        "请填写年份。"
       );
+      return;
+    }
 
+    if (!month) {
+      alert(
+        "请选择月份。"
+      );
       return;
     }
 
@@ -1601,15 +1309,12 @@ export default function FraisPage() {
           })
         )
         .filter(
-          ({
-            invoice,
-          }) =>
+          ({ invoice }) =>
             invoice.selected
         )
         .map(
-          ({
-            index,
-          }) => index
+          ({ index }) =>
+            index
         );
 
     if (
@@ -1619,30 +1324,12 @@ export default function FraisPage() {
       alert(
         "没有选择发票。"
       );
-
-      return;
-    }
-
-    const invalidSelected =
-      selectedIndexes.some(
-        (index) =>
-          invoices[index]
-            ?.amount === null
-      );
-
-    if (invalidSelected) {
-      alert(
-        "选择的发票存在未识别金额，请先填写金额。"
-      );
-
       return;
     }
 
     setGenerating(true);
 
     setGeneratedUrl(null);
-
-    setGeneratedFileName("");
 
     try {
       setProcessingText(
@@ -1655,37 +1342,20 @@ export default function FraisPage() {
           selectedIndexes
         );
 
-      console.log(
-        "[FRAIS] PDF bytes:",
-        pdfBytes.byteLength
-      );
-
-      if (
-        pdfBytes.byteLength ===
-        0
-      ) {
-        throw new Error(
-          "生成的 PDF 是空文件"
-        );
-      }
-
-      // -------------------------------------------------
-      // 强制复制到标准 ArrayBuffer
-      // -------------------------------------------------
+      // =================================================
+      // 转换成真正的 ArrayBuffer
+      // 避免 TS：
+      // Uint8Array<ArrayBufferLike>
+      // =================================================
 
       const pdfBuffer =
         new ArrayBuffer(
           pdfBytes.byteLength
         );
 
-      const pdfView =
-        new Uint8Array(
-          pdfBuffer
-        );
-
-      pdfView.set(
-        pdfBytes
-      );
+      new Uint8Array(
+        pdfBuffer
+      ).set(pdfBytes);
 
       const blob =
         new Blob(
@@ -1696,21 +1366,13 @@ export default function FraisPage() {
           }
         );
 
-      if (
-        blob.size === 0
-      ) {
-        throw new Error(
-          "PDF Blob 为空"
-        );
-      }
-
       const url =
         URL.createObjectURL(
           blob
         );
 
       const fileName =
-        `frais ${year} ${String(
+        `frais ${year.trim()} ${String(
           month
         ).padStart(
           2,
@@ -1724,30 +1386,29 @@ export default function FraisPage() {
       );
 
       setProcessingText(
-        "PDF 已生成，可以下载。"
+        "PDF 生成完成"
       );
     } catch (error) {
       console.error(
-        "[FRAIS] PDF generation failed:",
+        "PDF generation error:",
         error
       );
 
-      const message =
-        error instanceof Error
-          ? error.message
-          : String(error);
-
       alert(
-        `PDF 生成失败：\n\n${message}`
+        `PDF 生成失败：${
+          error instanceof Error
+            ? error.message
+            : "未知错误"
+        }`
       );
     } finally {
       setGenerating(false);
     }
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 下载 PDF
-  // ---------------------------------------------------
+  // =====================================================
 
   function downloadPdf() {
     if (
@@ -1755,9 +1416,8 @@ export default function FraisPage() {
       !generatedFileName
     ) {
       alert(
-        "PDF 尚未生成。"
+        "请先生成 PDF。"
       );
-
       return;
     }
 
@@ -1772,9 +1432,6 @@ export default function FraisPage() {
     link.download =
       generatedFileName;
 
-    link.style.display =
-      "none";
-
     document.body.appendChild(
       link
     );
@@ -1786,9 +1443,9 @@ export default function FraisPage() {
     );
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 清空
-  // ---------------------------------------------------
+  // =====================================================
 
   function clearAll() {
     if (
@@ -1818,9 +1475,9 @@ export default function FraisPage() {
     setProcessingText("");
   }
 
-  // ---------------------------------------------------
+  // =====================================================
   // 当前数据
-  // ---------------------------------------------------
+  // =====================================================
 
   const selectedCount =
     invoices.filter(
@@ -1889,9 +1546,7 @@ export default function FraisPage() {
                 "#6b7280",
             }}
           >
-            批量上传发票 → OCR
-            识别 → 自动寻找目标金额组合
-            → 人工确认 → 合并 PDF
+            批量上传发票 → OCR 识别 → 自动寻找目标金额组合 → 人工确认 → 合并 PDF
           </div>
         </div>
 
@@ -1934,8 +1589,6 @@ export default function FraisPage() {
                 "16px",
             }}
           >
-            {/* 目标金额 */}
-
             <div>
               <label
                 style={{
@@ -1976,8 +1629,6 @@ export default function FraisPage() {
               />
             </div>
 
-            {/* 年份 */}
-
             <div>
               <label
                 style={{
@@ -2017,8 +1668,6 @@ export default function FraisPage() {
                 }}
               />
             </div>
-
-            {/* 月份 */}
 
             <div>
               <label
@@ -2068,9 +1717,7 @@ export default function FraisPage() {
                   },
                   (_, i) => (
                     <option
-                      key={
-                        i + 1
-                      }
+                      key={i + 1}
                       value={String(
                         i + 1
                       )}
@@ -2157,7 +1804,7 @@ export default function FraisPage() {
             ref={inputRef}
             type="file"
             multiple
-            accept="application/pdf,image/png,image/jpeg,image/jpg,image/webp"
+            accept="application/pdf,image/png,image/jpeg,image/jpg"
             onChange={
               handleFiles
             }
@@ -2168,6 +1815,7 @@ export default function FraisPage() {
           />
 
           <button
+            type="button"
             onClick={() =>
               inputRef.current?.click()
             }
@@ -2203,7 +1851,7 @@ export default function FraisPage() {
                 "#6b7280",
             }}
           >
-            支持 PDF、JPG、JPEG、PNG、WEBP，可以一次选择多张。
+            支持 PDF、JPG、JPEG、PNG，可以一次选择多张。
           </div>
 
           {invoices.length >
@@ -2219,6 +1867,7 @@ export default function FraisPage() {
               }}
             >
               <button
+                type="button"
                 onClick={
                   startOCR
                 }
@@ -2252,6 +1901,7 @@ export default function FraisPage() {
               </button>
 
               <button
+                type="button"
                 onClick={
                   clearAll
                 }
@@ -2573,6 +2223,7 @@ export default function FraisPage() {
                           }}
                         >
                           <button
+                            type="button"
                             onClick={() =>
                               removeInvoice(
                                 invoice.id
@@ -2636,6 +2287,7 @@ export default function FraisPage() {
             </h2>
 
             <button
+              type="button"
               onClick={
                 calculateMatches
               }
@@ -2650,11 +2302,15 @@ export default function FraisPage() {
                 borderRadius:
                   "8px",
                 background:
-                  "#2563eb",
+                  processing
+                    ? "#9ca3af"
+                    : "#2563eb",
                 color:
                   "#ffffff",
                 cursor:
-                  "pointer",
+                  processing
+                    ? "not-allowed"
+                    : "pointer",
                 fontWeight:
                   600,
               }}
@@ -2693,6 +2349,7 @@ export default function FraisPage() {
 
                     return (
                       <button
+                        type="button"
                         key={
                           index
                         }
@@ -3005,13 +2662,12 @@ export default function FraisPage() {
                 {selectedCount}
               </strong>{" "}
               张发票。
-
               <br />
-
               OCR 如果识别错误，可以直接修改金额，然后重新计算。
             </div>
 
             <button
+              type="button"
               onClick={
                 confirmSelection
               }
@@ -3066,11 +2722,8 @@ export default function FraisPage() {
                 }}
               >
                 已确认。
-
                 <br />
-
                 下一步生成：
-
                 <strong>
                   {" "}
                   frais{" "}
@@ -3129,11 +2782,12 @@ export default function FraisPage() {
               }}
             >
               文件名：
-
               <strong
                 style={{
                   color:
                     "#111827",
+                  marginLeft:
+                    "5px",
                 }}
               >
                 frais{" "}
@@ -3150,46 +2804,51 @@ export default function FraisPage() {
               </strong>
             </div>
 
+            {/* =================================================
+                注意：
+                这里故意不再使用：
+                disabled={generating || !year || !month}
+
+                所以按钮不会因为没填年月而变灰。
+                点击以后才检查年月。
+            ================================================= */}
+
             <button
               type="button"
               onClick={
                 generatePdf
               }
               disabled={
-                generating ||
-                !year ||
-                !month
+                generating
               }
               style={{
                 padding:
-                  "13px 22px",
+                  "14px 24px",
                 border:
                   "none",
                 borderRadius:
                   "8px",
                 background:
-                  generating ||
-                  !year ||
-                  !month
+                  generating
                     ? "#9ca3af"
                     : "#7c3aed",
                 color:
                   "#ffffff",
                 cursor:
-                  generating ||
-                  !year ||
-                  !month
+                  generating
                     ? "not-allowed"
                     : "pointer",
                 fontWeight:
                   700,
                 fontSize:
-                  "15px",
+                  "16px",
+                minWidth:
+                  "180px",
               }}
             >
               {generating
                 ? "正在生成 PDF..."
-                : "生成 PDF"}
+                : "📄 生成 PDF"}
             </button>
 
             {generatedUrl && (
@@ -3215,6 +2874,8 @@ export default function FraisPage() {
                       "#166534",
                     marginBottom:
                       "10px",
+                    fontSize:
+                      "17px",
                   }}
                 >
                   ✓ PDF 已生成
@@ -3228,9 +2889,13 @@ export default function FraisPage() {
                       "14px",
                   }}
                 >
-                  {
-                    generatedFileName
-                  }
+                  文件：
+                  <strong>
+                    {" "}
+                    {
+                      generatedFileName
+                    }
+                  </strong>
                 </div>
 
                 <button
@@ -3240,7 +2905,7 @@ export default function FraisPage() {
                   }
                   style={{
                     padding:
-                      "12px 20px",
+                      "13px 22px",
                     border:
                       "none",
                     borderRadius:
@@ -3253,6 +2918,8 @@ export default function FraisPage() {
                       "pointer",
                     fontWeight:
                       700,
+                    fontSize:
+                      "15px",
                   }}
                 >
                   ⬇ 下载 PDF
@@ -3265,3 +2932,4 @@ export default function FraisPage() {
     </div>
   );
 }
+ 
