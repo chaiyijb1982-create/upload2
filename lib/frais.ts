@@ -1,74 +1,135 @@
+// =====================================================
+// lib/frais.ts
+//
+// FRAIS / 发票管理模块
+//
+// 数据来源：
+// 1. frais_invoices
+// 2. frais_used_invoices
+// 3. frais_project_rules
+// 4. frais_pdf_history
+//
+// 重要：
+// 手机上传的发票已经进入 Supabase，
+// 电脑端 /frais 直接读取 frais_invoices，
+// 不需要再次上传。
+// =====================================================
+
 import { supabase } from "@/lib/supabase";
 
 // =====================================================
-// 类型
-// =====================================================
-
-export type FraisInvoiceRow = {
-  id: string;
-  file_name: string;
-  file_path: string;
-  file_hash: string | null;
-  invoice_number: string | null;
-  invoice_date: string | null;
-  amount: number | null;
-  project_name: string | null;
-  project_category: string | null;
-  ocr_text: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-};
-
-export type FraisProjectRule = {
-  id: string;
-  project_key: string;
-  project_name: string;
-  category: string | null;
-  allowed: boolean;
-  updated_at: string;
-};
-
-export type FraisUsedInvoice = {
-  id: string;
-  invoice_number: string | null;
-  file_hash: string | null;
-  invoice_date: string | null;
-  amount: number | null;
-  project_name: string | null;
-  project_category: string | null;
-  used_at: string;
-  frais_pdf_name: string;
-};
-
-export type FraisInvoice = {
-  id: string;
-  file_name: string;
-  file_path: string;
-  file_hash: string | null;
-  invoice_number: string | null;
-  invoice_date: string | null;
-  amount: number | null;
-  project_name: string | null;
-  project_category: string | null;
-  ocr_text: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-
-  selected: boolean;
-
-  file_url?: string | null;
-};
-
-// =====================================================
-// Supabase Storage Bucket
+// Storage Bucket
+//
+// 如果你的 Supabase Storage Bucket 名称不是 invoices，
+// 只修改这里。
 // =====================================================
 
 export const FRAIS_STORAGE_BUCKET = "invoices";
 
 // =====================================================
-// 获取全部发票
+// frais_invoices
+// =====================================================
+
+export type FraisInvoiceRow = {
+  id: string;
+
+  file_name: string;
+  file_path: string;
+
+  file_hash: string | null;
+
+  invoice_number: string | null;
+  invoice_date: string | null;
+  amount: number | null;
+
+  project_name: string | null;
+  project_category: string | null;
+
+  ocr_text: string | null;
+
+  status: string;
+
+  created_at: string;
+  updated_at: string;
+};
+
+// =====================================================
+// frais_project_rules
+// =====================================================
+
+export type FraisProjectRule = {
+  id: string;
+
+  project_key: string;
+  project_name: string;
+
+  category: string | null;
+
+  allowed: boolean;
+
+  updated_at: string;
+};
+
+// =====================================================
+// frais_used_invoices
+// =====================================================
+
+export type FraisUsedInvoice = {
+  id: string;
+
+  invoice_number: string | null;
+  file_hash: string | null;
+
+  invoice_date: string | null;
+  amount: number | null;
+
+  project_name: string | null;
+  project_category: string | null;
+
+  used_at: string;
+
+  frais_pdf_name: string;
+};
+
+// =====================================================
+// 前端使用的 Invoice
+// =====================================================
+
+export type FraisInvoice = {
+  id: string;
+
+  file_name: string;
+  file_path: string;
+
+  file_hash: string | null;
+
+  invoice_number: string | null;
+  invoice_date: string | null;
+  amount: number | null;
+
+  project_name: string | null;
+  project_category: string | null;
+
+  ocr_text: string | null;
+
+  status: string;
+
+  created_at: string;
+  updated_at: string;
+
+  // 前端选择状态
+  selected: boolean;
+
+  // Storage 临时访问地址
+  file_url?: string | null;
+};
+
+// =====================================================
+// 获取全部 Supabase 发票
+//
+// 注意：
+// 这里不会要求用户上传文件。
+// 直接读取 frais_invoices。
 // =====================================================
 
 export async function getFraisInvoices(): Promise<
@@ -88,7 +149,7 @@ export async function getFraisInvoices(): Promise<
     );
 
     throw new Error(
-      `读取发票失败：${error.message}`
+      `读取 Supabase 发票失败：${error.message}`
     );
   }
 
@@ -96,7 +157,7 @@ export async function getFraisInvoices(): Promise<
 }
 
 // =====================================================
-// 获取已经使用的发票
+// 获取已经使用过的发票
 // =====================================================
 
 export async function getFraisUsedInvoices(): Promise<
@@ -154,9 +215,8 @@ export async function getFraisProjectRules(): Promise<
 // =====================================================
 // 判断发票是否已经使用
 //
-// 优先使用：
-// 1. invoice_number
-// 2. file_hash
+// 优先使用 invoice_number
+// 没有 invoice_number 时使用 file_hash
 // =====================================================
 
 export function isFraisInvoiceUsed(
@@ -164,7 +224,7 @@ export function isFraisInvoiceUsed(
   usedInvoices: FraisUsedInvoice[]
 ): boolean {
   // -----------------------------------------------
-  // 第一优先级：发票号码
+  // 1. 发票号码
   // -----------------------------------------------
 
   if (
@@ -183,7 +243,7 @@ export function isFraisInvoiceUsed(
   }
 
   // -----------------------------------------------
-  // 第二优先级：文件 Hash
+  // 2. 文件 Hash
   // -----------------------------------------------
 
   if (
@@ -211,11 +271,10 @@ export function isFraisProjectAllowed(
   invoice: FraisInvoiceRow,
   rules: FraisProjectRule[]
 ): boolean {
-  // -----------------------------------------------
   // 没有项目名称
-  // 默认允许
-  // -----------------------------------------------
-
+  //
+  // 不直接过滤掉。
+  // 这样 OCR 尚未识别的发票仍然可以显示。
   if (
     !invoice.project_name ||
     !invoice.project_name.trim()
@@ -227,14 +286,15 @@ export function isFraisProjectAllowed(
     invoice.project_name.trim();
 
   // -----------------------------------------------
-  // 精确匹配项目名称
+  // 1. 精确匹配项目名称
   // -----------------------------------------------
 
   const exactRule =
     rules.find(
       (rule) =>
+        rule.project_name &&
         rule.project_name.trim() ===
-        projectName
+          projectName
     );
 
   if (exactRule) {
@@ -242,7 +302,7 @@ export function isFraisProjectAllowed(
   }
 
   // -----------------------------------------------
-  // project_key 匹配
+  // 2. project_key 匹配
   // -----------------------------------------------
 
   const projectKey =
@@ -253,10 +313,11 @@ export function isFraisProjectAllowed(
   const keyRule =
     rules.find(
       (rule) =>
+        rule.project_key &&
         rule.project_key
-          ?.toLowerCase()
+          .toLowerCase()
           .replace(/\s+/g, "") ===
-        projectKey
+          projectKey
     );
 
   if (keyRule) {
@@ -264,7 +325,8 @@ export function isFraisProjectAllowed(
   }
 
   // -----------------------------------------------
-  // 没有规则
+  // 3. 没有规则
+  //
   // 默认允许
   // -----------------------------------------------
 
@@ -272,7 +334,7 @@ export function isFraisProjectAllowed(
 }
 
 // =====================================================
-// 转换为前端使用的数据
+// 转换成前端 Invoice
 // =====================================================
 
 export function convertFraisInvoice(
@@ -288,9 +350,10 @@ export function convertFraisInvoice(
 }
 
 // =====================================================
-// 获取 Storage 文件 URL
+// 获取 Storage 文件临时 URL
 //
-// 支持：
+// filePath 支持：
+//
 // 1. 完整 URL
 // 2. Storage path
 // =====================================================
@@ -302,10 +365,7 @@ export async function getFraisFileUrl(
     return null;
   }
 
-  // -----------------------------------------------
   // 已经是完整 URL
-  // -----------------------------------------------
-
   if (
     filePath.startsWith("http://") ||
     filePath.startsWith("https://")
@@ -314,7 +374,7 @@ export async function getFraisFileUrl(
   }
 
   // -----------------------------------------------
-  // Storage path
+  // Supabase Storage Signed URL
   // -----------------------------------------------
 
   const {
@@ -329,7 +389,7 @@ export async function getFraisFileUrl(
 
   if (error) {
     console.error(
-      "createSignedUrl error:",
+      "getFraisFileUrl createSignedUrl error:",
       error
     );
 
@@ -340,13 +400,13 @@ export async function getFraisFileUrl(
 }
 
 // =====================================================
-// 更新项目规则
+// 保存项目规则
 // =====================================================
 
 export async function updateFraisProjectRule(
   id: string,
   allowed: boolean
-) {
+): Promise<void> {
   const { error } =
     await supabase
       .from("frais_project_rules")
@@ -371,47 +431,40 @@ export async function updateFraisProjectRule(
 }
 
 // =====================================================
-// 记录已经使用的发票
+// 记录已经用于 FRAIS PDF 的发票
 // =====================================================
 
 export async function markFraisInvoicesUsed(
   invoices: FraisInvoice[],
   pdfName: string
-) {
-  const rows =
-    invoices.map(
-      (invoice) => ({
-        invoice_number:
-          invoice.invoice_number ||
-          null,
+): Promise<void> {
+  const rows = invoices.map(
+    (invoice) => ({
+      invoice_number:
+        invoice.invoice_number || null,
 
-        file_hash:
-          invoice.file_hash ||
-          null,
+      file_hash:
+        invoice.file_hash || null,
 
-        invoice_date:
-          invoice.invoice_date ||
-          null,
+      invoice_date:
+        invoice.invoice_date || null,
 
-        amount:
-          invoice.amount ??
-          null,
+      amount:
+        invoice.amount ?? null,
 
-        project_name:
-          invoice.project_name ||
-          null,
+      project_name:
+        invoice.project_name || null,
 
-        project_category:
-          invoice.project_category ||
-          null,
+      project_category:
+        invoice.project_category || null,
 
-        used_at:
-          new Date().toISOString(),
+      used_at:
+        new Date().toISOString(),
 
-        frais_pdf_name:
-          pdfName,
-      })
-    );
+      frais_pdf_name:
+        pdfName,
+    })
+  );
 
   if (rows.length === 0) {
     return;
@@ -435,21 +488,25 @@ export async function markFraisInvoicesUsed(
 }
 
 // =====================================================
-// 保存 PDF 历史
+// 保存 FRAIS PDF 历史
 // =====================================================
 
 export async function saveFraisPdfHistory(
   params: {
     pdfName: string;
+
     year: number;
     month: number;
+
     targetAmount: number;
     actualAmount: number;
     difference: number;
+
     invoiceCount: number;
+
     mode?: string;
   }
-) {
+): Promise<void> {
   const { error } =
     await supabase
       .from("frais_pdf_history")
@@ -476,8 +533,7 @@ export async function saveFraisPdfHistory(
           params.invoiceCount,
 
         mode:
-          params.mode ||
-          "manual",
+          params.mode || "manual",
 
         created_at:
           new Date().toISOString(),
@@ -494,3 +550,4 @@ export async function saveFraisPdfHistory(
     );
   }
 }
+ 
