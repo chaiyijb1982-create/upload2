@@ -67,10 +67,12 @@ function isPdfFile(file: File) {
 }
 
 // =====================================================
-// OCR 文本提取金额
+// OCR 金额
 // =====================================================
 
-function parseAmountFromText(text: string): number | null {
+function parseAmountFromText(
+  text: string
+): number | null {
   if (!text) {
     return null;
   }
@@ -141,16 +143,19 @@ function parseAmountFromText(text: string): number | null {
 async function renderPdfToImages(
   file: File
 ): Promise<string[]> {
-  const pdfjsLib = await import("pdfjs-dist");
+  const pdfjsLib =
+    await import("pdfjs-dist");
 
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer =
+    await file.arrayBuffer();
 
   const loadingTask =
     pdfjsLib.getDocument({
       data: arrayBuffer,
     });
 
-  const pdf = await loadingTask.promise;
+  const pdf =
+    await loadingTask.promise;
 
   const images: string[] = [];
 
@@ -515,7 +520,7 @@ function findBestMatches(
 }
 
 // =====================================================
-// 创建最终 PDF
+// 创建 PDF
 // =====================================================
 
 async function createCombinedPdf(
@@ -540,7 +545,7 @@ async function createCombinedPdf(
       invoice.file;
 
     // =================================================
-    // 原始 PDF
+    // PDF
     // =================================================
 
     if (isPdfFile(file)) {
@@ -639,10 +644,7 @@ async function createCombinedPdf(
     );
   }
 
-  const result =
-    await outputPdf.save();
-
-  return result;
+  return await outputPdf.save();
 }
 
 // =====================================================
@@ -724,7 +726,7 @@ export default function FraisPage() {
     );
 
   // =====================================================
-  // 清理 Blob URL
+  // 清理 URL
   // =====================================================
 
   useEffect(() => {
@@ -757,6 +759,19 @@ export default function FraisPage() {
         );
     }, [invoices]);
 
+  const selectedCount =
+    invoices.filter(
+      (invoice) =>
+        invoice.selected
+    ).length;
+
+  const targetValue =
+    Number(target) || 0;
+
+  const selectedDifference =
+    manualTotal -
+    targetValue;
+
   // =====================================================
   // 上传
   // =====================================================
@@ -777,14 +792,11 @@ export default function FraisPage() {
 
     const validFiles =
       files.filter(
-        (file) => {
-          return (
-            isPdfFile(file) ||
-            file.type.startsWith(
-              "image/"
-            )
-          );
-        }
+        (file) =>
+          isPdfFile(file) ||
+          file.type.startsWith(
+            "image/"
+          )
       );
 
     const newInvoices =
@@ -849,7 +861,15 @@ export default function FraisPage() {
 
     setConfirmed(false);
 
+    if (generatedUrl) {
+      URL.revokeObjectURL(
+        generatedUrl
+      );
+    }
+
     setGeneratedUrl(null);
+
+    setGeneratedFileName("");
   }
 
   // =====================================================
@@ -941,7 +961,9 @@ export default function FraisPage() {
           "chi_sim+eng",
           1,
           {
-            logger: (message: any) => {
+            logger: (
+              message: any
+            ) => {
               if (
                 message.status ===
                 "recognizing text"
@@ -1110,6 +1132,8 @@ export default function FraisPage() {
 
     setGeneratedUrl(null);
 
+    setGeneratedFileName("");
+
     const best =
       result[0];
 
@@ -1179,6 +1203,8 @@ export default function FraisPage() {
     setConfirmed(false);
 
     setGeneratedUrl(null);
+
+    setGeneratedFileName("");
   }
 
   // =====================================================
@@ -1205,6 +1231,8 @@ export default function FraisPage() {
     setConfirmed(false);
 
     setGeneratedUrl(null);
+
+    setGeneratedFileName("");
   }
 
   // =====================================================
@@ -1223,6 +1251,20 @@ export default function FraisPage() {
     ) {
       alert(
         "请先选择发票。"
+      );
+      return;
+    }
+
+    const invalid =
+      selected.some(
+        (invoice) =>
+          invoice.amount === null ||
+          invoice.amount <= 0
+      );
+
+    if (invalid) {
+      alert(
+        "当前选择中存在没有金额的发票，请先填写金额。"
       );
       return;
     }
@@ -1251,13 +1293,14 @@ export default function FraisPage() {
         total
       )}\n` +
       `差额：${
-        difference >= 0
+        difference >=
+        0
           ? "+"
           : ""
       }${formatMoney(
         difference
       )}\n\n` +
-      `确认后才能生成 PDF。`;
+      `确认后可以生成 PDF。`;
 
     if (
       !window.confirm(
@@ -1268,6 +1311,14 @@ export default function FraisPage() {
     }
 
     setConfirmed(true);
+
+    setGeneratedUrl(null);
+
+    setGeneratedFileName("");
+
+    setProcessingText(
+      "发票组合已确认，可以生成 PDF。"
+    );
   }
 
   // =====================================================
@@ -1279,12 +1330,20 @@ export default function FraisPage() {
       "开始生成 PDF"
     );
 
+    // ---------------------------------------------------
+    // 1. 检查确认
+    // ---------------------------------------------------
+
     if (!confirmed) {
       alert(
-        "请先确认发票组合。"
+        "请先点击「确认这组发票」。"
       );
       return;
     }
+
+    // ---------------------------------------------------
+    // 2. 检查年份
+    // ---------------------------------------------------
 
     if (!year.trim()) {
       alert(
@@ -1293,12 +1352,20 @@ export default function FraisPage() {
       return;
     }
 
+    // ---------------------------------------------------
+    // 3. 检查月份
+    // ---------------------------------------------------
+
     if (!month) {
       alert(
         "请选择月份。"
       );
       return;
     }
+
+    // ---------------------------------------------------
+    // 4. 找出选择的发票
+    // ---------------------------------------------------
 
     const selectedIndexes =
       invoices
@@ -1327,14 +1394,28 @@ export default function FraisPage() {
       return;
     }
 
+    // ---------------------------------------------------
+    // 5. 防止重复点击
+    // ---------------------------------------------------
+
+    if (generating) {
+      return;
+    }
+
     setGenerating(true);
 
     setGeneratedUrl(null);
+
+    setGeneratedFileName("");
 
     try {
       setProcessingText(
         "正在生成 PDF，请稍候..."
       );
+
+      // -------------------------------------------------
+      // 真正生成 PDF
+      // -------------------------------------------------
 
       const pdfBytes =
         await createCombinedPdf(
@@ -1342,11 +1423,18 @@ export default function FraisPage() {
           selectedIndexes
         );
 
-      // =================================================
-      // 转换成真正的 ArrayBuffer
-      // 避免 TS：
-      // Uint8Array<ArrayBufferLike>
-      // =================================================
+      if (
+        !pdfBytes ||
+        pdfBytes.length === 0
+      ) {
+        throw new Error(
+          "生成的 PDF 是空文件"
+        );
+      }
+
+      // -------------------------------------------------
+      // 转成标准 ArrayBuffer
+      // -------------------------------------------------
 
       const pdfBuffer =
         new ArrayBuffer(
@@ -1357,6 +1445,10 @@ export default function FraisPage() {
         pdfBuffer
       ).set(pdfBytes);
 
+      // -------------------------------------------------
+      // Blob
+      // -------------------------------------------------
+
       const blob =
         new Blob(
           [pdfBuffer],
@@ -1365,6 +1457,16 @@ export default function FraisPage() {
               "application/pdf",
           }
         );
+
+      if (blob.size === 0) {
+        throw new Error(
+          "PDF 文件大小为 0"
+        );
+      }
+
+      // -------------------------------------------------
+      // URL
+      // -------------------------------------------------
 
       const url =
         URL.createObjectURL(
@@ -1386,7 +1488,7 @@ export default function FraisPage() {
       );
 
       setProcessingText(
-        "PDF 生成完成"
+        "✓ PDF 生成完成，可以下载。"
       );
     } catch (error) {
       console.error(
@@ -1474,23 +1576,6 @@ export default function FraisPage() {
 
     setProcessingText("");
   }
-
-  // =====================================================
-  // 当前数据
-  // =====================================================
-
-  const selectedCount =
-    invoices.filter(
-      (invoice) =>
-        invoice.selected
-    ).length;
-
-  const targetValue =
-    Number(target) || 0;
-
-  const selectedDifference =
-    manualTotal -
-    targetValue;
 
   // =====================================================
   // UI
@@ -1589,6 +1674,8 @@ export default function FraisPage() {
                 "16px",
             }}
           >
+            {/* 目标金额 */}
+
             <div>
               <label
                 style={{
@@ -1605,11 +1692,17 @@ export default function FraisPage() {
 
               <input
                 value={target}
-                onChange={(e) =>
+                onChange={(e) => {
                   setTarget(
                     e.target.value
-                  )
-                }
+                  );
+                  setConfirmed(
+                    false
+                  );
+                  setGeneratedUrl(
+                    null
+                  );
+                }}
                 type="number"
                 step="0.01"
                 style={{
@@ -1629,6 +1722,8 @@ export default function FraisPage() {
               />
             </div>
 
+            {/* 年份 */}
+
             <div>
               <label
                 style={{
@@ -1645,11 +1740,14 @@ export default function FraisPage() {
 
               <input
                 value={year}
-                onChange={(e) =>
+                onChange={(e) => {
                   setYear(
                     e.target.value
-                  )
-                }
+                  );
+                  setGeneratedUrl(
+                    null
+                  );
+                }}
                 type="number"
                 placeholder="2026"
                 style={{
@@ -1669,6 +1767,8 @@ export default function FraisPage() {
               />
             </div>
 
+            {/* 月份 */}
+
             <div>
               <label
                 style={{
@@ -1685,11 +1785,14 @@ export default function FraisPage() {
 
               <select
                 value={month}
-                onChange={(e) =>
+                onChange={(e) => {
                   setMonth(
                     e.target.value
-                  )
-                }
+                  );
+                  setGeneratedUrl(
+                    null
+                  );
+                }}
                 style={{
                   width:
                     "100%",
@@ -1918,7 +2021,9 @@ export default function FraisPage() {
                   background:
                     "#ffffff",
                   cursor:
-                    "pointer",
+                    processing
+                      ? "not-allowed"
+                      : "pointer",
                 }}
               >
                 清空全部
@@ -2683,7 +2788,10 @@ export default function FraisPage() {
                 borderRadius:
                   "8px",
                 background:
-                  confirmed
+                  selectedCount ===
+                  0
+                    ? "#9ca3af"
+                    : confirmed
                     ? "#16a34a"
                     : "#111827",
                 color:
@@ -2721,9 +2829,12 @@ export default function FraisPage() {
                     "#166534",
                 }}
               >
-                已确认。
+                ✓ 已确认。
+
                 <br />
-                下一步生成：
+
+                下一步可以生成：
+
                 <strong>
                   {" "}
                   frais{" "}
@@ -2744,192 +2855,290 @@ export default function FraisPage() {
         )}
 
         {/* ================================================= */}
-        {/* ⑥ PDF */}
+        {/* ⑥ 生成 PDF */}
         {/* ================================================= */}
 
-        {confirmed && (
-          <div
+        <div
+          style={{
+            background:
+              "#ffffff",
+            borderRadius:
+              "16px",
+            padding:
+              "24px",
+            marginBottom:
+              "20px",
+            boxShadow:
+              "0 2px 10px rgba(0,0,0,0.05)",
+          }}
+        >
+          <h2
             style={{
-              background:
-                "#ffffff",
-              borderRadius:
-                "16px",
-              padding:
-                "24px",
-              marginBottom:
-                "20px",
-              boxShadow:
-                "0 2px 10px rgba(0,0,0,0.05)",
+              margin:
+                "0 0 18px",
+              fontSize:
+                "19px",
             }}
           >
-            <h2
+            ⑥ 生成 PDF
+          </h2>
+
+          <div
+            style={{
+              marginBottom:
+                "12px",
+              color:
+                "#4b5563",
+            }}
+          >
+            文件名：
+
+            <strong
               style={{
-                margin:
-                  "0 0 18px",
-                fontSize:
-                  "19px",
+                color:
+                  "#111827",
+                marginLeft:
+                  "5px",
               }}
             >
-              ⑥ 生成 PDF
-            </h2>
+              frais{" "}
+              {year || "XXXX"}{" "}
+              {month
+                ? String(
+                    month
+                  ).padStart(
+                    2,
+                    "0"
+                  )
+                : "XX"}
+              .pdf
+            </strong>
+          </div>
 
+          {/* 状态提示 */}
+
+          {!confirmed && (
             <div
               style={{
                 marginBottom:
                   "16px",
-                color:
-                  "#4b5563",
-              }}
-            >
-              文件名：
-              <strong
-                style={{
-                  color:
-                    "#111827",
-                  marginLeft:
-                    "5px",
-                }}
-              >
-                frais{" "}
-                {year || "XXXX"}{" "}
-                {month
-                  ? String(
-                      month
-                    ).padStart(
-                      2,
-                      "0"
-                    )
-                  : "XX"}
-                .pdf
-              </strong>
-            </div>
-
-            {/* =================================================
-                注意：
-                这里故意不再使用：
-                disabled={generating || !year || !month}
-
-                所以按钮不会因为没填年月而变灰。
-                点击以后才检查年月。
-            ================================================= */}
-
-            <button
-              type="button"
-              onClick={
-                generatePdf
-              }
-              disabled={
-                generating
-              }
-              style={{
                 padding:
-                  "14px 24px",
+                  "12px 14px",
+                background:
+                  "#fff7ed",
                 border:
-                  "none",
+                  "1px solid #fed7aa",
                 borderRadius:
                   "8px",
-                background:
-                  generating
-                    ? "#9ca3af"
-                    : "#7c3aed",
                 color:
-                  "#ffffff",
-                cursor:
-                  generating
-                    ? "not-allowed"
-                    : "pointer",
-                fontWeight:
-                  700,
-                fontSize:
-                  "16px",
-                minWidth:
-                  "180px",
+                  "#9a3412",
               }}
             >
-              {generating
-                ? "正在生成 PDF..."
-                : "📄 生成 PDF"}
-            </button>
+              ⚠️ 请先在第⑤步确认发票组合。
+            </div>
+          )}
 
-            {generatedUrl && (
+          {confirmed &&
+            !year && (
               <div
                 style={{
-                  marginTop:
-                    "18px",
+                  marginBottom:
+                    "16px",
                   padding:
-                    "18px",
+                    "12px 14px",
                   background:
-                    "#f0fdf4",
+                    "#fff7ed",
                   border:
-                    "1px solid #bbf7d0",
+                    "1px solid #fed7aa",
                   borderRadius:
-                    "10px",
+                    "8px",
+                  color:
+                    "#9a3412",
                 }}
               >
-                <div
-                  style={{
-                    fontWeight:
-                      700,
-                    color:
-                      "#166534",
-                    marginBottom:
-                      "10px",
-                    fontSize:
-                      "17px",
-                  }}
-                >
-                  ✓ PDF 已生成
-                </div>
-
-                <div
-                  style={{
-                    marginBottom:
-                      "12px",
-                    fontSize:
-                      "14px",
-                  }}
-                >
-                  文件：
-                  <strong>
-                    {" "}
-                    {
-                      generatedFileName
-                    }
-                  </strong>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={
-                    downloadPdf
-                  }
-                  style={{
-                    padding:
-                      "13px 22px",
-                    border:
-                      "none",
-                    borderRadius:
-                      "8px",
-                    background:
-                      "#16a34a",
-                    color:
-                      "#ffffff",
-                    cursor:
-                      "pointer",
-                    fontWeight:
-                      700,
-                    fontSize:
-                      "15px",
-                  }}
-                >
-                  ⬇ 下载 PDF
-                </button>
+                ⚠️ 请填写年份。
               </div>
             )}
-          </div>
-        )}
+
+          {confirmed &&
+            year &&
+            !month && (
+              <div
+                style={{
+                  marginBottom:
+                    "16px",
+                  padding:
+                    "12px 14px",
+                  background:
+                    "#fff7ed",
+                  border:
+                    "1px solid #fed7aa",
+                  borderRadius:
+                    "8px",
+                  color:
+                    "#9a3412",
+                }}
+              >
+                ⚠️ 请先选择月份。
+              </div>
+            )}
+
+          {/* =================================================
+              关键修改：
+
+              不再使用：
+
+              disabled={
+                generating ||
+                !confirmed ||
+                !year ||
+                !month
+              }
+
+              现在只有正在生成的时候按钮才 disabled。
+
+              因此：
+              - 未确认 → 按钮可以按
+              - 没年份 → 按钮可以按
+              - 没月份 → 按钮可以按
+              - 点击后弹出具体提示
+              - 条件全部满足 → 真正生成 PDF
+          ================================================= */}
+
+          <button
+            type="button"
+            onClick={
+              generatePdf
+            }
+            disabled={
+              generating
+            }
+            style={{
+              padding:
+                "15px 28px",
+              border:
+                "none",
+              borderRadius:
+                "9px",
+
+              // 只有 generating 才灰色
+              background:
+                generating
+                  ? "#9ca3af"
+                  : "#7c3aed",
+
+              color:
+                "#ffffff",
+
+              cursor:
+                generating
+                  ? "not-allowed"
+                  : "pointer",
+
+              fontWeight:
+                700,
+
+              fontSize:
+                "16px",
+
+              minWidth:
+                "190px",
+
+              boxShadow:
+                generating
+                  ? "none"
+                  : "0 4px 12px rgba(124,58,237,0.25)",
+            }}
+          >
+            {generating
+              ? "⏳ 正在生成 PDF..."
+              : "📄 生成 PDF"}
+          </button>
+
+          {/* =================================================
+              PDF 已生成
+          ================================================= */}
+
+          {generatedUrl && (
+            <div
+              style={{
+                marginTop:
+                  "20px",
+                padding:
+                  "20px",
+                background:
+                  "#f0fdf4",
+                border:
+                  "1px solid #bbf7d0",
+                borderRadius:
+                  "10px",
+              }}
+            >
+              <div
+                style={{
+                  fontWeight:
+                    700,
+                  color:
+                    "#166534",
+                  marginBottom:
+                    "10px",
+                  fontSize:
+                    "18px",
+                }}
+              >
+                ✓ PDF 已成功生成
+              </div>
+
+              <div
+                style={{
+                  marginBottom:
+                    "15px",
+                  fontSize:
+                    "14px",
+                }}
+              >
+                文件：
+
+                <strong>
+                  {" "}
+                  {
+                    generatedFileName
+                  }
+                </strong>
+              </div>
+
+              <button
+                type="button"
+                onClick={
+                  downloadPdf
+                }
+                style={{
+                  padding:
+                    "14px 24px",
+                  border:
+                    "none",
+                  borderRadius:
+                    "8px",
+                  background:
+                    "#16a34a",
+                  color:
+                    "#ffffff",
+                  cursor:
+                    "pointer",
+                  fontWeight:
+                    700,
+                  fontSize:
+                    "16px",
+                  minWidth:
+                    "180px",
+                }}
+              >
+                ⬇ 下载 PDF
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
- 
