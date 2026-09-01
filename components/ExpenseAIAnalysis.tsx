@@ -94,6 +94,7 @@ type ChatMessage = {
 
 type ExpenseAIAnalysisProps = {
   years: AIExpenseYear[];
+  transactions: any[];
 };
 
 // =====================================================
@@ -141,6 +142,7 @@ function toArray<T>(
 
 export default function ExpenseAIAnalysis({
   years,
+  transactions,
 }: ExpenseAIAnalysisProps) {
 
   // ===================================================
@@ -857,220 +859,248 @@ export default function ExpenseAIAnalysis({
   // ★ AI CFO 问答
   // ===================================================
 
-  async function askCFO(
-    customQuestion?: string
-  ) {
+  // =====================================================
+// ★ AI CFO 问答
+// =====================================================
 
-    const q =
-      (
-        customQuestion ??
-        question
-      ).trim();
+async function askCFO(
+  customQuestion?: string
+) {
 
-    if (!q) {
-      return;
+  const q =
+    (
+      customQuestion ??
+      question
+    ).trim();
+
+  if (!q) {
+    return;
+  }
+
+  if (!payload.years.length) {
+
+    setChatError(
+      "没有可供 AI 分析的消费数据"
+    );
+
+    return;
+  }
+
+  setChatLoading(true);
+  setChatError("");
+
+  // ===================================================
+  // 保存发送前历史
+  // ===================================================
+
+  const previousMessages =
+    chatMessages;
+
+  const userMessage: ChatMessage = {
+    role: "user",
+    content: q,
+  };
+
+  // ===================================================
+  // 立即显示用户问题
+  // ===================================================
+
+  setChatMessages(
+    (prev) => [
+      ...prev,
+      userMessage,
+    ]
+  );
+
+  setQuestion("");
+
+  // ===================================================
+  // ★ 重要
+  //
+  // transactions 必须放在 requestBody 顶层
+  //
+  // 不再放：
+  //
+  // payload: {
+  //   ...payload,
+  //   transactions
+  // }
+  //
+  // 否则 route.ts 读取 body.transactions 会得到 undefined。
+  // ===================================================
+
+  const requestBody = {
+
+    // =================================================
+    // 用户问题
+    // =================================================
+
+    question: q,
+
+    // =================================================
+    // 年度汇总数据
+    // =================================================
+
+    payload,
+
+    // =================================================
+    // ★ 6183 笔真实交易
+    //
+    // 放在顶层。
+    // Route 会根据问题进行筛选，
+    // 不会把全部 6183 笔原样塞给 DeepSeek。
+    // =================================================
+
+    transactions,
+
+    // =================================================
+    // 历史对话
+    // =================================================
+
+    history:
+      previousMessages,
+
+    // =================================================
+    // AI 规则
+    // =================================================
+
+    systemInstruction:
+      aiSystemInstruction,
+  };
+
+  console.log(
+    "[ExpenseAIAnalysis] question:",
+    q
+  );
+
+  console.log(
+    "[ExpenseAIAnalysis] years:",
+    payload.years.length
+  );
+
+  console.log(
+    "[ExpenseAIAnalysis] transactions:",
+    transactions?.length
+  );
+
+  console.log(
+    "[ExpenseAIAnalysis] sending transactions:",
+    requestBody.transactions?.length
+  );
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/expense/ai-chat",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body:
+            JSON.stringify(
+              requestBody
+            ),
+        }
+      );
+
+    const text =
+      await response.text();
+
+    let data:
+      | {
+          success?: boolean;
+          answer?: string;
+          error?: string;
+        }
+      | null = null;
+
+    try {
+
+      data =
+        text
+          ? JSON.parse(text)
+          : null;
+
+    } catch {
+
+      if (
+        response.status === 404
+      ) {
+
+        throw new Error(
+          "AI CFO API 不存在（HTTP 404）。请确认项目中存在：app/api/expense/ai-chat/route.ts"
+        );
+
+      }
+
+      throw new Error(
+        `服务器返回了无法解析的内容（HTTP ${response.status}）：${text.slice(
+          0,
+          500
+        )}`
+      );
+
     }
 
     if (
-      !payload.years.length
+      !response.ok ||
+      !data?.success
     ) {
 
-      setChatError(
-        "没有可供 AI 分析的消费数据"
+      throw new Error(
+        data?.error ||
+        `AI 问答失败（HTTP ${response.status}）`
       );
 
-      return;
     }
 
-    setChatLoading(true);
-
-    setChatError("");
-
     // =================================================
-    // 保存发送前历史
-    // =================================================
-
-    const previousMessages =
-      chatMessages;
-
-    const userMessage:
-      ChatMessage = {
-        role: "user",
-        content: q,
-      };
-
-    // =================================================
-    // 立即显示用户问题
+    // AI 回复
     // =================================================
 
     setChatMessages(
       (prev) => [
         ...prev,
-        userMessage,
+
+        {
+          role: "assistant",
+          content:
+            data.answer || "",
+        },
       ]
     );
 
-    setQuestion("");
+  } catch (error) {
 
-    try {
+    console.error(
+      "Expense AI chat error:",
+      error
+    );
 
-      const response =
-        await fetch(
-          "/api/expense/ai-chat",
-          {
-            method: "POST",
+    setChatError(
+      error instanceof Error
+        ? error.message
+        : String(error)
+    );
 
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
+    // =================================================
+    // 请求失败恢复历史
+    // =================================================
 
-            body:
-              JSON.stringify({
+    setChatMessages(
+      previousMessages
+    );
 
-                // =================================================
-                // 用户问题
-                // =================================================
+  } finally {
 
-                question:
-                  q,
-
-                // =================================================
-                // ★ 标准结构
-                // =================================================
-
-                payload,
-
-                // =================================================
-                // ★ 兼容字段
-                //
-                // 防止 API 仍然从 body.years 读取。
-                // =================================================
-
-                years:
-                  payload.years,
-
-                // =================================================
-                // AI 阅读文本
-                // =================================================
-
-                dataSummary:
-                  aiDataSummary,
-
-                // =================================================
-                // 原始 JSON
-                // =================================================
-
-                dataJSON:
-                  aiDataJSON,
-
-                // =================================================
-                // 历史对话
-                // =================================================
-
-                history:
-                  previousMessages,
-
-                // =================================================
-                // AI CFO 规则
-                // =================================================
-
-                systemInstruction:
-                  aiSystemInstruction,
-              }),
-          }
-        );
-
-      const text =
-        await response.text();
-
-      let data:
-        | {
-            success?: boolean;
-            answer?: string;
-            error?: string;
-          }
-        | null = null;
-
-      try {
-
-        data =
-          text
-            ? JSON.parse(text)
-            : null;
-
-      } catch {
-
-        if (
-          response.status === 404
-        ) {
-
-          throw new Error(
-            "AI CFO API 不存在（HTTP 404）。请确认项目中存在：app/api/expense/ai-chat/route.ts"
-          );
-        }
-
-        throw new Error(
-          `服务器返回了无法解析的内容（HTTP ${response.status}）：${text.slice(
-            0,
-            500
-          )}`
-        );
-      }
-
-      if (
-        !response.ok ||
-        !data?.success
-      ) {
-
-        throw new Error(
-          data?.error ||
-          `AI 问答失败（HTTP ${response.status}）`
-        );
-      }
-
-      // =================================================
-      // AI 回复
-      // =================================================
-
-      setChatMessages(
-        (prev) => [
-          ...prev,
-
-          {
-            role: "assistant",
-            content:
-              data.answer || "",
-          },
-        ]
-      );
-
-    } catch (error) {
-
-      console.error(
-        "Expense AI chat error:",
-        error
-      );
-
-      setChatError(
-        error instanceof Error
-          ? error.message
-          : String(error)
-      );
-
-      // =================================================
-      // 请求失败恢复历史
-      // =================================================
-
-      setChatMessages(
-        previousMessages
-      );
-
-    } finally {
-
-      setChatLoading(false);
-    }
+    setChatLoading(false);
   }
+}
 
   // ===================================================
   // Enter

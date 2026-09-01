@@ -1,7 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { GoogleGenAI } from "@google/genai";
-
 
 // =====================================================
 // ★ 强制动态 Route
@@ -11,11 +9,23 @@ export const dynamic = "force-dynamic";
 
 
 // =====================================================
-// Gemini API Key
+// DeepSeek 配置
 // =====================================================
 
-const apiKey =
-  process.env.GEMINI_API_KEY?.trim();
+const deepseekApiKey =
+  process.env.DEEPSEEK_API_KEY?.trim();
+
+const deepseekBaseUrl =
+  (
+    process.env.DEEPSEEK_BASE_URL ||
+    "https://api.deepseek.com"
+  ).replace(/\/+$/, "");
+
+const deepseekModel =
+  (
+    process.env.DEEPSEEK_MODEL ||
+    "deepseek-chat"
+  ).trim();
 
 
 // =====================================================
@@ -27,11 +37,13 @@ type CategoryItem = {
   amount: number;
 };
 
+
 type OtherBook = {
   bookName: string;
   amount: number;
   categories: CategoryItem[];
 };
+
 
 type YearData = {
   year: number;
@@ -41,14 +53,20 @@ type YearData = {
   otherBooks: OtherBook[];
 };
 
+
 type ExpensePayload = {
   years: YearData[];
 };
+
 
 type ChatMessage = {
   role: "user" | "assistant";
   content: string;
 };
+
+
+type ExpenseTransaction =
+  Record<string, unknown>;
 
 
 // =====================================================
@@ -65,29 +83,32 @@ function numberValue(
   return Number.isFinite(n)
     ? n
     : 0;
-
 }
 
 
 // =====================================================
-// 清洗消费数据
-//
-// ★ 注意：
-// 这里不重新计算消费。
-// 页面已经完成统一统计。
-// API 只负责清洗 page 传来的结果。
-//
-// 因此：
-//
-// PAGE 显示的数字
-//       ↓
-// aiExpenseYears
-//       ↓
-// payload.years
-//       ↓
-// AI CFO
-//
-// 是同一套数据。
+// 安全字符串
+// =====================================================
+
+function stringValue(
+  value: unknown
+): string {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return "";
+
+  }
+
+  return String(value).trim();
+}
+
+
+// =====================================================
+// 清洗年度数据
 // =====================================================
 
 function cleanPayload(
@@ -95,7 +116,9 @@ function cleanPayload(
 ): ExpensePayload {
 
   const sourceYears =
-    Array.isArray(payload?.years)
+    Array.isArray(
+      payload?.years
+    )
       ? payload.years
       : [];
 
@@ -122,10 +145,9 @@ function cleanPayload(
                                 category => ({
 
                                   category:
-                                    String(
-                                      category?.category ??
-                                      ""
-                                    ).trim(),
+                                    stringValue(
+                                      category?.category
+                                    ),
 
                                   amount:
                                     numberValue(
@@ -152,10 +174,9 @@ function cleanPayload(
                       return {
 
                         bookName:
-                          String(
-                            book?.bookName ??
-                            ""
-                          ).trim(),
+                          stringValue(
+                            book?.bookName
+                          ),
 
                         amount:
                           numberValue(
@@ -220,14 +241,839 @@ function cleanPayload(
           a,
           b
         ) =>
-          a.year -
-          b.year
+          a.year - b.year
       );
 
 
   return {
     years,
   };
+
+}
+
+
+// =====================================================
+// ★ 清洗交易
+// =====================================================
+
+function cleanTransactions(
+  value: unknown
+): ExpenseTransaction[] {
+
+  if (
+    !Array.isArray(value)
+  ) {
+
+    return [];
+
+  }
+
+
+  return value.filter(
+    (
+      transaction
+    ): transaction is ExpenseTransaction => {
+
+      return (
+        transaction !== null &&
+        typeof transaction === "object" &&
+        !Array.isArray(transaction)
+      );
+
+    }
+  );
+
+}
+
+
+// =====================================================
+// ★ 找交易时间字段
+//
+// 兼容可能存在的不同字段名。
+// =====================================================
+
+function getTransactionTime(
+  transaction: ExpenseTransaction
+): string {
+
+  const possibleFields = [
+
+    "transaction_time",
+
+    "transactionTime",
+
+    "trans_time",
+
+    "transTime",
+
+    "date",
+
+    "transaction_date",
+
+    "transactionDate",
+
+    "created_at",
+
+    "createdAt",
+
+    "time",
+
+    "datetime",
+
+  ];
+
+
+  for (
+    const field
+    of possibleFields
+  ) {
+
+    const value =
+      transaction[field];
+
+    if (
+      value !== null &&
+      value !== undefined &&
+      String(value).trim()
+    ) {
+
+      return String(value).trim();
+
+    }
+
+  }
+
+
+  return "";
+
+}
+
+
+// =====================================================
+// ★ 从交易中得到日期
+//
+// 最终统一成：
+// YYYY-MM-DD
+//
+// 注意：
+// 这里专门处理 ISO 时间。
+// =====================================================
+
+function getTransactionDate(
+  transaction: ExpenseTransaction
+): string {
+
+  const value =
+    getTransactionTime(
+      transaction
+    );
+
+  if (!value) {
+    return "";
+  }
+
+
+  // ===================================================
+  // ISO 时间
+  //
+  // 2026-08-31T12:25:00+00:00
+  // ===================================================
+
+  const isoMatch =
+    value.match(
+      /^(\d{4})-(\d{2})-(\d{2})/
+    );
+
+
+  if (isoMatch) {
+
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+
+  }
+
+
+  // ===================================================
+  // YYYY/MM/DD
+  // ===================================================
+
+  const slashMatch =
+    value.match(
+      /^(\d{4})\/(\d{1,2})\/(\d{1,2})/
+    );
+
+
+  if (slashMatch) {
+
+    return [
+      slashMatch[1],
+
+      slashMatch[2].padStart(
+        2,
+        "0"
+      ),
+
+      slashMatch[3].padStart(
+        2,
+        "0"
+      ),
+
+    ].join("-");
+
+  }
+
+
+  // ===================================================
+  // Date 对象格式
+  // ===================================================
+
+  const date =
+    new Date(value);
+
+
+  if (
+    !Number.isNaN(
+      date.getTime()
+    )
+  ) {
+
+    return [
+      date.getFullYear(),
+
+      String(
+        date.getMonth() + 1
+      ).padStart(
+        2,
+        "0"
+      ),
+
+      String(
+        date.getDate()
+      ).padStart(
+        2,
+        "0"
+      ),
+
+    ].join("-");
+
+  }
+
+
+  return "";
+
+}
+
+
+// =====================================================
+// ★ 读取金额
+// =====================================================
+
+function getTransactionAmount(
+  transaction: ExpenseTransaction
+): number {
+
+  const possibleFields = [
+
+    "amount",
+
+    "money",
+
+    "value",
+
+    "transaction_amount",
+
+    "transactionAmount",
+
+    "total",
+
+  ];
+
+
+  for (
+    const field
+    of possibleFields
+  ) {
+
+    const value =
+      transaction[field];
+
+    if (
+      value !== null &&
+      value !== undefined &&
+      value !== ""
+    ) {
+
+      const n =
+        Number(value);
+
+      if (
+        Number.isFinite(n)
+      ) {
+
+        return n;
+
+      }
+
+    }
+
+  }
+
+
+  return 0;
+
+}
+
+
+// =====================================================
+// ★ 判断问题中是否包含明确日期
+//
+// 支持：
+//
+// 2026年8月31日
+// 2026 年 8 月 31 日
+// 2026-08-31
+// 2026/08/31
+// =====================================================
+
+function extractDateFromQuestion(
+  question: string
+): string | null {
+
+  // ===================================================
+  // YYYY-MM-DD
+  // ===================================================
+
+  const iso =
+    question.match(
+      /(\d{4})[-/](\d{1,2})[-/](\d{1,2})/
+    );
+
+
+  if (iso) {
+
+    return [
+      iso[1],
+
+      iso[2].padStart(
+        2,
+        "0"
+      ),
+
+      iso[3].padStart(
+        2,
+        "0"
+      ),
+
+    ].join("-");
+
+  }
+
+
+  // ===================================================
+  // 中文日期
+  // ===================================================
+
+  const chinese =
+    question.match(
+      /(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/
+    );
+
+
+  if (chinese) {
+
+    return [
+      chinese[1],
+
+      chinese[2].padStart(
+        2,
+        "0"
+      ),
+
+      chinese[3].padStart(
+        2,
+        "0"
+      ),
+
+    ].join("-");
+
+  }
+
+
+  return null;
+
+}
+
+
+// =====================================================
+// ★ 提取月份
+//
+// 支持：
+//
+// 2026年8月
+// 2026-08
+// 2026/08
+// =====================================================
+
+function extractMonthFromQuestion(
+  question: string
+): {
+  year: number;
+  month: number;
+} | null {
+
+  const iso =
+    question.match(
+      /(\d{4})[-/](\d{1,2})(?![-/]\d)/
+    );
+
+
+  if (iso) {
+
+    return {
+
+      year:
+        Number(
+          iso[1]
+        ),
+
+      month:
+        Number(
+          iso[2]
+        ),
+
+    };
+
+  }
+
+
+  const chinese =
+    question.match(
+      /(\d{4})\s*年\s*(\d{1,2})\s*月/
+    );
+
+
+  if (chinese) {
+
+    return {
+
+      year:
+        Number(
+          chinese[1]
+        ),
+
+      month:
+        Number(
+          chinese[2]
+        ),
+
+    };
+
+  }
+
+
+  return null;
+
+}
+
+
+// =====================================================
+// ★ 提取年份
+// =====================================================
+
+function extractYearsFromQuestion(
+  question: string
+): number[] {
+
+  const matches =
+    question.match(
+      /\b(20\d{2})\b/g
+    ) || [];
+
+
+  return [
+    ...new Set(
+      matches.map(
+        value =>
+          Number(value)
+      )
+    ),
+  ];
+
+}
+
+
+// =====================================================
+// ★ 判断是否需要逐笔交易
+// =====================================================
+
+function questionNeedsTransactions(
+  question: string
+): boolean {
+
+  const keywords = [
+
+    "花了什么",
+
+    "消费记录",
+
+    "消费明细",
+
+    "交易",
+
+    "哪笔",
+
+    "这笔",
+
+    "具体消费",
+
+    "具体交易",
+
+    "商户",
+
+    "买了什么",
+
+    "今天",
+
+    "昨天",
+
+    "明天",
+
+    "当天",
+
+    "日期",
+
+    "哪一天",
+
+    "哪天",
+
+    "本月",
+
+    "这个月",
+
+    "上个月",
+
+    "月份",
+
+    "具体",
+
+    "明细",
+
+  ];
+
+
+  return keywords.some(
+    keyword =>
+      question.includes(
+        keyword
+      )
+  );
+
+}
+
+
+// =====================================================
+// ★ 筛选交易
+//
+// 核心原则：
+//
+// 用户问具体日期
+// → 只发送当天交易
+//
+// 用户问月份
+// → 只发送该月交易
+//
+// 用户问两个年份
+// → 只发送两个年份交易
+//
+// 普通年度分析
+// → 不发送全部交易
+// → 使用 years
+// =====================================================
+
+function selectRelevantTransactions(
+  transactions: ExpenseTransaction[],
+  question: string
+): ExpenseTransaction[] {
+
+  if (
+    transactions.length === 0
+  ) {
+
+    return [];
+
+  }
+
+
+  const exactDate =
+    extractDateFromQuestion(
+      question
+    );
+
+
+  // ===================================================
+  // 1. 精确日期
+  // ===================================================
+
+  if (
+    exactDate
+  ) {
+
+    return transactions.filter(
+      transaction =>
+        getTransactionDate(
+          transaction
+        ) === exactDate
+    );
+
+  }
+
+
+  // ===================================================
+  // 2. 月份
+  // ===================================================
+
+  const month =
+    extractMonthFromQuestion(
+      question
+    );
+
+
+  if (
+    month &&
+    questionNeedsTransactions(
+      question
+    )
+  ) {
+
+    const prefix =
+      `${month.year}-${String(
+        month.month
+      ).padStart(
+        2,
+        "0"
+      )}`;
+
+    return transactions.filter(
+      transaction =>
+        getTransactionDate(
+          transaction
+        ).startsWith(
+          prefix
+        )
+    );
+
+  }
+
+
+  // ===================================================
+  // 3. 明确年份
+  // ===================================================
+
+  const years =
+    extractYearsFromQuestion(
+      question
+    );
+
+
+  if (
+    years.length > 0 &&
+    questionNeedsTransactions(
+      question
+    )
+  ) {
+
+    const yearSet =
+      new Set(
+        years
+      );
+
+    return transactions.filter(
+      transaction => {
+
+        const date =
+          getTransactionDate(
+            transaction
+          );
+
+        if (!date) {
+          return false;
+        }
+
+        const year =
+          Number(
+            date.slice(
+              0,
+              4
+            )
+          );
+
+        return yearSet.has(
+          year
+        );
+
+      }
+    );
+
+  }
+
+
+  // ===================================================
+  // 4. 普通年度问题
+  //
+  // 不把全部 6183 笔发送给 AI。
+  //
+  // 年度问题主要使用 years。
+  // ===================================================
+
+  return [];
+
+}
+
+
+// =====================================================
+// ★ 压缩交易字段
+//
+// 不需要把数据库中的所有字段原样塞给 AI。
+//
+// 但仍然尽量保留真实信息。
+// =====================================================
+
+function compactTransaction(
+  transaction: ExpenseTransaction
+) {
+
+  const result:
+    Record<string, unknown> = {};
+
+
+  // ===================================================
+  // 优先字段
+  // ===================================================
+
+  const preferredFields = [
+
+    "transaction_time",
+
+    "transactionTime",
+
+    "transaction_date",
+
+    "transactionDate",
+
+    "date",
+
+    "account_name",
+
+    "accountName",
+
+    "account_type",
+
+    "accountType",
+
+    "book_name",
+
+    "bookName",
+
+    "category",
+
+    "category_name",
+
+    "categoryName",
+
+    "merchant",
+
+    "merchant_name",
+
+    "merchantName",
+
+    "description",
+
+    "memo",
+
+    "note",
+
+    "amount",
+
+    "money",
+
+    "transaction_amount",
+
+    "transactionAmount",
+
+    "currency",
+
+  ];
+
+
+  for (
+    const field
+    of preferredFields
+  ) {
+
+    if (
+      transaction[field] !==
+        undefined
+    ) {
+
+      result[field] =
+        transaction[field];
+
+    }
+
+  }
+
+
+  // ===================================================
+  // 如果没有任何优先字段，
+  // 保留原始对象。
+  // ===================================================
+
+  if (
+    Object.keys(
+      result
+    ).length === 0
+  ) {
+
+    return transaction;
+
+  }
+
+
+  return result;
+
+}
+
+
+// =====================================================
+// ★ 构造交易文本
+// =====================================================
+
+function buildTransactionText(
+  transactions: ExpenseTransaction[]
+): string {
+
+  if (
+    transactions.length === 0
+  ) {
+
+    return "本次问题没有筛选出需要提供给 AI 的逐笔交易。";
+
+  }
+
+
+  const compacted =
+    transactions.map(
+      transaction =>
+        compactTransaction(
+          transaction
+        )
+    );
+
+
+  return JSON.stringify(
+    compacted,
+    null,
+    2
+  );
 
 }
 
@@ -246,19 +1092,16 @@ export async function POST(
     // 1. API Key
     // =================================================
 
-    if (!apiKey) {
-
-      console.error(
-        "[expense/ai-chat] GEMINI_API_KEY is missing"
-      );
-
+    if (
+      !deepseekApiKey
+    ) {
 
       return NextResponse.json(
         {
           success: false,
 
           error:
-            "GEMINI_API_KEY 未配置。请检查 .env.local，并重启 npm run dev。",
+            "DEEPSEEK_API_KEY 未配置。请检查 .env.local，并重启 npm run dev。",
         },
         {
           status: 500,
@@ -269,7 +1112,7 @@ export async function POST(
 
 
     // =================================================
-    // 2. 读取 JSON
+    // 2. JSON
     // =================================================
 
     let body: any;
@@ -301,10 +1144,9 @@ export async function POST(
     // =================================================
 
     const question =
-      String(
-        body?.question ??
-        ""
-      ).trim();
+      stringValue(
+        body?.question
+      );
 
 
     // =================================================
@@ -318,7 +1160,52 @@ export async function POST(
 
 
     // =================================================
-    // 5. 历史对话
+    // 5. ★ 接收真实交易
+    //
+    // 新版：
+    //
+    // body.transactions
+    //
+    // 旧版：
+    //
+    // body.payload.transactions
+    //
+    // 两个都兼容。
+    // =================================================
+
+    const rawTransactions =
+      body?.transactions ??
+      body?.payload?.transactions;
+
+
+    const transactions =
+      cleanTransactions(
+        rawTransactions
+      );
+
+
+    // =================================================
+    // 日志
+    // =================================================
+
+    console.log(
+      "[expense/ai-chat] question:",
+      question
+    );
+
+    console.log(
+      "[expense/ai-chat] years:",
+      payload?.years?.length || 0
+    );
+
+    console.log(
+      "[expense/ai-chat] transactions received:",
+      transactions.length
+    );
+
+
+    // =================================================
+    // 6. 历史
     // =================================================
 
     const history: ChatMessage[] =
@@ -393,7 +1280,7 @@ export async function POST(
 
 
     // =================================================
-    // 6. 参数检查
+    // 7. 参数检查
     // =================================================
 
     if (!question) {
@@ -455,7 +1342,7 @@ export async function POST(
 
 
     // =================================================
-    // 7. 清洗
+    // 8. 清洗年度数据
     // =================================================
 
     const cleanedPayload =
@@ -484,7 +1371,7 @@ export async function POST(
 
 
     // =================================================
-    // 8. 数据文本
+    // 9. 年度 JSON
     // =================================================
 
     const dataText =
@@ -496,7 +1383,34 @@ export async function POST(
 
 
     // =================================================
-    // 9. 历史对话文本
+    // 10. ★ 筛选相关交易
+    // =================================================
+
+    const relevantTransactions =
+      selectRelevantTransactions(
+        transactions,
+        question
+      );
+
+
+    console.log(
+      "[expense/ai-chat] relevant transactions:",
+      relevantTransactions.length
+    );
+
+
+    // =================================================
+    // 11. ★ 交易文本
+    // =================================================
+
+    const transactionText =
+      buildTransactionText(
+        relevantTransactions
+      );
+
+
+    // =================================================
+    // 12. 历史
     // =================================================
 
     const historyText =
@@ -505,10 +1419,11 @@ export async function POST(
         ? history
             .map(
               message =>
-
-                `${message.role === "user"
-                  ? "用户"
-                  : "AI CFO"
+                `${
+                  message.role ===
+                  "user"
+                    ? "用户"
+                    : "AI CFO"
                 }：${message.content}`
             )
             .join(
@@ -519,10 +1434,10 @@ export async function POST(
 
 
     // =================================================
-    // 10. Prompt
+    // 13. 系统规则
     // =================================================
 
-    const prompt = `
+    const systemInstruction = `
 
 你现在是这个家庭的 AI CFO。
 
@@ -530,348 +1445,184 @@ export async function POST(
 回答用户关于家庭消费的问题。
 
 =====================================================
-一、最重要原则
+一、最高优先级
 =====================================================
 
-系统提供给你的：
+只能使用系统提供的数据。
 
-years
+不得编造：
 
-已经是页面完成统一统计后的最终数据。
+- 交易
+- 日期
+- 金额
+- 商户
+- 账簿
+- 分类
+- 描述
+- 消费原因
 
-你不能重新建立另一套消费统计规则。
-
-你必须以系统提供的 years 数据为唯一事实来源。
-
-也就是说：
-
-页面显示数字
-=
-AI 使用数字
-
-不能自行从原始交易重新计算。
+不得自行查询数据库。
 
 =====================================================
-二、消费统计规则
+二、年度数据
 =====================================================
 
-1. 账簿名称 = "xx"
-
-   → 归入：
-
-   xx
-
-
-2. 账簿名称 = "日常账本"
-
-   且账目分类 = "修行"
-
-   → 归入：
-
-   xx
-
-
-3. 账簿名称 = "日常账本"
-
-   且账目分类不是 "修行"
-
-   → 归入：
-
-   其他
-      → 日常账本
-
-
-4. 其他账簿
-
-   → 归入：
-
-   其他
-      → 对应账簿
-
-
-5. xx 永远不能出现在：
-
-   其他
-
-
-6. 以下账簿完全排除：
-
-   平账
-   法24.6
-   法国出差
-   借出款
-   年金
-   理财
-   替别人先付
-
-
-7. 被排除的账簿不能重新算入消费。
-
-
-=====================================================
-三、xx 的定义
-=====================================================
-
-xx 包含：
-
-A.
-
-原本账簿名称 = xx
-
-的全部符合消费统计条件的消费。
-
-
-B.
-
-日常账本
-
-且：
-
-账目分类 = 修行
-
-的消费。
-
-
-因此：
-
-xx
-
-不是一个普通账簿。
-
-它是一个最终统计组。
-
-
-=====================================================
-四、其他的定义
-=====================================================
-
-其他包含所有：
-
-符合消费统计条件
-
-但不属于 xx
-
-的消费。
-
-
-结构：
-
-其他
- ├─ 日常账本
- ├─ 账簿A
- ├─ 账簿B
- └─ ...
-
-
-其中：
-
-日常账本 + 修行
-
-绝对不能出现在：
-
-其他 → 日常账本。
-
-
-=====================================================
-五、数据结构
-=====================================================
-
-每一年数据结构：
-
-{
-  year,
-  xx,
-  other,
-  total,
-  otherBooks
-}
-
+years 是 ExpensePage 已经计算完成的最终年度消费数据。
 
 其中：
 
 year
-
-年份。
-
+= 年份
 
 xx
-
-这一年的 xx 总消费。
-
+= xx 最终消费金额
 
 other
-
-这一年的其他总消费。
-
+= 其他最终消费金额
 
 total
-
-这一年的总消费。
-
+= 最终总消费
 
 otherBooks
+= 其他下面真实存在的账簿
 
-其他下面的详细账簿。
+otherBooks.bookName
+= 真实账簿名称
 
+otherBooks.amount
+= 账簿消费金额
 
-otherBooks 内部：
-
-bookName
-
-账簿名称。
-
-
-amount
-
-该账簿消费金额。
-
-
-categories
-
-该账簿下面的分类。
-
+otherBooks.categories
+= 账簿真实分类
 
 =====================================================
-六、回答问题的方法
+三、逐笔交易
+=====================================================
+
+系统可能提供：
+
+1. 全部真实交易数量
+2. 本次问题筛选后的相关交易
+
+注意：
+
+如果本次筛选后的交易数量为 0，
+并不代表系统没有真实交易。
+
+必须区分：
+
+“系统共有多少笔交易”
+
+和
+
+“本次问题筛选出了多少笔相关交易”。
+
+=====================================================
+四、具体日期
 =====================================================
 
 如果用户问：
 
-“2025 年为什么比 2024 年多花了这么多？”
+2026年8月31日花了什么？
 
-你必须：
+必须使用：
 
-第一步：
+本次提供的相关逐笔交易。
 
-找到 2024 年。
+如果存在：
 
+列出真实交易。
 
-第二步：
+如果不存在：
 
-找到 2025 年。
+明确说该日期没有找到交易。
 
-
-第三步：
-
-比较：
-
-2024 total
-vs
-2025 total
-
-
-第四步：
-
-拆成：
-
-xx
-other
-
-
-第五步：
-
-判断：
-
-xx 增加多少。
-
-other 增加多少。
-
-
-第六步：
-
-如果 other 增加明显：
-
-继续比较：
-
-otherBooks
-
-
-找出增加最多的账簿。
-
-
-第七步：
-
-如果某个账簿增加明显：
-
-继续比较：
-
-categories
-
-
-找出增加最多的分类。
-
+不能因为年度数据没有日期，
+就说系统没有逐笔交易。
 
 =====================================================
-七、变化金额
+五、月份
 =====================================================
 
-如果：
+如果用户问某个月：
 
-2025 = ¥1,000,000
+优先使用本次提供的逐笔交易。
 
-2024 = ¥800,000
-
-
-则：
-
-增加：
-
-¥200,000
-
-
-增加百分比：
-
-25%
-
-
-如果能够计算，
-
-直接告诉用户。
-
+如果能够准确计算，
+可以计算该月真实消费。
 
 =====================================================
-八、不要编造原因
+六、年度
 =====================================================
+
+如果用户问年度消费：
+
+优先使用 years。
 
 例如：
 
-数据显示：
+2025年比2024年多花多少？
 
-旅游账簿：
+先比较：
 
-2024 = ¥50,000
+total
 
-2025 = ¥120,000
+再比较：
 
+xx
 
-只能说：
+other
 
-“旅游账簿增加 ¥70,000，是其他消费增加的重要来源之一。”
+然后：
 
-不能说：
+otherBooks
 
-“因为你 2025 年去了日本。”
+然后：
 
-除非数据明确提供了这个事实。
-
-
-=====================================================
-九、如果无法确定
-=====================================================
-
-必须明确说：
-
-“数据不足，无法确定具体原因。”
-
-
-不能为了让答案完整而编造原因。
-
+categories
 
 =====================================================
-十、如果用户询问被排除账簿
+七、账簿
 =====================================================
 
-如果用户问：
+只能使用 otherBooks 中真实存在的账簿。
+
+不得自行创造账簿。
+
+=====================================================
+八、分类
+=====================================================
+
+只能使用数据中真实存在的分类。
+
+不得自行创造分类。
+
+=====================================================
+九、交易字段
+=====================================================
+
+交易中可能存在：
+
+transaction_time
+account_name
+account_type
+book_name
+category
+merchant
+description
+amount
+
+以及其他字段。
+
+有什么字段就使用什么字段。
+
+没有的字段不要编造。
+
+=====================================================
+十、排除账簿
+=====================================================
+
+以下账簿按照系统规则排除：
 
 平账
 法24.6
@@ -881,45 +1632,44 @@ categories
 理财
 替别人先付
 
+如果用户询问这些账簿：
 
-必须告诉用户：
-
-“该账簿按照系统规则被排除在消费统计之外。”
-
-
-不能把这些金额重新加入消费。
-
+说明该账簿按照系统规则被排除在消费统计之外。
 
 =====================================================
-十一、金额格式
+十一、不要编造原因
 =====================================================
-
-所有金额使用人民币。
 
 例如：
 
-¥12,345
+商户 = 某餐厅
+金额 = ¥500
 
-不要使用美元。
+只能说：
 
+存在一笔 ¥500 的餐饮消费。
+
+不能自行说：
+
+“这是和朋友聚餐”。
 
 =====================================================
-十二、语言
+十二、回答原则
 =====================================================
-
-使用中文。
-
-简洁。
-
-但是要有数字分析。
-
 
 简单问题：
 
 直接回答。
 
+具体交易：
 
-复杂问题：
+直接列交易。
+
+年度比较：
+
+给变化金额。
+
+复杂分析：
 
 使用：
 
@@ -927,137 +1677,238 @@ categories
 二、
 三、
 
-以及：
-
--
-
-
 不要输出 Markdown 表格。
-
-
-=====================================================
-十三、当前真实消费数据
-=====================================================
-
-以下数据就是页面已经统计好的最终消费数据：
-
-${dataText}
-
-
-=====================================================
-十四、历史对话
-=====================================================
-
-${historyText}
-
-
-=====================================================
-十五、本次用户问题
-=====================================================
-
-${question}
-
-
-=====================================================
-十六、最终要求
-=====================================================
-
-直接回答用户问题。
-
-不要介绍自己。
-
-不要解释 Prompt。
-
-不要说：
-
-“根据我的指令”
 
 不要输出 JSON。
 
-不要输出 Markdown 表格。
+不要解释 Prompt。
 
-必须使用系统提供的数字。
+不要介绍系统规则。
 
-如果用户问两个年份：
+=====================================================
+十三、最重要
+=====================================================
 
-必须比较两个年份。
+具体日期：
 
-如果用户问：
+优先使用 transactions。
 
-“为什么增加？”
+具体月份：
 
-必须尽量继续向下拆解：
+优先使用 transactions。
 
-年度
-↓
-xx / 其他
-↓
-具体账簿
-↓
-分类
+具体交易：
 
+优先使用 transactions。
 
-如果数据不足：
+年度：
 
-明确告诉用户数据不足。
+优先使用 years。
+
+年度原因：
+
+years + transactions。
+
+如果本次相关交易为 0：
+
+不能说“系统没有逐笔交易”。
+
+只能说：
+
+“本次问题没有筛选出相关逐笔交易”。
+
 `;
 
 
     // =================================================
-    // 11. Gemini
+    // 14. 最终 Prompt
     // =================================================
 
-    const ai =
-      new GoogleGenAI({
-        apiKey,
-      });
+    const prompt = `
+
+${systemInstruction}
+
+=====================================================
+当前年度消费数据
+=====================================================
+
+${dataText}
+
+=====================================================
+系统原始真实交易数量
+=====================================================
+
+${transactions.length}
+
+=====================================================
+本次问题筛选后的相关交易数量
+=====================================================
+
+${relevantTransactions.length}
+
+=====================================================
+本次问题相关交易
+=====================================================
+
+${transactionText}
+
+=====================================================
+历史对话
+=====================================================
+
+${historyText}
+
+=====================================================
+本次用户问题
+=====================================================
+
+${question}
+
+=====================================================
+最终要求
+=====================================================
+
+直接回答用户问题。
+
+如果用户问具体日期：
+
+必须检查相关交易。
+
+如果用户问具体月份：
+
+必须检查相关交易。
+
+如果用户问具体交易：
+
+必须检查相关交易。
+
+如果用户问年度：
+
+使用 years。
+
+如果用户问年度为什么变化：
+
+结合 years 和相关交易。
+
+不要因为相关交易数量为 0，
+就声称系统没有真实交易。
+
+系统本次收到的真实交易总数：
+
+${transactions.length}
+
+`;
 
 
     // =================================================
-    // 12. 调用 Gemini
+    // 15. 日志
     // =================================================
 
-    const response =
-      await ai.models.generateContent({
+    console.log(
+      "[expense/ai-chat] sending to DeepSeek"
+    );
 
-        model:
-          "gemini-3.6-flash",
+    console.log(
+      "[expense/ai-chat] model:",
+      deepseekModel
+    );
 
-        contents:
-          prompt,
+    console.log(
+      "[expense/ai-chat] total transactions:",
+      transactions.length
+    );
 
-        config: {
+    console.log(
+      "[expense/ai-chat] relevant transactions:",
+      relevantTransactions.length
+    );
 
-          temperature:
-            0.2,
-
-          maxOutputTokens:
-            4000,
-
-        },
-
-      });
-
-
-    // =================================================
-    // 13. 获取回答
-    // =================================================
-
-    const answer =
-      String(
-        response?.text ??
-        ""
-      ).trim();
+    console.log(
+      "[expense/ai-chat] prompt length:",
+      prompt.length
+    );
 
 
     // =================================================
-    // 14. Gemini 没返回
+    // 16. DeepSeek
     // =================================================
 
-    if (!answer) {
+    const deepseekResponse =
+      await fetch(
+        `${deepseekBaseUrl}/chat/completions`,
+        {
+          method: "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            Authorization:
+              `Bearer ${deepseekApiKey}`,
+
+          },
+
+          body:
+            JSON.stringify({
+
+              model:
+                deepseekModel,
+
+              messages: [
+
+                {
+                  role:
+                    "user",
+
+                  content:
+                    prompt,
+
+                },
+
+              ],
+
+              temperature:
+                0.2,
+
+              max_tokens:
+                4000,
+
+              stream:
+                false,
+
+            }),
+
+          cache:
+            "no-store",
+
+        }
+      );
+
+
+    // =================================================
+    // 17. 原始响应
+    // =================================================
+
+    const deepseekText =
+      await deepseekResponse.text();
+
+
+    // =================================================
+    // 18. HTTP 错误
+    // =================================================
+
+    if (
+      !deepseekResponse.ok
+    ) {
 
       console.error(
-        "[expense/ai-chat] Gemini returned empty response"
+        "[expense/ai-chat] DeepSeek HTTP error:",
+        deepseekResponse.status,
+        deepseekText.slice(
+          0,
+          2000
+        )
       );
 
 
@@ -1066,7 +1917,10 @@ xx / 其他
           success: false,
 
           error:
-            "Gemini 没有返回回答",
+            `DeepSeek API 调用失败（HTTP ${deepseekResponse.status}）：${deepseekText.slice(
+              0,
+              1000
+            )}`,
         },
         {
           status: 500,
@@ -1077,24 +1931,107 @@ xx / 其他
 
 
     // =================================================
-    // 15. 返回 JSON
+    // 19. JSON
+    // =================================================
+
+    let deepseekData: any;
+
+    try {
+
+      deepseekData =
+        JSON.parse(
+          deepseekText
+        );
+
+    } catch {
+
+      console.error(
+        "[expense/ai-chat] DeepSeek returned invalid JSON:",
+        deepseekText.slice(
+          0,
+          2000
+        )
+      );
+
+
+      return NextResponse.json(
+        {
+          success: false,
+
+          error:
+            "DeepSeek API 返回了无法解析的 JSON",
+        },
+        {
+          status: 500
+        }
+      );
+
+    }
+
+
+    // =================================================
+    // 20. AI 回答
+    // =================================================
+
+    const answer =
+      stringValue(
+        deepseekData
+          ?.choices?.[0]
+          ?.message?.content
+      );
+
+
+    // =================================================
+    // 21. 空回答
+    // =================================================
+
+    if (!answer) {
+
+      console.error(
+        "[expense/ai-chat] DeepSeek returned empty answer:",
+        JSON.stringify(
+          deepseekData
+        ).slice(
+          0,
+          3000
+        )
+      );
+
+
+      return NextResponse.json(
+        {
+          success: false,
+
+          error:
+            "DeepSeek 没有返回回答",
+        },
+        {
+          status: 500
+        }
+      );
+
+    }
+
+
+    // =================================================
+    // 22. 成功
     // =================================================
 
     return NextResponse.json(
       {
-        success:
-          true,
+        success: true,
 
         answer,
 
       },
       {
-        status:
-          200,
+        status: 200,
 
         headers: {
+
           "Cache-Control":
             "no-store",
+
         },
 
       }
@@ -1104,10 +2041,6 @@ xx / 其他
   } catch (
     error
   ) {
-
-    // =================================================
-    // 错误日志
-    // =================================================
 
     console.error(
       "[expense/ai-chat] error:",
@@ -1121,26 +2054,22 @@ xx / 其他
         : String(error);
 
 
-    // =================================================
-    // 返回 JSON
-    // =================================================
-
     return NextResponse.json(
       {
-        success:
-          false,
+        success: false,
 
         error:
           `AI 问答失败：${message}`,
 
       },
       {
-        status:
-          500,
+        status: 500,
 
         headers: {
+
           "Cache-Control":
             "no-store",
+
         },
 
       }

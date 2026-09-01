@@ -4632,6 +4632,7 @@ export default function ExpensePage() {
         <div className="mb-6">
           <ExpenseAIAnalysis
             years={aiExpenseYears}
+            transactions={transactions}
           />
         </div>
 
