@@ -113,12 +113,6 @@ function getCurrentMonth(): string {
 
 // =====================================================
 // 月份范围
-//
-// 这个范围现在只用于：
-// 从数据库 / Excel 一次性读取足够大的交易范围。
-//
-// 真正每张卡的消费周期，后面根据 billing_day
-// 单独计算。
 // =====================================================
 
 function getTransactionLoadRange(
@@ -152,20 +146,6 @@ function getTransactionLoadRange(
 
   }
 
-  /*
-   * 读取：
-   *
-   * 上一个月1日
-   * →
-   * 下一个月1日
-   *
-   * 这样可以覆盖：
-   *
-   * 上个月账单日 + 1
-   * 到
-   * 本月账单日
-   */
-
   const start =
     new Date(
       year,
@@ -196,12 +176,10 @@ function isExpense(
   item: ExpenseTransaction
 ): boolean {
 
-  // 平账不是消费
   if (item.is_settlement) {
     return false;
   }
 
-  // 收入不是消费
   const type =
     item.income_expense_type ||
     "";
@@ -210,11 +188,6 @@ function isExpense(
     return false;
   }
 
-  // 消费归属已经由 expense_transactions.consumption_type
-  // 明确确定：
-  // self            = 自己消费
-  // paid_for_others = 替别人先付
-  // null            = 非消费
   return (
     item.consumption_type === "self" ||
     item.consumption_type === "paid_for_others"
@@ -331,7 +304,7 @@ function normalizeName(
 
 
 // =====================================================
-// 信用卡银行名称标准化
+// 银行名称标准化
 // =====================================================
 
 function normalizeBankName(
@@ -349,21 +322,18 @@ function normalizeBankName(
 
   }
 
-  // 去掉信用卡
   name =
     name.replace(
       /信用卡/g,
       ""
     );
 
-  // 去掉银行
   name =
     name.replace(
       /银行/g,
       ""
     );
 
-  // 工商银行 / 工行
   if (
     name === "工行"
   ) {
@@ -372,7 +342,6 @@ function normalizeBankName(
 
   }
 
-  // 建设银行 / 建行
   if (
     name === "建行"
   ) {
@@ -381,7 +350,6 @@ function normalizeBankName(
 
   }
 
-  // 中国银行 / 中行
   if (
     name === "中行"
   ) {
@@ -390,7 +358,6 @@ function normalizeBankName(
 
   }
 
-  // 交通银行 / 交行
   if (
     name === "交行"
   ) {
@@ -399,7 +366,6 @@ function normalizeBankName(
 
   }
 
-  // 招商银行 / 招行
   if (
     name === "招行"
   ) {
@@ -408,7 +374,6 @@ function normalizeBankName(
 
   }
 
-  // 中信银行 / 中信
   if (
     name === "中信"
   ) {
@@ -417,7 +382,6 @@ function normalizeBankName(
 
   }
 
-  // 宁波银行 / 宁波
   if (
     name === "宁波"
   ) {
@@ -539,12 +503,7 @@ function SortIcon({
 
 
 // =====================================================
-// 资金安排 LocalStorage Key
-//
-// 每个月独立保存
-//
-// 例如：
-// credit-card-from-yu-funding-2026-08
+// LocalStorage
 // =====================================================
 
 function getFundingStorageKey(
@@ -595,15 +554,7 @@ function getPaymentDay(
 
 
 // =====================================================
-// 获取某个月的实际账单日
-//
-// 例如：
-// billingDay = 31
-//
-// 2026-08 没有31日
-// → 使用 2026-08-31
-//
-// 如果某月份不存在该日期，则使用该月最后一天。
+// 获取实际账单日
 // =====================================================
 
 function getBillingDate(
@@ -644,20 +595,7 @@ function getBillingDate(
 
 
 // =====================================================
-// 获取某张卡在指定月份的账单周期
-//
-// 例如：
-// 选择 2026-08
-// 账单日 = 20
-//
-// 本月账单日：2026-08-20
-// 上月账单日：2026-07-20
-//
-// 消费周期：
-// 2026-07-21 ～ 2026-08-20
-//
-// 注意：
-// 两端都包含。
+// 获取某张卡账单周期
 // =====================================================
 
 function getCardBillingCycle(
@@ -725,9 +663,6 @@ function getCardBillingCycle(
 
   }
 
-  /*
-   * 上个账单日 + 1 天
-   */
   const start =
     new Date(
       previousBillingDate
@@ -737,9 +672,6 @@ function getCardBillingCycle(
     start.getDate() + 1
   );
 
-  /*
-   * 本月账单日
-   */
   const end =
     new Date(
       currentBillingDate
@@ -754,30 +686,7 @@ function getCardBillingCycle(
 
 
 // =====================================================
-// 交易日期
-//
-// 兼容 expense_transactions 中可能存在的日期字段。
-//
-// 优先使用交易发生日期。
-// =====================================================
-
-// =====================================================
-// 交易日期
-//
-// expense_transactions 实际日期字段：
-// transaction_time
-//
-// 兼容：
-// transaction_time
-// transaction_date
-// expense_date
-// date
-// transactionDate
-// occurred_at
-// created_at
-//
-// 重要：
-// transaction_time 是有鱼实际使用的字段。
+// 获取交易日期
 // =====================================================
 
 function getTransactionDate(
@@ -803,11 +712,6 @@ function getTransactionDate(
 
   }
 
-
-  // ---------------------------------------------------
-  // 如果本身就是 Date
-  // ---------------------------------------------------
-
   if (
     raw instanceof Date
   ) {
@@ -826,7 +730,6 @@ function getTransactionDate(
 
   }
 
-
   const text =
     String(raw).trim();
 
@@ -835,16 +738,6 @@ function getTransactionDate(
     return null;
 
   }
-
-
-  // ---------------------------------------------------
-  // YYYY-MM-DD
-  //
-  // 不直接：
-  // new Date("2026-07-26")
-  //
-  // 避免 UTC 导致日期偏移。
-  // ---------------------------------------------------
 
   const dateOnlyMatch =
     /^(\d{4})-(\d{2})-(\d{2})$/.exec(
@@ -882,19 +775,6 @@ function getTransactionDate(
       : date;
 
   }
-
-
-  // ---------------------------------------------------
-  // YYYY-MM-DD HH:mm
-  // YYYY-MM-DD HH:mm:ss
-  //
-  // 有鱼常见格式：
-  //
-  // 2026-07-26 06:20
-  //
-  // 直接按本地日期时间解析，
-  // 不让浏览器自行当 UTC 处理。
-  // ---------------------------------------------------
 
   const dateTimeMatch =
     /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(
@@ -951,15 +831,6 @@ function getTransactionDate(
 
   }
 
-
-  // ---------------------------------------------------
-  // ISO 时间
-  //
-  // 例如：
-  // 2026-07-26T06:20:00
-  // 2026-07-26T06:20:00+08:00
-  // ---------------------------------------------------
-
   const parsed =
     new Date(text);
 
@@ -980,8 +851,6 @@ function getTransactionDate(
 
 // =====================================================
 // 日期归一化
-//
-// 只比较年月日，不比较时间。
 // =====================================================
 
 function startOfDay(
@@ -998,10 +867,7 @@ function startOfDay(
 
 
 // =====================================================
-// 判断交易是否在账单周期内
-//
-// 包含开始日
-// 包含结束日
+// 判断日期是否在周期内
 // =====================================================
 
 function isDateInBillingCycle(
@@ -1062,6 +928,138 @@ function formatDate(
 
 
 // =====================================================
+// 格式化交易日期
+// =====================================================
+
+function formatTransactionDate(
+  date: Date | null
+): string {
+
+  if (!date) {
+
+    return "-";
+
+  }
+
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      date.getDate()
+    ).padStart(2, "0");
+
+  const hour =
+    String(
+      date.getHours()
+    ).padStart(2, "0");
+
+  const minute =
+    String(
+      date.getMinutes()
+    ).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hour}:${minute}`;
+
+}
+
+
+// =====================================================
+// 获取账目分类
+//
+// 兼容 expense_transactions 中不同字段名称
+// 优先级：
+//
+// account_category
+// category
+// category_name
+// expense_category
+// 账目分类
+// =====================================================
+
+function getTransactionCategory(
+  item: ExpenseTransaction
+): string {
+
+  const value =
+    (item as any).account_category ??
+    (item as any).category ??
+    (item as any).category_name ??
+    (item as any).expense_category ??
+    (item as any)["账目分类"] ??
+    "";
+
+  return String(
+    value
+  ).trim();
+
+}
+
+
+// =====================================================
+// 获取交易描述
+//
+// 尽量兼容 expense_transactions 中不同字段
+// =====================================================
+
+function getTransactionDescription(
+  item: ExpenseTransaction
+): string {
+
+  const value =
+    (item as any).merchant_name ??
+    (item as any).merchant ??
+    (item as any).description ??
+    (item as any).remark ??
+    (item as any).memo ??
+    (item as any).title ??
+    (item as any).name ??
+    "";
+
+  return String(
+    value
+  ).trim();
+
+}
+
+
+// =====================================================
+// 获取消费类型文字
+// =====================================================
+
+function getConsumptionTypeLabel(
+  item: ExpenseTransaction
+): string {
+
+  if (
+    item.consumption_type ===
+    "paid_for_others"
+  ) {
+
+    return "替别人先付";
+
+  }
+
+  if (
+    item.consumption_type ===
+    "self"
+  ) {
+
+    return "自己消费";
+
+  }
+
+  return "-";
+
+}
+
+
+// =====================================================
 // 页面
 // =====================================================
 
@@ -1087,9 +1085,7 @@ export default function CreditCardFromYuPage() {
     transactions,
     setTransactions,
   ] =
-    useState<ExpenseTransaction[]>(
-      []
-    );
+    useState<ExpenseTransaction[]>([]);
 
 
   const [
@@ -1116,6 +1112,19 @@ export default function CreditCardFromYuPage() {
 
 
   // ===================================================
+  // 当前选中的信用卡
+  // ===================================================
+
+  const [
+    selectedCardId,
+    setSelectedCardId,
+  ] =
+    useState<string | null>(
+      null
+    );
+
+
+  // ===================================================
   // 资金安排
   // ===================================================
 
@@ -1132,10 +1141,6 @@ export default function CreditCardFromYuPage() {
   ] =
     useState<number>(0);
 
-
-  // ===================================================
-  // 资金保存状态
-  // ===================================================
 
   const [
     fundingLoaded,
@@ -1167,14 +1172,37 @@ export default function CreditCardFromYuPage() {
 
 
   // ===================================================
-  // 加载当前月份的资金安排
-  //
-  // 页面进入 / 切换月份：
-  //
-  // 读取：
-  //
-  // LP给我
-  // 我自己现在有
+  // 当前选中信用卡
+  // ===================================================
+
+  const selectedCard =
+    useMemo(() => {
+
+      if (!selectedCardId) {
+
+        return null;
+
+      }
+
+      return (
+        cards.find(
+          card =>
+            String(
+              (card as any).id ??
+              getAccountName(card)
+            ) ===
+            selectedCardId
+        ) ?? null
+      );
+
+    }, [
+      cards,
+      selectedCardId,
+    ]);
+
+
+  // ===================================================
+  // 加载资金安排
   // ===================================================
 
   useEffect(() => {
@@ -1205,30 +1233,22 @@ export default function CreditCardFromYuPage() {
           typeof data === "object"
         ) {
 
-          const savedLpMoney =
+          setLpMoney(
             toNumber(
               data.lpMoney
-            );
-
-          const savedOwnMoney =
-            toNumber(
-              data.ownMoney
-            );
-
-          setLpMoney(
-            savedLpMoney
+            )
           );
 
           setOwnMoney(
-            savedOwnMoney
+            toNumber(
+              data.ownMoney
+            )
           );
 
         }
 
       } else {
 
-        // 新月份没有保存记录
-        // 使用默认值
         setLpMoney(12000);
 
         setOwnMoney(0);
@@ -1242,8 +1262,6 @@ export default function CreditCardFromYuPage() {
         err
       );
 
-      // 如果本地数据损坏
-      // 不影响页面正常使用
       setLpMoney(12000);
 
       setOwnMoney(0);
@@ -1261,18 +1279,10 @@ export default function CreditCardFromYuPage() {
 
   // ===================================================
   // 自动保存资金安排
-  //
-  // 输入完成后自动保存
-  //
-  // 保存：
-  // LP给我
-  // 我自己现在有
   // ===================================================
 
   useEffect(() => {
 
-    // 必须等当前月份的数据加载完成
-    // 否则页面刚切换月份时可能把旧数据覆盖掉
     if (!fundingLoaded) {
 
       return;
@@ -1339,7 +1349,6 @@ export default function CreditCardFromYuPage() {
     let cancelled =
       false;
 
-
     async function load() {
 
       try {
@@ -1348,12 +1357,10 @@ export default function CreditCardFromYuPage() {
 
         setError(null);
 
-
         const range =
           getTransactionLoadRange(
             month
           );
-
 
         if (!range) {
 
@@ -1363,29 +1370,8 @@ export default function CreditCardFromYuPage() {
 
         }
 
-
-        // -------------------------------------------------
-        // 信用卡
-        // -------------------------------------------------
-
         const cardPromise =
           getCreditCards();
-
-
-        // -------------------------------------------------
-        // Excel 消费
-        //
-        // 注意：
-        // 这里故意扩大读取范围。
-        //
-        // 因为每张卡账单周期不同。
-        //
-        // 例如：
-        // 账单日20日
-        // 需要读取7/21～8/20
-        //
-        // 所以不能再只读取8/1～9/1。
-        // -------------------------------------------------
 
         const transactionPromise =
           getExpenseTransactions({
@@ -1404,31 +1390,19 @@ export default function CreditCardFromYuPage() {
 
           });
 
-
-        // -------------------------------------------------
-        // LOANS
-        // -------------------------------------------------
-
         const loanPromise =
           supabase
-
             .from(
               "loans"
             )
-
             .select(
               "*"
             );
 
-
         const [
-
           cardData,
-
           transactionData,
-
           loanResult,
-
         ] =
           await Promise.all([
 
@@ -1440,7 +1414,6 @@ export default function CreditCardFromYuPage() {
 
           ]);
 
-
         if (
           cancelled
         ) {
@@ -1448,7 +1421,6 @@ export default function CreditCardFromYuPage() {
           return;
 
         }
-
 
         setCards(
           Array.isArray(
@@ -1458,7 +1430,6 @@ export default function CreditCardFromYuPage() {
             : []
         );
 
-
         setTransactions(
           Array.isArray(
             transactionData
@@ -1466,7 +1437,6 @@ export default function CreditCardFromYuPage() {
             ? transactionData
             : []
         );
-
 
         if (
           loanResult.error
@@ -1495,9 +1465,7 @@ export default function CreditCardFromYuPage() {
 
         }
 
-      } catch (
-        err
-      ) {
+      } catch (err) {
 
         console.error(
           "CreditCardFromYu load error:",
@@ -1536,9 +1504,7 @@ export default function CreditCardFromYuPage() {
 
     }
 
-
     load();
-
 
     return () => {
 
@@ -1552,20 +1518,214 @@ export default function CreditCardFromYuPage() {
 
 
   // ===================================================
+  // 获取某张信用卡本期所有消费
+  // ===================================================
+
+  function getTransactionsForCard(
+    card: CreditCard
+  ): ExpenseTransaction[] {
+
+    const accountName =
+      getAccountName(
+        card
+      );
+
+    const cardBank =
+      getCardBankName(
+        card
+      );
+
+    if (!accountName) {
+
+      return [];
+
+    }
+
+    const billingDay =
+      getBillingDay(
+        card
+      );
+
+    const cycle =
+      getCardBillingCycle(
+        month,
+        billingDay
+      );
+
+    if (!cycle) {
+
+      return [];
+
+    }
+
+    const targetName =
+      normalizeName(
+        accountName
+      );
+
+    const targetBank =
+      normalizeBankName(
+        cardBank
+      );
+
+    const result:
+      ExpenseTransaction[] =
+      [];
+
+    for (
+      const item
+      of transactions
+    ) {
+
+      if (
+        !item.is_credit_card
+      ) {
+
+        continue;
+
+      }
+
+      if (
+        !isExpense(item)
+      ) {
+
+        continue;
+
+      }
+
+      const transactionDate =
+        getTransactionDate(
+          item
+        );
+
+      if (!transactionDate) {
+
+        continue;
+
+      }
+
+      if (
+        !isDateInBillingCycle(
+          transactionDate,
+          cycle.start,
+          cycle.end
+        )
+      ) {
+
+        continue;
+
+      }
+
+      const transactionAccount =
+        String(
+          item.account_name ||
+          ""
+        ).trim();
+
+      if (!transactionAccount) {
+
+        continue;
+
+      }
+
+      const transactionName =
+        normalizeName(
+          transactionAccount
+        );
+
+      const transactionBank =
+        normalizeBankName(
+          transactionAccount
+        );
+
+      const nameMatched =
+        transactionName ===
+        targetName;
+
+      const bankMatched =
+        !!targetBank &&
+        transactionBank ===
+        targetBank;
+
+      if (
+        !nameMatched &&
+        !bankMatched
+      ) {
+
+        continue;
+
+      }
+
+      const amount =
+        Math.abs(
+          Number(
+            item.amount || 0
+          )
+        );
+
+      if (
+        !Number.isFinite(amount)
+      ) {
+
+        continue;
+
+      }
+
+      result.push(
+        item
+      );
+
+    }
+
+    // 日期倒序
+    result.sort(
+      (
+        a,
+        b
+      ) => {
+
+        const dateA =
+          getTransactionDate(a);
+
+        const dateB =
+          getTransactionDate(b);
+
+        if (
+          !dateA &&
+          !dateB
+        ) {
+
+          return 0;
+
+        }
+
+        if (!dateA) {
+
+          return 1;
+
+        }
+
+        if (!dateB) {
+
+          return -1;
+
+        }
+
+        return (
+          dateB.getTime() -
+          dateA.getTime()
+        );
+
+      }
+    );
+
+    return result;
+
+  }
+
+
+  // ===================================================
   // Excel 消费匹配信用卡
-  //
-  // 这里不再提前按照月份汇总。
-  //
-  // 因为每张卡账单周期不同。
-  //
-  // 所以保留原始 transactions，
-  // 在 getExcelExpenseForCard() 中：
-  //
-  // 1. 匹配信用卡
-  // 2. 获取账单日
-  // 3. 计算账单周期
-  // 4. 判断交易日期
-  // 5. 最终汇总
   // ===================================================
 
   function getExcelExpenseForCard(
@@ -1584,12 +1744,10 @@ export default function CreditCardFromYuPage() {
         card
       );
 
-
     const cardBank =
       getCardBankName(
         card
       );
-
 
     if (!accountName) {
 
@@ -1604,31 +1762,16 @@ export default function CreditCardFromYuPage() {
 
     }
 
-
-    // -------------------------------------------------
-    // 账单日
-    // -------------------------------------------------
-
     const billingDay =
       getBillingDay(
         card
       );
-
 
     const cycle =
       getCardBillingCycle(
         month,
         billingDay
       );
-
-
-    /*
-     * 如果信用卡没有设置账单日，
-     * 无法计算账单周期。
-     *
-     * 这里不再退回自然月，
-     * 避免产生错误的预估。
-     */
 
     if (!cycle) {
 
@@ -1643,6 +1786,15 @@ export default function CreditCardFromYuPage() {
 
     }
 
+    const targetName =
+      normalizeName(
+        accountName
+      );
+
+    const targetBank =
+      normalizeBankName(
+        cardBank
+      );
 
     let amount =
       0;
@@ -1656,29 +1808,11 @@ export default function CreditCardFromYuPage() {
     let count =
       0;
 
-
-    // -------------------------------------------------
-    // 名称匹配
-    // -------------------------------------------------
-
-    const targetName =
-      normalizeName(
-        accountName
-      );
-
-
-    const targetBank =
-      normalizeBankName(
-        cardBank
-      );
-
-
     for (
       const item
       of transactions
     ) {
 
-      // 必须是信用卡
       if (
         !item.is_credit_card
       ) {
@@ -1687,8 +1821,6 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
-      // 排除收入、平账
       if (
         !isExpense(item)
       ) {
@@ -1697,34 +1829,16 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
-      // -------------------------------------------------
-      // 交易日期
-      // -------------------------------------------------
-
       const transactionDate =
         getTransactionDate(
           item
         );
-
 
       if (!transactionDate) {
 
         continue;
 
       }
-
-
-      // -------------------------------------------------
-      // 账单周期过滤
-      //
-      // 只有：
-      //
-      // 上个账单日 + 1
-      // ≤ 消费日期 ≤ 本月账单日
-      //
-      // 才进入本张卡本月预估。
-      // -------------------------------------------------
 
       if (
         !isDateInBillingCycle(
@@ -1738,17 +1852,11 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
-      // -------------------------------------------------
-      // 信用卡账户
-      // -------------------------------------------------
-
       const transactionAccount =
         String(
           item.account_name ||
           ""
         ).trim();
-
 
       if (!transactionAccount) {
 
@@ -1756,39 +1864,24 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       const transactionName =
         normalizeName(
           transactionAccount
         );
-
 
       const transactionBank =
         normalizeBankName(
           transactionAccount
         );
 
-
-      /*
-       * 优先：
-       * 信用卡名称精确 / 标准化匹配
-       */
       const nameMatched =
         transactionName ===
         targetName;
 
-
-      /*
-       * 如果名称无法匹配，
-       * 再使用银行名称匹配。
-       *
-       * 这样保持原来页面的匹配逻辑。
-       */
       const bankMatched =
         !!targetBank &&
         transactionBank ===
         targetBank;
-
 
       if (
         !nameMatched &&
@@ -1799,14 +1892,12 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       const transactionAmount =
         Math.abs(
           Number(
             item.amount || 0
           )
         );
-
 
       if (
         !Number.isFinite(
@@ -1818,7 +1909,6 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       amount +=
         transactionAmount;
 
@@ -1826,21 +1916,24 @@ export default function CreditCardFromYuPage() {
         item.consumption_type ===
         "paid_for_others"
       ) {
+
         paidForOthersAmount +=
           transactionAmount;
+
       } else if (
         item.consumption_type ===
         "self"
       ) {
+
         selfAmount +=
           transactionAmount;
+
       }
 
       count +=
         1;
 
     }
-
 
     return {
 
@@ -1876,17 +1969,14 @@ export default function CreditCardFromYuPage() {
         card
       );
 
-
     if (!cardBank) {
 
       return 0;
 
     }
 
-
     let total =
       0;
-
 
     for (
       const loan
@@ -1903,7 +1993,6 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       if (
         String(
           loan.status ??
@@ -1916,7 +2005,6 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       if (
         !loanMatchesCard(
           loan,
@@ -1928,14 +2016,12 @@ export default function CreditCardFromYuPage() {
 
       }
 
-
       total +=
         getLoanMonthlyPayment(
           loan
         );
 
     }
-
 
     return total;
 
@@ -1960,12 +2046,10 @@ export default function CreditCardFromYuPage() {
                 card
               );
 
-
             const installment =
               getInstallmentForCard(
                 card
               );
-
 
             return {
 
@@ -2001,11 +2085,6 @@ export default function CreditCardFromYuPage() {
           }
         );
 
-
-      // -------------------------------------------------
-      // 排序
-      // -------------------------------------------------
-
       result.sort(
         (
           a,
@@ -2017,7 +2096,6 @@ export default function CreditCardFromYuPage() {
 
           let valueB:
             string | number;
-
 
           switch (
             sortKey
@@ -2037,7 +2115,6 @@ export default function CreditCardFromYuPage() {
 
               break;
 
-
             case "bank":
 
               valueA =
@@ -2051,7 +2128,6 @@ export default function CreditCardFromYuPage() {
                 ).toLowerCase();
 
               break;
-
 
             case "billingDay":
 
@@ -2067,7 +2143,6 @@ export default function CreditCardFromYuPage() {
 
               break;
 
-
             case "paymentDay":
 
               valueA =
@@ -2082,7 +2157,6 @@ export default function CreditCardFromYuPage() {
 
               break;
 
-
             case "excelExpense":
 
               valueA =
@@ -2092,7 +2166,6 @@ export default function CreditCardFromYuPage() {
                 b.excelExpense;
 
               break;
-
 
             case "installmentExpense":
 
@@ -2104,7 +2177,6 @@ export default function CreditCardFromYuPage() {
 
               break;
 
-
             case "estimatedExpense":
 
               valueA =
@@ -2114,7 +2186,6 @@ export default function CreditCardFromYuPage() {
                 b.estimatedExpense;
 
               break;
-
 
             case "transactionCount":
 
@@ -2128,12 +2199,11 @@ export default function CreditCardFromYuPage() {
 
           }
 
-
           if (
             typeof valueA ===
-            "string" &&
+              "string" &&
             typeof valueB ===
-            "string"
+              "string"
           ) {
 
             const compare =
@@ -2149,7 +2219,6 @@ export default function CreditCardFromYuPage() {
 
           }
 
-
           const numericA =
             Number(
               valueA
@@ -2160,7 +2229,6 @@ export default function CreditCardFromYuPage() {
               valueB
             );
 
-
           if (
             numericA ===
             numericB
@@ -2170,13 +2238,11 @@ export default function CreditCardFromYuPage() {
 
           }
 
-
           const compare =
             numericA >
             numericB
               ? 1
               : -1;
-
 
           return sortDirection ===
             "asc"
@@ -2185,7 +2251,6 @@ export default function CreditCardFromYuPage() {
 
         }
       );
-
 
       return result;
 
@@ -2197,6 +2262,137 @@ export default function CreditCardFromYuPage() {
       sortKey,
       sortDirection,
     ]);
+
+
+  // ===================================================
+  // 当前选中卡的交易明细
+  // ===================================================
+
+  const selectedTransactions =
+    useMemo(() => {
+
+      if (!selectedCard) {
+
+        return [];
+
+      }
+
+      return getTransactionsForCard(
+        selectedCard
+      );
+
+    }, [
+      selectedCard,
+      transactions,
+      month,
+    ]);
+
+
+  // ===================================================
+  // 当前选中卡明细合计
+  // ===================================================
+
+  const selectedTransactionSummary =
+    useMemo(() => {
+
+      let total =
+        0;
+
+      let self =
+        0;
+
+      let paidForOthers =
+        0;
+
+      for (
+        const item
+        of selectedTransactions
+      ) {
+
+        const amount =
+          Math.abs(
+            Number(
+              item.amount || 0
+            )
+          );
+
+        if (
+          !Number.isFinite(amount)
+        ) {
+
+          continue;
+
+        }
+
+        total +=
+          amount;
+
+        if (
+          item.consumption_type ===
+          "self"
+        ) {
+
+          self +=
+            amount;
+
+        }
+
+        if (
+          item.consumption_type ===
+          "paid_for_others"
+        ) {
+
+          paidForOthers +=
+            amount;
+
+        }
+
+      }
+
+      return {
+        total,
+        self,
+        paidForOthers,
+        count:
+          selectedTransactions.length,
+      };
+
+    }, [
+      selectedTransactions,
+    ]);
+
+
+  // ===================================================
+  // 点击信用卡
+  // ===================================================
+
+  function handleCardClick(
+    card: CreditCard
+  ) {
+
+    const id =
+      String(
+        (card as any).id ??
+        getAccountName(card)
+      );
+
+    if (
+      selectedCardId === id
+    ) {
+
+      setSelectedCardId(
+        null
+      );
+
+      return;
+
+    }
+
+    setSelectedCardId(
+      id
+    );
+
+  }
 
 
   // ===================================================
@@ -2221,7 +2417,6 @@ export default function CreditCardFromYuPage() {
       return;
 
     }
-
 
     setSortKey(
       key
@@ -2259,7 +2454,6 @@ export default function CreditCardFromYuPage() {
       let transactionCount =
         0;
 
-
       for (
         const row
         of rows
@@ -2284,7 +2478,6 @@ export default function CreditCardFromYuPage() {
           row.transactionCount;
 
       }
-
 
       return {
 
@@ -2348,20 +2541,17 @@ export default function CreditCardFromYuPage() {
         month
       );
 
-
     if (!match) {
 
       return;
 
     }
 
-
     const year =
       Number(match[1]);
 
     const monthNumber =
       Number(match[2]);
-
 
     const date =
       new Date(
@@ -2370,12 +2560,10 @@ export default function CreditCardFromYuPage() {
         1
       );
 
-
     date.setMonth(
       date.getMonth() +
       offset
     );
-
 
     setMonth(
       `${date.getFullYear()}-${String(
@@ -2383,12 +2571,16 @@ export default function CreditCardFromYuPage() {
       ).padStart(2, "0")}`
     );
 
+    setSelectedCardId(
+      null
+    );
+
   }
 
 
   // ===================================================
   // 渲染
-  // =====================================================
+  // ===================================================
 
   return (
 
@@ -2440,7 +2632,6 @@ export default function CreditCardFromYuPage() {
               信用卡预估 FROM_有鱼
             </h1>
 
-
             <p
               className="
                 mt-1
@@ -2484,11 +2675,17 @@ export default function CreditCardFromYuPage() {
             <input
               type="month"
               value={month}
-              onChange={event =>
+              onChange={event => {
+
                 setMonth(
                   event.target.value
-                )
-              }
+                );
+
+                setSelectedCardId(
+                  null
+                );
+
+              }}
               className="
                 rounded-lg
                 border
@@ -2538,6 +2735,7 @@ export default function CreditCardFromYuPage() {
             py-4
           "
         >
+
           <div
             className="
               grid
@@ -2546,37 +2744,55 @@ export default function CreditCardFromYuPage() {
               md:grid-cols-3
             "
           >
+
             <div>
+
               <div className="text-xs text-gray-500">
                 信用卡总消费
               </div>
 
               <div className="mt-1 text-xl font-bold">
-                {formatMoney(summary.excel)}
+                {formatMoney(
+                  summary.excel
+                )}
               </div>
+
             </div>
 
+
             <div>
+
               <div className="text-xs text-gray-500">
                 自己消费总共
               </div>
 
               <div className="mt-1 text-xl font-semibold">
-                {formatMoney(summary.selfExpense)}
+                {formatMoney(
+                  summary.selfExpense
+                )}
               </div>
+
             </div>
 
+
             <div>
+
               <div className="text-xs text-gray-500">
                 替别人提前付总共
               </div>
 
               <div className="mt-1 text-xl font-semibold">
-                {formatMoney(summary.paidForOthersExpense)}
+                {formatMoney(
+                  summary.paidForOthersExpense
+                )}
               </div>
+
             </div>
+
           </div>
+
         </div>
+
 
         {/* =================================================
             错误
@@ -2604,7 +2820,7 @@ export default function CreditCardFromYuPage() {
 
 
         {/* =================================================
-            表格
+            信用卡表格
         ================================================= */}
 
         <div
@@ -2931,25 +3147,41 @@ export default function CreditCardFromYuPage() {
                           row
                         );
 
-
                       const bank =
                         getCardBankName(
                           row
                         );
 
+                      const rowId =
+                        String(
+                          (row as any).id ??
+                          name
+                        );
+
+                      const isSelected =
+                        selectedCardId ===
+                        rowId;
 
                       return (
 
                         <tr
                           key={
-                            String(
-                              (row as any).id ??
-                              name
+                            rowId
+                          }
+                          onClick={() =>
+                            handleCardClick(
+                              row
                             )
                           }
-                          className="
-                            hover:bg-gray-50
-                          "
+                          className={`
+                            cursor-pointer
+                            transition-colors
+                            ${
+                              isSelected
+                                ? "bg-blue-50 hover:bg-blue-50"
+                                : "hover:bg-gray-50"
+                            }
+                          `}
                         >
 
                           <td
@@ -2959,8 +3191,41 @@ export default function CreditCardFromYuPage() {
                             "
                           >
 
-                            <div className="font-medium">
-                              {name || "-"}
+                            <div className="flex items-center gap-2">
+
+                              <div
+                                className={`
+                                  h-2
+                                  w-2
+                                  rounded-full
+                                  ${
+                                    isSelected
+                                      ? "bg-blue-500"
+                                      : "bg-transparent"
+                                  }
+                                `}
+                              />
+
+                              <div>
+
+                                <div className="font-medium">
+                                  {name || "-"}
+                                </div>
+
+                                {isSelected && (
+                                  <div
+                                    className="
+                                      mt-0.5
+                                      text-[11px]
+                                      text-blue-600
+                                    "
+                                  >
+                                    已选择 · 点击查看本期全部消费
+                                  </div>
+                                )}
+
+                              </div>
+
                             </div>
 
                           </td>
@@ -3013,6 +3278,7 @@ export default function CreditCardFromYuPage() {
                             row.cycleEnd ? (
 
                               <div>
+
                                 {formatDate(
                                   row.cycleStart
                                 )}
@@ -3024,6 +3290,7 @@ export default function CreditCardFromYuPage() {
                                 {formatDate(
                                   row.cycleEnd
                                 )}
+
                               </div>
 
                             ) : (
@@ -3189,6 +3456,711 @@ export default function CreditCardFromYuPage() {
 
 
         {/* =================================================
+            当前信用卡消费明细
+        ================================================= */}
+
+        {selectedCard && (
+
+          <div
+            className="
+              mt-6
+              overflow-hidden
+              rounded-xl
+              border
+              bg-white
+            "
+          >
+
+            {/* -------------------------------------------------
+                明细标题
+            ------------------------------------------------- */}
+
+            <div
+              className="
+                border-b
+                bg-gray-50
+                px-5
+                py-4
+              "
+            >
+
+              <div
+                className="
+                  flex
+                  items-start
+                  justify-between
+                  gap-4
+                "
+              >
+
+                <div>
+
+                  <div
+                    className="
+                      flex
+                      items-center
+                      gap-2
+                    "
+                  >
+
+                    <h2
+                      className="
+                        text-lg
+                        font-bold
+                      "
+                    >
+                      {getAccountName(
+                        selectedCard
+                      )}
+                    </h2>
+
+                    <span
+                      className="
+                        rounded-md
+                        bg-blue-100
+                        px-2
+                        py-0.5
+                        text-xs
+                        font-medium
+                        text-blue-700
+                      "
+                    >
+                      本期消费
+                    </span>
+
+                  </div>
+
+
+                  <div
+                    className="
+                      mt-1
+                      text-sm
+                      text-gray-500
+                    "
+                  >
+
+                    {selectedCard &&
+                    getCardBillingCycle(
+                      month,
+                      getBillingDay(
+                        selectedCard
+                      )
+                    ) ? (
+
+                      <>
+                        消费周期：
+                        {formatDate(
+                          getCardBillingCycle(
+                            month,
+                            getBillingDay(
+                              selectedCard
+                            )
+                          )!.start
+                        )}
+
+                        <span className="mx-1">
+                          →
+                        </span>
+
+                        {formatDate(
+                          getCardBillingCycle(
+                            month,
+                            getBillingDay(
+                              selectedCard
+                            )
+                          )!.end
+                        )}
+
+                      </>
+
+                    ) : (
+
+                      "无法计算账单周期"
+
+                    )}
+
+                  </div>
+
+                </div>
+
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedCardId(
+                      null
+                    )
+                  }
+                  className="
+                    rounded-lg
+                    border
+                    bg-white
+                    px-3
+                    py-1.5
+                    text-sm
+                    text-gray-600
+                    hover:bg-gray-100
+                  "
+                >
+                  收起
+                </button>
+
+              </div>
+
+
+              {/* -------------------------------------------------
+                  明细统计
+              ------------------------------------------------- */}
+
+              <div
+                className="
+                  mt-4
+                  grid
+                  grid-cols-2
+                  gap-3
+                  md:grid-cols-4
+                "
+              >
+
+                <div
+                  className="
+                    rounded-lg
+                    border
+                    bg-white
+                    px-4
+                    py-3
+                  "
+                >
+
+                  <div
+                    className="
+                      text-xs
+                      text-gray-500
+                    "
+                  >
+                    本期消费
+                  </div>
+
+                  <div
+                    className="
+                      mt-1
+                      text-lg
+                      font-bold
+                    "
+                  >
+                    {formatMoney(
+                      selectedTransactionSummary.total
+                    )}
+                  </div>
+
+                </div>
+
+
+                <div
+                  className="
+                    rounded-lg
+                    border
+                    bg-white
+                    px-4
+                    py-3
+                  "
+                >
+
+                  <div
+                    className="
+                      text-xs
+                      text-gray-500
+                    "
+                  >
+                    自己消费
+                  </div>
+
+                  <div
+                    className="
+                      mt-1
+                      text-lg
+                      font-semibold
+                    "
+                  >
+                    {formatMoney(
+                      selectedTransactionSummary.self
+                    )}
+                  </div>
+
+                </div>
+
+
+                <div
+                  className="
+                    rounded-lg
+                    border
+                    bg-white
+                    px-4
+                    py-3
+                  "
+                >
+
+                  <div
+                    className="
+                      text-xs
+                      text-gray-500
+                    "
+                  >
+                    替别人先付
+                  </div>
+
+                  <div
+                    className="
+                      mt-1
+                      text-lg
+                      font-semibold
+                    "
+                  >
+                    {formatMoney(
+                      selectedTransactionSummary.paidForOthers
+                    )}
+                  </div>
+
+                </div>
+
+
+                <div
+                  className="
+                    rounded-lg
+                    border
+                    bg-white
+                    px-4
+                    py-3
+                  "
+                >
+
+                  <div
+                    className="
+                      text-xs
+                      text-gray-500
+                    "
+                  >
+                    消费笔数
+                  </div>
+
+                  <div
+                    className="
+                      mt-1
+                      text-lg
+                      font-bold
+                    "
+                  >
+                    {selectedTransactionSummary.count}
+
+                    <span
+                      className="
+                        ml-1
+                        text-sm
+                        font-normal
+                        text-gray-500
+                      "
+                    >
+                      笔
+                    </span>
+
+                  </div>
+
+                </div>
+
+              </div>
+
+            </div>
+
+
+            {/* -------------------------------------------------
+                消费明细表
+            ------------------------------------------------- */}
+
+            <div
+              className="
+                overflow-x-auto
+              "
+            >
+
+              {selectedTransactions.length === 0 ? (
+
+                <div
+                  className="
+                    px-5
+                    py-12
+                    text-center
+                    text-sm
+                    text-gray-500
+                  "
+                >
+                  这个账单周期没有找到消费记录
+                </div>
+
+              ) : (
+
+                <table
+                  className="
+                    w-full
+                    min-w-[1050px]
+                    text-sm
+                  "
+                >
+
+                  <thead
+                    className="
+                      border-b
+                      bg-white
+                      text-gray-500
+                    "
+                  >
+
+                    <tr>
+
+                      <th
+                        className="
+                          whitespace-nowrap
+                          px-5
+                          py-3
+                          text-left
+                          font-medium
+                        "
+                      >
+                        消费日期
+                      </th>
+
+
+                      <th
+                        className="
+                          whitespace-nowrap
+                          px-5
+                          py-3
+                          text-left
+                          font-medium
+                        "
+                      >
+                        消费账户
+                      </th>
+
+
+                      {/* 新增：账目分类 */}
+
+                      <th
+                        className="
+                          whitespace-nowrap
+                          px-5
+                          py-3
+                          text-left
+                          font-medium
+                        "
+                      >
+                        账目分类
+                      </th>
+
+
+                      <th
+                        className="
+                          px-5
+                          py-3
+                          text-left
+                          font-medium
+                        "
+                      >
+                        消费内容
+                      </th>
+
+
+                      <th
+                        className="
+                          whitespace-nowrap
+                          px-5
+                          py-3
+                          text-center
+                          font-medium
+                        "
+                      >
+                        消费归属
+                      </th>
+
+
+                      <th
+                        className="
+                          whitespace-nowrap
+                          px-5
+                          py-3
+                          text-right
+                          font-medium
+                        "
+                      >
+                        金额
+                      </th>
+
+                    </tr>
+
+                  </thead>
+
+
+                  <tbody
+                    className="
+                      divide-y
+                    "
+                  >
+
+                    {selectedTransactions.map(
+                      (
+                        item,
+                        index
+                      ) => {
+
+                        const transactionDate =
+                          getTransactionDate(
+                            item
+                          );
+
+                        const amount =
+                          Math.abs(
+                            Number(
+                              item.amount || 0
+                            )
+                          );
+
+                        const category =
+                          getTransactionCategory(
+                            item
+                          );
+
+                        const description =
+                          getTransactionDescription(
+                            item
+                          );
+
+                        const account =
+                          String(
+                            item.account_name ||
+                            ""
+                          ).trim();
+
+                        const isPaidForOthers =
+                          item.consumption_type ===
+                          "paid_for_others";
+
+                        return (
+
+                          <tr
+                            key={
+                              String(
+                                (item as any).id ??
+                                `${transactionDate?.getTime() ?? index}-${index}`
+                              )
+                            }
+                            className="
+                              hover:bg-gray-50
+                            "
+                          >
+
+                            {/* 消费日期 */}
+
+                            <td
+                              className="
+                                whitespace-nowrap
+                                px-5
+                                py-3
+                                text-gray-700
+                              "
+                            >
+                              {formatTransactionDate(
+                                transactionDate
+                              )}
+                            </td>
+
+
+                            {/* 消费账户 */}
+
+                            <td
+                              className="
+                                px-5
+                                py-3
+                                text-gray-700
+                              "
+                            >
+                              {account || "-"}
+                            </td>
+
+
+                            {/* =================================================
+                                新增：账目分类
+                            ================================================= */}
+
+                            <td
+                              className="
+                                whitespace-nowrap
+                                px-5
+                                py-3
+                                text-gray-700
+                              "
+                            >
+
+                              {category ? (
+
+                                <span
+                                  className="
+                                    inline-flex
+                                    rounded-md
+                                    bg-gray-100
+                                    px-2
+                                    py-1
+                                    text-xs
+                                    font-medium
+                                    text-gray-700
+                                  "
+                                >
+                                  {category}
+                                </span>
+
+                              ) : (
+
+                                "-"
+
+                              )}
+
+                            </td>
+
+
+                            {/* 消费内容 */}
+
+                            <td
+                              className="
+                                max-w-[450px]
+                                px-5
+                                py-3
+                                text-gray-900
+                              "
+                            >
+
+                              <div
+                                className="
+                                  truncate
+                                "
+                                title={
+                                  description
+                                }
+                              >
+                                {description || "-"}
+                              </div>
+
+                            </td>
+
+
+                            {/* 消费归属 */}
+
+                            <td
+                              className="
+                                whitespace-nowrap
+                                px-5
+                                py-3
+                                text-center
+                              "
+                            >
+
+                              <span
+                                className={`
+                                  inline-flex
+                                  rounded-md
+                                  px-2
+                                  py-1
+                                  text-xs
+                                  font-medium
+                                  ${
+                                    isPaidForOthers
+                                      ? "bg-orange-50 text-orange-700"
+                                      : "bg-gray-100 text-gray-700"
+                                  }
+                                `}
+                              >
+                                {getConsumptionTypeLabel(
+                                  item
+                                )}
+                              </span>
+
+                            </td>
+
+
+                            {/* 金额 */}
+
+                            <td
+                              className="
+                                whitespace-nowrap
+                                px-5
+                                py-3
+                                text-right
+                                font-semibold
+                              "
+                            >
+                              {formatMoney(
+                                amount
+                              )}
+                            </td>
+
+                          </tr>
+
+                        );
+
+                      }
+                    )}
+
+                  </tbody>
+
+
+                  <tfoot
+                    className="
+                      border-t
+                      bg-gray-50
+                    "
+                  >
+
+                    <tr>
+
+                      <td
+                        colSpan={5}
+                        className="
+                          px-5
+                          py-3
+                          text-right
+                          font-bold
+                        "
+                      >
+                        本期合计
+                      </td>
+
+
+                      <td
+                        className="
+                          px-5
+                          py-3
+                          text-right
+                          font-bold
+                        "
+                      >
+                        {formatMoney(
+                          selectedTransactionSummary.total
+                        )}
+                      </td>
+
+                    </tr>
+
+                  </tfoot>
+
+                </table>
+
+              )}
+
+            </div>
+
+          </div>
+
+        )}
+
+
+        {/* =================================================
             预估账单资金安排
         ================================================= */}
 
@@ -3242,8 +4214,6 @@ export default function CreditCardFromYuPage() {
             "
           >
 
-            {/* 预估账单 */}
-
             <div>
 
               <div
@@ -3270,8 +4240,6 @@ export default function CreditCardFromYuPage() {
 
             </div>
 
-
-            {/* LP给我 */}
 
             <div>
 
@@ -3337,11 +4305,6 @@ export default function CreditCardFromYuPage() {
 
             </div>
 
-
-            {/* =================================================
-                我自己现在有
-                自动保存
-            ================================================= */}
 
             <div>
 
@@ -3419,8 +4382,6 @@ export default function CreditCardFromYuPage() {
             </div>
 
 
-            {/* 目前安排资金 */}
-
             <div>
 
               <div
@@ -3447,8 +4408,6 @@ export default function CreditCardFromYuPage() {
 
             </div>
 
-
-            {/* 还需要自己拿 */}
 
             <div>
 
@@ -3483,10 +4442,6 @@ export default function CreditCardFromYuPage() {
 
           </div>
 
-
-          {/* =================================================
-              状态
-          ================================================= */}
 
           <div
             className={`
@@ -3630,7 +4585,27 @@ export default function CreditCardFromYuPage() {
 
 
           <div>
-            ⑱ LP给我、我自己现在有按月份自动保存到本机浏览器。
+            ⑱ LP给我、我自己有按月份自动保存到本机浏览器。
+          </div>
+
+
+          <div>
+            ⑲ 点击任意信用卡，可以查看该信用卡本期账单周期内的全部消费明细。
+          </div>
+
+
+          <div>
+            ⑳ 信用卡消费明细与上方预估消费使用相同的账单周期、账户匹配及消费过滤规则。
+          </div>
+
+
+          <div>
+            ㉑ 消费明细中的「账目分类」来自 expense_transactions 的分类字段。
+          </div>
+
+
+          <div>
+            ㉒ 账目分类字段兼容 account_category、category、category_name、expense_category。
           </div>
 
         </div>
@@ -3642,3 +4617,4 @@ export default function CreditCardFromYuPage() {
   );
 
 }
+

@@ -8,7 +8,6 @@ import {
   type ExpenseTransactionInput,
 } from "@/lib/expense-transactions";
 
-
 // =====================================================
 // Supabase Admin
 // =====================================================
@@ -44,6 +43,11 @@ function getSupabaseAdmin() {
   );
 }
 
+// =====================================================
+// 常量
+// =====================================================
+
+const IMPORT_SOURCE = "fish";
 
 // =====================================================
 // 工具：数字转换
@@ -52,7 +56,6 @@ function getSupabaseAdmin() {
 function toNumber(
   value: unknown
 ): number {
-
   if (
     value === null ||
     value === undefined ||
@@ -83,7 +86,6 @@ function toNumber(
     : 0;
 }
 
-
 // =====================================================
 // 工具：字符串
 // =====================================================
@@ -91,7 +93,6 @@ function toNumber(
 function toStringOrNull(
   value: unknown
 ): string | null {
-
   if (
     value === null ||
     value === undefined
@@ -107,19 +108,13 @@ function toStringOrNull(
     : null;
 }
 
-
 // =====================================================
 // 工具：账户名称标准化
-//
-// 这里只负责清理 Excel 中的账户名称。
-// 真正的账户对应关系由
-// expense_account_mappings 决定。
 // =====================================================
 
 function normalizeAccountName(
   value: unknown
 ): string | null {
-
   const text =
     toStringOrNull(value);
 
@@ -130,43 +125,214 @@ function normalizeAccountName(
   return text.trim();
 }
 
+// =====================================================
+// 工具：Excel 日期
+//
+// 统一转换成 Date
+// =====================================================
+
+function parseTransactionDate(
+  value: unknown
+): Date | null {
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return null;
+  }
+
+  if (
+    value instanceof Date
+  ) {
+    if (
+      Number.isNaN(
+        value.getTime()
+      )
+    ) {
+      return null;
+    }
+
+    return value;
+  }
+
+  // Excel serial date
+  if (
+    typeof value === "number"
+  ) {
+    const excelEpoch =
+      new Date(
+        Date.UTC(
+          1899,
+          11,
+          30
+        )
+      );
+
+    const date =
+      new Date(
+        excelEpoch.getTime() +
+        value * 86400000
+      );
+
+    if (
+      Number.isNaN(
+        date.getTime()
+      )
+    ) {
+      return null;
+    }
+
+    return date;
+  }
+
+  const text =
+    String(value).trim();
+
+  if (!text) {
+    return null;
+  }
+
+  const date =
+    new Date(text);
+
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+// =====================================================
+// 获取上次成功导入截止时间
+// =====================================================
+
+async function getImportState(
+  supabase: ReturnType<
+    typeof getSupabaseAdmin
+  >
+): Promise<string | null> {
+  const {
+    data,
+    error,
+  } =
+    await supabase
+      .from(
+        "expense_import_state"
+      )
+      .select(
+        "last_transaction_time"
+      )
+      .eq(
+        "source",
+        IMPORT_SOURCE
+      )
+      .maybeSingle();
+
+  if (error) {
+    throw new Error(
+      `读取消费导入进度失败：${error.message}`
+    );
+  }
+
+  return (
+    data?.last_transaction_time ??
+    null
+  );
+}
+
+// =====================================================
+// 更新导入截止时间
+// =====================================================
+
+async function updateImportState(
+  supabase: ReturnType<
+    typeof getSupabaseAdmin
+  >,
+  lastTransactionTime: string
+) {
+  const {
+    error,
+  } =
+    await supabase
+      .from(
+        "expense_import_state"
+      )
+      .upsert(
+        {
+          source:
+            IMPORT_SOURCE,
+
+          last_transaction_time:
+            lastTransactionTime,
+
+          updated_at:
+            new Date().toISOString(),
+        },
+        {
+          onConflict:
+            "source",
+        }
+      );
+
+  if (error) {
+    throw new Error(
+      `更新消费导入进度失败：${error.message}`
+    );
+  }
+}
 
 // =====================================================
 // POST /api/expense
 //
 // Excel → expense_transactions
 //
-// 完整流程：
+// 增量导入规则：
 //
-// 1. 上传 Excel
-// 2. 读取「收入支出」Sheet
-// 3. 找出所有资金账户名称
-// 4. 查询 expense_account_mappings
+// 第一次：
+// last_transaction_time = null
+// → 全部导入
 //
-// 5. 如果发现新账户：
-//      自动创建映射
-//      confirmed = false
-//      standard_name = null
-//      本次停止导入
+// 后续：
+// transaction_time > last_transaction_time
+// → 才导入
 //
-// 6. 如果账户已经存在但没有确认：
-//      本次停止导入
+// <= last_transaction_time
+// → 全部跳过
 //
-// 7. 所有账户 confirmed=true：
-//      使用 standard_name
-//      正式写入 expense_transactions
+// transaction_hash
+// → 第二层重复保护
 //
-// 注意：
-// 新账户第一次上传不会产生消费记录。
-// 确认映射后，需要重新上传一次 Excel。
+// -----------------------------------------------------
+//
+// 账户确认规则：
+//
+// 如果发现未确认账户：
+//
+// HTTP 409
+// success = true
+// needs_confirmation = true
+//
+// 这不是导入失败，而是正常业务状态：
+// “需要用户完成账户映射后重新上传”
+//
+// 此时：
+//
+// 1. 不写入 expense_transactions
+// 2. 不推进 import cursor
+// 3. 自动创建不存在的账户映射
+//
+// 用户确认账户后重新上传 Excel。
 // =====================================================
 
 export async function POST(
   request: NextRequest
 ) {
-
   try {
-
     // =================================================
     // 1. 获取上传文件
     // =================================================
@@ -180,10 +346,11 @@ export async function POST(
     if (
       !(file instanceof File)
     ) {
-
       return NextResponse.json(
         {
           success: false,
+          needs_confirmation:
+            false,
           error:
             "没有找到 Excel 文件",
         },
@@ -191,14 +358,11 @@ export async function POST(
           status: 400,
         }
       );
-
     }
-
 
     const fileName =
       file.name ||
       "expense.xlsx";
-
 
     // =================================================
     // 2. 检查文件格式
@@ -208,14 +372,18 @@ export async function POST(
       fileName.toLowerCase();
 
     if (
-      !lowerFileName.endsWith(".xlsx") &&
-      !lowerFileName.endsWith(".xls")
+      !lowerFileName.endsWith(
+        ".xlsx"
+      ) &&
+      !lowerFileName.endsWith(
+        ".xls"
+      )
     ) {
-
       return NextResponse.json(
         {
           success: false,
-
+          needs_confirmation:
+            false,
           error:
             "只支持 .xlsx 或 .xls Excel 文件",
         },
@@ -223,9 +391,7 @@ export async function POST(
           status: 400,
         }
       );
-
     }
-
 
     // =================================================
     // 3. 读取 Excel
@@ -245,7 +411,6 @@ export async function POST(
         }
       );
 
-
     // =================================================
     // 4. 找到「收入支出」Sheet
     // =================================================
@@ -257,10 +422,7 @@ export async function POST(
           "收入支出"
       );
 
-
-    // 模糊匹配
     if (!sheetName) {
-
       sheetName =
         workbook.SheetNames.find(
           name =>
@@ -268,16 +430,14 @@ export async function POST(
               "收入支出"
             )
         );
-
     }
 
-
     if (!sheetName) {
-
       return NextResponse.json(
         {
           success: false,
-
+          needs_confirmation:
+            false,
           error:
             `Excel 中没有找到「收入支出」Sheet。当前 Sheet：${workbook.SheetNames.join(
               "、"
@@ -287,15 +447,12 @@ export async function POST(
           status: 400,
         }
       );
-
     }
-
 
     const worksheet =
       workbook.Sheets[
         sheetName
       ];
-
 
     // =================================================
     // 5. Excel → JSON
@@ -312,7 +469,6 @@ export async function POST(
         }
       );
 
-
     // =================================================
     // Excel 没有数据
     // =================================================
@@ -320,10 +476,12 @@ export async function POST(
     if (
       !rows.length
     ) {
-
       return NextResponse.json(
         {
           success: true,
+
+          needs_confirmation:
+            false,
 
           result: {
             success: true,
@@ -337,46 +495,52 @@ export async function POST(
             errors: [],
           },
 
+          file_name:
+            fileName,
+
+          sheet_name:
+            sheetName,
+
+          total_rows:
+            0,
+
+          new_rows:
+            0,
+
+          skipped_by_increment:
+            0,
+
+          invalid_date_rows:
+            0,
+
+          last_import_time:
+            null,
+
           message:
             "Excel「收入支出」Sheet 没有数据",
         }
       );
-
     }
-
 
     // =================================================
     // 6. 检查 Excel 字段
     // =================================================
 
     const requiredColumns = [
-
       "时间",
-
       "资金账户名称",
-
       "资金类型",
-
       "资金账户备注",
-
       "收支类型",
-
       "账目分类",
-
       "账目金额",
-
       "成员",
-
       "账目备注",
-
       "账本名称",
-
     ];
-
 
     const firstRow =
       rows[0];
-
 
     const missingColumns =
       requiredColumns.filter(
@@ -387,14 +551,15 @@ export async function POST(
           )
       );
 
-
     if (
       missingColumns.length
     ) {
-
       return NextResponse.json(
         {
           success: false,
+
+          needs_confirmation:
+            false,
 
           error:
             `Excel 字段不完整，缺少：${missingColumns.join(
@@ -410,9 +575,7 @@ export async function POST(
           status: 400,
         }
       );
-
     }
-
 
     // =================================================
     // 7. Supabase Admin
@@ -421,11 +584,143 @@ export async function POST(
     const supabase =
       getSupabaseAdmin();
 
+    // =================================================
+    // 8. 获取上次成功导入截止时间
+    // =================================================
+
+    const lastImportTime =
+      await getImportState(
+        supabase
+      );
+
+    const lastImportDate =
+      lastImportTime
+        ? new Date(
+            lastImportTime
+          )
+        : null;
+
+    if (
+      lastImportDate &&
+      Number.isNaN(
+        lastImportDate.getTime()
+      )
+    ) {
+      throw new Error(
+        `数据库中的消费导入截止时间无效：${lastImportTime}`
+      );
+    }
 
     // =================================================
-    // 8. 收集 Excel 中所有账户名称
+    // 9. 增量筛选
     //
-    // 一个名称只检查一次
+    // 只保留：
+    //
+    // transaction_time >
+    // last_transaction_time
+    //
+    // 第一次上传：
+    // 全部保留
+    // =================================================
+
+    const newRows:
+      Record<string, unknown>[] =
+      [];
+
+    let skippedByIncrement =
+      0;
+
+    let invalidDateRows =
+      0;
+
+    for (
+      const row of rows
+    ) {
+      const transactionDate =
+        parseTransactionDate(
+          row["时间"]
+        );
+
+      if (!transactionDate) {
+        invalidDateRows++;
+        continue;
+      }
+
+      if (
+        lastImportDate &&
+        transactionDate.getTime() <=
+          lastImportDate.getTime()
+      ) {
+        skippedByIncrement++;
+        continue;
+      }
+
+      newRows.push(
+        row
+      );
+    }
+
+    // =================================================
+    // 10. 没有新数据
+    // =================================================
+
+    if (
+      newRows.length === 0
+    ) {
+      return NextResponse.json(
+        {
+          success: true,
+
+          needs_confirmation:
+            false,
+
+          result: {
+            success: true,
+            total: 0,
+            inserted: 0,
+            duplicated: 0,
+            failed: 0,
+            credit_card: 0,
+            non_credit_card: 0,
+            settlement: 0,
+            errors: [],
+          },
+
+          file_name:
+            fileName,
+
+          sheet_name:
+            sheetName,
+
+          total_rows:
+            rows.length,
+
+          new_rows:
+            0,
+
+          skipped_by_increment:
+            skippedByIncrement,
+
+          invalid_date_rows:
+            invalidDateRows,
+
+          last_import_time:
+            lastImportTime,
+
+          message:
+            lastImportTime
+              ? `没有发现新数据。上次已经导入到 ${new Date(
+                  lastImportTime
+                ).toLocaleString(
+                  "zh-CN"
+                )}。`
+              : "Excel 中没有可导入的新数据。",
+        }
+      );
+    }
+
+    // =================================================
+    // 11. 收集「新数据」中的所有账户名称
     // =================================================
 
     const accountMap =
@@ -433,15 +728,15 @@ export async function POST(
         string,
         {
           sourceName: string;
-          accountType: string | null;
+          accountType:
+            | string
+            | null;
         }
       >();
 
-
     for (
-      const row of rows
+      const row of newRows
     ) {
-
       const sourceName =
         normalizeAccountName(
           row[
@@ -456,19 +751,15 @@ export async function POST(
           ]
         );
 
-
       if (!sourceName) {
         continue;
       }
 
-
-      // 同一个账户名称只保留第一次出现的资金类型
       if (
         !accountMap.has(
           sourceName
         )
       ) {
-
         accountMap.set(
           sourceName,
           {
@@ -476,44 +767,39 @@ export async function POST(
             accountType,
           }
         );
-
       }
-
     }
-
 
     const sourceNames =
       Array.from(
         accountMap.keys()
       );
 
-
     // =================================================
-    // 9. 没有账户名称
+    // 12. 没有账户名称
     // =================================================
 
     if (
       sourceNames.length === 0
     ) {
-
       return NextResponse.json(
         {
           success: false,
 
-          error:
-            "Excel 中没有找到有效的「资金账户名称」",
+          needs_confirmation:
+            false,
 
+          error:
+            "新数据中没有找到有效的「资金账户名称」",
         },
         {
           status: 400,
         }
       );
-
     }
 
-
     // =================================================
-    // 10. 查询已有账户映射
+    // 13. 查询已有账户映射
     // =================================================
 
     const {
@@ -540,11 +826,9 @@ export async function POST(
           sourceNames
         );
 
-
     if (
       mappingsError
     ) {
-
       console.error(
         "expense_account_mappings query error:",
         mappingsError
@@ -554,6 +838,9 @@ export async function POST(
         {
           success: false,
 
+          needs_confirmation:
+            false,
+
           error:
             `读取账户名称映射失败：${mappingsError.message}`,
         },
@@ -561,12 +848,10 @@ export async function POST(
           status: 500,
         }
       );
-
     }
 
-
     // =================================================
-    // 11. 建立映射 Map
+    // 14. 建立映射 Map
     // =================================================
 
     const mappingMap =
@@ -575,123 +860,98 @@ export async function POST(
         {
           id: string;
           source_name: string;
-          standard_name: string | null;
-          account_type: string | null;
+          standard_name:
+            | string
+            | null;
+          account_type:
+            | string
+            | null;
           confirmed: boolean;
           created_at?: string;
           updated_at?: string;
         }
       >();
 
-
     for (
       const mapping of
         mappings ?? []
     ) {
-
       if (
         !mapping.source_name
       ) {
         continue;
       }
 
-
       mappingMap.set(
         mapping.source_name,
         mapping
       );
-
     }
 
-
     // =================================================
-    // 12. 找出未确认账户
-    //
-    // 包括：
-    //
-    // A. 数据库没有
-    // B. confirmed=false
-    // C. standard_name为空
+    // 15. 找出未确认账户
     // =================================================
 
     const unresolvedAccounts:
       Array<{
         source_name: string;
-        account_type: string | null;
-        mapping_id: string | null;
-        standard_name: string | null;
+        account_type:
+          | string
+          | null;
+        mapping_id:
+          | string
+          | null;
+        standard_name:
+          | string
+          | null;
         confirmed: boolean;
       }> = [];
-
 
     for (
       const account of
         accountMap.values()
     ) {
-
       const mapping =
         mappingMap.get(
           account.sourceName
         );
 
-
       const isConfirmed =
         Boolean(
           mapping &&
-          mapping.confirmed === true &&
+          mapping.confirmed ===
+            true &&
           mapping.standard_name &&
           mapping.standard_name.trim()
         );
 
-
       if (!isConfirmed) {
+        unresolvedAccounts.push(
+          {
+            source_name:
+              account.sourceName,
 
-        unresolvedAccounts.push({
+            account_type:
+              account.accountType,
 
-          source_name:
-            account.sourceName,
+            mapping_id:
+              mapping?.id ??
+              null,
 
-          account_type:
-            account.accountType,
+            standard_name:
+              mapping?.standard_name ??
+              null,
 
-          mapping_id:
-            mapping?.id ??
-            null,
-
-          standard_name:
-            mapping?.standard_name ??
-            null,
-
-          confirmed:
-            mapping?.confirmed ??
-            false,
-
-        });
-
+            confirmed:
+              mapping?.confirmed ??
+              false,
+          }
+        );
       }
-
     }
 
-
     // =================================================
-    // 13. ★ 自动创建新账户映射
-    //
-    // 这是本次最重要的逻辑。
-    //
-    // 如果 Excel 出现：
-    //
-    // 上行信用卡
-    //
-    // 数据库没有：
-    //
-    // 就自动创建：
-    //
-    // source_name   = 上行信用卡
-    // standard_name = null
-    // confirmed     = false
-    //
-    // 这样 /expense-account-mappings
-    // 就可以看到这个账户。
+    // 16. 自动创建新账户映射
     // =================================================
 
     const newMappings =
@@ -700,15 +960,12 @@ export async function POST(
           !item.mapping_id
       );
 
-
     if (
       newMappings.length > 0
     ) {
-
       const insertRows =
         newMappings.map(
           item => ({
-
             source_name:
               item.source_name,
 
@@ -720,17 +977,8 @@ export async function POST(
 
             confirmed:
               false,
-
           })
         );
-
-
-      // -------------------------------------------------
-      // 使用 upsert
-      //
-      // 前提：
-      // source_name 已经设置 UNIQUE
-      // -------------------------------------------------
 
       const {
         error:
@@ -751,11 +999,9 @@ export async function POST(
             }
           );
 
-
       if (
         insertMappingError
       ) {
-
         console.error(
           "Create expense account mappings error:",
           insertMappingError
@@ -765,6 +1011,9 @@ export async function POST(
           {
             success: false,
 
+            needs_confirmation:
+              false,
+
             error:
               `创建待确认账户映射失败：${insertMappingError.message}`,
           },
@@ -772,47 +1021,56 @@ export async function POST(
             status: 500,
           }
         );
-
       }
-
     }
 
-
     // =================================================
-    // 14. 如果存在未确认账户
+    // 17. ★ 存在未确认账户
     //
-    // ★ 这里直接停止
+    // 这是正常业务状态，不是导入失败。
     //
-    // 不调用 createExpenseTransactions
+    // HTTP 409 表示：
+    // Conflict / 需要用户完成前置确认
     //
-    // 所以：
+    // 重要：
     //
-    // 新账户出现
-    // ↓
-    // 创建映射
-    // ↓
-    // 停止
-    // ↓
-    // 用户确认
-    // ↓
-    // 重新上传
-    // ↓
-    // 正式导入
+    // 1. success = true
+    // 2. needs_confirmation = true
+    // 3. 不写 expense_transactions
+    // 4. 不推进 import cursor
     // =================================================
 
     if (
-      unresolvedAccounts.length > 0
+      unresolvedAccounts.length >
+      0
     ) {
-
       return NextResponse.json(
         {
-          success: false,
+          success: true,
 
           needs_confirmation:
             true,
 
-          error:
-            "发现尚未确认的账户名称，请先完成账户名称对应。",
+          result: {
+            success: true,
+
+            total:
+              newRows.length,
+
+            inserted: 0,
+
+            duplicated: 0,
+
+            failed: 0,
+
+            credit_card: 0,
+
+            non_credit_card: 0,
+
+            settlement: 0,
+
+            errors: [],
+          },
 
           file_name:
             fileName,
@@ -822,6 +1080,21 @@ export async function POST(
 
           total_rows:
             rows.length,
+
+          new_rows:
+            newRows.length,
+
+          skipped_by_increment:
+            skippedByIncrement,
+
+          invalid_date_rows:
+            invalidDateRows,
+
+          previous_import_time:
+            lastImportTime,
+
+          last_import_time:
+            lastImportTime,
 
           accounts:
             unresolvedAccounts,
@@ -839,36 +1112,22 @@ export async function POST(
           status: 409,
         }
       );
-
     }
 
-
     // =================================================
-    // 15. 所有账户均已确认
-    //
-    // Excel 原始名称
-    //      ↓
-    // expense_account_mappings
-    //      ↓
-    // standard_name
-    //
-    // 最终：
-    // expense_transactions.account_name
-    // 使用 standard_name
+    // 18. 所有账户已经确认
     // =================================================
 
     const inputs:
       ExpenseTransactionInput[] =
-      rows.map(
+      newRows.map(
         row => {
-
           const sourceAccountName =
             normalizeAccountName(
               row[
                 "资金账户名称"
               ]
             );
-
 
           const accountType =
             toStringOrNull(
@@ -877,14 +1136,12 @@ export async function POST(
               ]
             );
 
-
           const incomeExpenseType =
             toStringOrNull(
               row[
                 "收支类型"
               ]
             );
-
 
           const amount =
             toNumber(
@@ -893,11 +1150,6 @@ export async function POST(
               ]
             );
 
-
-          // =================================================
-          // 获取标准账户名称
-          // =================================================
-
           const mapping =
             sourceAccountName
               ? mappingMap.get(
@@ -905,28 +1157,16 @@ export async function POST(
                 )
               : null;
 
-
           const standardAccountName =
             mapping?.standard_name?.trim() ||
             sourceAccountName;
-
-
-          // =================================================
-          // 信用卡判断
-          // =================================================
 
           const isCreditCard =
             accountType ===
             "信用卡";
 
-
-          // =================================================
-          // 平账判断
-          // =================================================
-
           const settlementText =
             [
-
               incomeExpenseType,
 
               toStringOrNull(
@@ -940,11 +1180,9 @@ export async function POST(
                   "账目备注"
                 ]
               ),
-
             ]
               .filter(Boolean)
               .join(" ");
-
 
           const isSettlement =
             settlementText.includes(
@@ -954,13 +1192,7 @@ export async function POST(
               "平帐"
             );
 
-
           return {
-
-            // -------------------------------------------------
-            // 时间
-            // -------------------------------------------------
-
             transaction_time:
               row[
                 "时间"
@@ -969,26 +1201,11 @@ export async function POST(
                 | Date
                 | null,
 
-
-            // -------------------------------------------------
-            // ★ 标准账户名称
-            // -------------------------------------------------
-
             account_name:
               standardAccountName,
 
-
-            // -------------------------------------------------
-            // 资金类型
-            // -------------------------------------------------
-
             account_type:
               accountType,
-
-
-            // -------------------------------------------------
-            // 账户备注
-            // -------------------------------------------------
 
             account_remark:
               toStringOrNull(
@@ -997,18 +1214,8 @@ export async function POST(
                 ]
               ),
 
-
-            // -------------------------------------------------
-            // 收支类型
-            // -------------------------------------------------
-
             income_expense_type:
               incomeExpenseType,
-
-
-            // -------------------------------------------------
-            // 分类
-            // -------------------------------------------------
 
             category:
               toStringOrNull(
@@ -1017,17 +1224,7 @@ export async function POST(
                 ]
               ),
 
-
-            // -------------------------------------------------
-            // 金额
-            // -------------------------------------------------
-
             amount,
-
-
-            // -------------------------------------------------
-            // 成员
-            // -------------------------------------------------
 
             member:
               toStringOrNull(
@@ -1036,22 +1233,12 @@ export async function POST(
                 ]
               ),
 
-
-            // -------------------------------------------------
-            // 备注
-            // -------------------------------------------------
-
             remark:
               toStringOrNull(
                 row[
                   "账目备注"
                 ]
               ),
-
-
-            // -------------------------------------------------
-            // 账本
-            // -------------------------------------------------
 
             book_name:
               toStringOrNull(
@@ -1060,46 +1247,23 @@ export async function POST(
                 ]
               ),
 
-
-            // -------------------------------------------------
-            // 信用卡
-            // -------------------------------------------------
-
             is_credit_card:
               isCreditCard,
-
-
-            // -------------------------------------------------
-            // 平账
-            // -------------------------------------------------
 
             is_settlement:
               isSettlement,
 
-
-            // -------------------------------------------------
-            // 来源文件
-            // -------------------------------------------------
-
             source_file:
               fileName,
 
-
-            // -------------------------------------------------
-            // 来源 Sheet
-            // -------------------------------------------------
-
             source_sheet:
               sheetName,
-
           };
-
         }
       );
 
-
     // =================================================
-    // 16. 统计
+    // 19. 统计
     // =================================================
 
     const creditCardCount =
@@ -1109,14 +1273,12 @@ export async function POST(
           true
       ).length;
 
-
     const nonCreditCardCount =
       inputs.filter(
         item =>
           item.is_credit_card !==
           true
       ).length;
-
 
     const settlementCount =
       inputs.filter(
@@ -1125,11 +1287,8 @@ export async function POST(
           true
       ).length;
 
-
     // =================================================
-    // 17. 正式写入 expense_transactions
-    //
-    // ★ 只有所有账户确认后才执行
+    // 20. 正式写入
     // =================================================
 
     const result =
@@ -1137,9 +1296,65 @@ export async function POST(
         inputs
       );
 
+    // =================================================
+    // 21. ★ 只有正式导入完全成功时才推进游标
+    //
+    // 注意：
+    //
+    // needs_confirmation 在前面已经 return，
+    // 所以这里绝对不会因为账户未确认而推进。
+    // =================================================
+
+    let newLastImportTime =
+      lastImportTime;
+
+    if (
+      result.failed === 0 &&
+      result.success
+    ) {
+      const successfulDates =
+        inputs
+          .map(
+            input =>
+              parseTransactionDate(
+                input.transaction_time
+              )
+          )
+          .filter(
+            (
+              value
+            ): value is Date =>
+              value !== null
+          );
+
+      if (
+        successfulDates.length >
+        0
+      ) {
+        const maxDate =
+          successfulDates.reduce(
+            (
+              max,
+              current
+            ) =>
+              current.getTime() >
+              max.getTime()
+                ? current
+                : max
+          );
+
+        newLastImportTime =
+          maxDate.toISOString();
+
+        await updateImportState(
+          supabase,
+          newLastImportTime
+        );
+      }
+    }
 
     // =================================================
-    // 18. 返回结果
+    // 22. 返回正式导入结果
     // =================================================
 
     return NextResponse.json(
@@ -1158,6 +1373,18 @@ export async function POST(
         sheet_name:
           sheetName,
 
+        total_rows:
+          rows.length,
+
+        new_rows:
+          newRows.length,
+
+        skipped_by_increment:
+          skippedByIncrement,
+
+        invalid_date_rows:
+          invalidDateRows,
+
         imported_rows:
           inputs.length,
 
@@ -1170,26 +1397,32 @@ export async function POST(
         settlement_rows:
           settlementCount,
 
+        previous_import_time:
+          lastImportTime,
+
+        new_import_time:
+          newLastImportTime,
+
         message:
           result.success
-            ? `导入完成：新增 ${result.inserted} 笔，重复 ${result.duplicated} 笔`
-            : `导入完成，但有 ${result.failed} 笔失败`,
+            ? `导入完成：新增 ${result.inserted} 笔，重复 ${result.duplicated} 笔，跳过历史数据 ${skippedByIncrement} 笔`
+            : `导入完成，但有 ${result.failed} 笔失败；导入截止时间未推进`,
       }
     );
-
   } catch (
     error
   ) {
-
     console.error(
       "POST /api/expense error:",
       error
     );
 
-
     return NextResponse.json(
       {
         success: false,
+
+        needs_confirmation:
+          false,
 
         error:
           error instanceof Error
@@ -1200,7 +1433,5 @@ export async function POST(
         status: 500,
       }
     );
-
   }
-
 }

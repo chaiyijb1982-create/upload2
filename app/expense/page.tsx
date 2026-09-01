@@ -16,6 +16,8 @@ import {
   type ExpenseTransaction,
 } from "@/lib/expense-transactions";
 
+import ExpenseAIAnalysis from "@/components/ExpenseAIAnalysis";
+
 // =====================================================
 // 类型
 // =====================================================
@@ -105,8 +107,24 @@ function getTransactionDate(
     return null;
   }
 
-  const date = new Date(
+  const raw = String(
     item.transaction_time
+  ).trim();
+
+  if (!raw) {
+    return null;
+  }
+
+  // Supabase 通常返回 ISO 时间。
+  // 对历史数据中可能出现的
+  // "YYYY-MM-DD HH:mm:ss" 也做兼容。
+  const normalized =
+    raw.includes("T")
+      ? raw
+      : raw.replace(" ", "T");
+
+  const date = new Date(
+    normalized
   );
 
   if (Number.isNaN(date.getTime())) {
@@ -117,28 +135,141 @@ function getTransactionDate(
 }
 
 // =====================================================
-// 消费统计口径
+// 取得稳定的年月
 //
-// 1. 必须是支出
-// 2. 排除平账
-// 3. 排除替别人提前付
-// 4. 只统计自己消费
+// 详细数字表和 AI 都使用这个函数，避免不同地方
+// 因 Date 解析方式不同而出现月份错位或全部丢失。
 // =====================================================
+
+function getTransactionYearMonth(
+  item: ExpenseTransaction
+): {
+  year: number;
+  month: number;
+} | null {
+  const raw = String(
+    item.transaction_time || ""
+  ).trim();
+
+  if (raw) {
+    // 优先直接读取数据库时间字符串前面的年月日。
+    // 兼容：2026-08-31、2026-08-31 12:30:00、
+    // 2026-08-31T12:30:00+08:00 等。
+    const match = raw.match(
+      /^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/
+    );
+
+    if (match) {
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+
+      if (
+        Number.isInteger(year) &&
+        Number.isInteger(month) &&
+        month >= 1 &&
+        month <= 12
+      ) {
+        return {
+          year,
+          month,
+        };
+      }
+    }
+  }
+
+  const date = getTransactionDate(item);
+
+  if (!date) {
+    return null;
+  }
+
+  return {
+    year: date.getFullYear(),
+    month: date.getMonth() + 1,
+  };
+}
+
+// =====================================================
+// ★ 统一消费统计规则
+//
+// 所有页面统计 + AI 都必须从这一套规则生成。
+//
+// 排除：
+// 平账
+// 法24.6
+// 法国出差
+// 借出款
+// 年金
+// 理财
+// 替别人先付
+//
+// 分类：
+// 1. 账簿 = xx
+//      → xx
+//
+// 2. 日常账本 + 修行
+//      → xx
+//
+// 3. 日常账本 + 其他分类
+//      → 其他 / 日常账本
+//
+// 4. 其他账簿
+//      → 其他 / 具体账簿
+//
+// xx 永远不会出现在「其他」下面。
+// =====================================================
+
+const EXCLUDED_BOOK_NAMES = new Set([
+  "平账",
+  "法24.6",
+  "法国出差",
+  "借出款",
+  "年金",
+  "理财",
+  "替别人先付",
+]);
+
+function getNormalizedBookName(
+  item: ExpenseTransaction
+): string {
+  return (
+    item.book_name ||
+    "未设置账本"
+  ).trim() || "未设置账本";
+}
+
+function getNormalizedCategory(
+  item: ExpenseTransaction
+): string {
+  return (
+    item.category ||
+    "未分类"
+  ).trim() || "未分类";
+}
 
 function isConsumptionTransaction(
   item: ExpenseTransaction
 ): boolean {
+  // 平账
   if (item.is_settlement) {
     return false;
   }
 
+  // 必须是支出。
+  // 正常导入的数据都会有「收入支出」字段。
+  // 对历史记录中该字段为空的情况，不因为字段缺失
+  // 把已经明确标记为 self 的消费流水全部过滤掉。
   const incomeExpenseType =
-    item.income_expense_type || "";
+    (item.income_expense_type || "").trim();
 
-  if (!incomeExpenseType.includes("支出")) {
+  if (
+    incomeExpenseType &&
+    !incomeExpenseType.includes("支出")
+  ) {
     return false;
   }
 
+  // 替别人先付 / 代付
   if (
     item.consumption_type ===
     "paid_for_others"
@@ -146,6 +277,7 @@ function isConsumptionTransaction(
     return false;
   }
 
+  // 只统计自己消费
   if (
     item.consumption_type &&
     item.consumption_type !== "self"
@@ -153,32 +285,234 @@ function isConsumptionTransaction(
     return false;
   }
 
+  // 指定账簿完全排除
+  const bookName =
+    getNormalizedBookName(item);
+
+  if (
+    EXCLUDED_BOOK_NAMES.has(bookName)
+  ) {
+    return false;
+  }
+
   return true;
 }
 
-// =====================================================
-// 年度账簿分组
-//
-// book_name === "xx"
-//      → xx
-//
-// 其他所有账簿
-//      → 其他
-// =====================================================
+type ExpenseGroup =
+  | "xx"
+  | "other";
 
-function getAnnualBookGroup(
+function classifyExpense(
   item: ExpenseTransaction
-): "xx" | "其他" {
-  const bookName = (
-    item.book_name || ""
-  ).trim();
+): {
+  group: ExpenseGroup;
+  bookName: string;
+} {
+  const bookName =
+    getNormalizedBookName(item);
 
+  const category =
+    getNormalizedCategory(item);
+
+  // ① 账簿名称 = xx
   if (bookName === "xx") {
-    return "xx";
+    return {
+      group: "xx",
+      bookName: "xx",
+    };
   }
 
-  return "其他";
+  // ② 日常账本 + 修行
+  if (
+    bookName === "日常账本" &&
+    category === "修行"
+  ) {
+    return {
+      group: "xx",
+      bookName: "xx",
+    };
+  }
+
+  // ③ 其余全部进入「其他」
+  return {
+    group: "other",
+    bookName,
+  };
 }
+
+// =====================================================
+// 旅游账本标准化
+//
+// 仅用于「其他」内部显示。
+// 不改变消费金额，只改变显示名称。
+// =====================================================
+
+function normalizeOtherBookName(
+  bookName: string | null | undefined
+): string {
+  const value =
+    (
+      bookName ||
+      "未设置账本"
+    ).trim();
+
+  if (!value) {
+    return "未设置账本";
+  }
+
+  const tourismKeywords = [
+    "旅游",
+    "旅行",
+    "自由行",
+    "出境游",
+    "境外游",
+    "国内游",
+    "亲子游",
+    "周边游",
+    "自驾游",
+    "跟团游",
+    "度假游",
+    "海岛游",
+  ];
+
+  if (
+    tourismKeywords.some(
+      keyword =>
+        value.includes(keyword)
+    )
+  ) {
+    return "旅游";
+  }
+
+  if (
+    value.endsWith("游")
+  ) {
+    return "旅游";
+  }
+
+  return value;
+}
+
+// =====================================================
+// ★ 统一消费记录
+//
+// 这是页面和 AI 的共同数据源。
+// =====================================================
+
+type UnifiedExpenseRecord = {
+  year: number;
+  month: number;
+
+  group:
+    | "xx"
+    | "其他";
+
+  bookName: string;
+  category: string;
+  amount: number;
+};
+
+function buildUnifiedExpenseRecords(
+  items: ExpenseTransaction[]
+): UnifiedExpenseRecord[] {
+  const result:
+    UnifiedExpenseRecord[] = [];
+
+  items.forEach(item => {
+    if (
+      !isConsumptionTransaction(item)
+    ) {
+      return;
+    }
+
+    const yearMonth =
+      getTransactionYearMonth(item);
+
+    if (!yearMonth) {
+      return;
+    }
+
+    const amount =
+      Math.abs(
+        Number(
+          item.amount || 0
+        )
+      );
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      return;
+    }
+
+    const classification =
+      classifyExpense(item);
+
+    const category =
+      getNormalizedCategory(item);
+
+    const bookName =
+      classification.group === "xx"
+        ? "xx"
+        : normalizeOtherBookName(
+            classification.bookName
+          );
+
+    result.push({
+      year:
+        yearMonth.year,
+
+      month:
+        yearMonth.month,
+
+      group:
+        classification.group === "xx"
+          ? "xx"
+          : "其他",
+
+      bookName,
+      category,
+      amount,
+    });
+  });
+
+  return result;
+}
+
+// =====================================================
+// ★ AI 数据结构
+//
+// ExpenseAIAnalysis 只接收这套已经统计好的结果。
+// 它不需要重新查询 Supabase，也不需要重新判断消费。
+// =====================================================
+
+type AIExpenseCategory = {
+  category: string;
+  amount: number;
+};
+
+type AIExpenseBook = {
+  bookName: string;
+  amount: number;
+  categories: AIExpenseCategory[];
+};
+
+type AIExpenseYear = {
+  year: number;
+
+  xx: {
+    amount: number;
+    categories: AIExpenseCategory[];
+  };
+
+  other: {
+    amount: number;
+    books: AIExpenseBook[];
+  };
+
+  total: number;
+};
 
 // =====================================================
 // 页面
@@ -265,11 +599,24 @@ export default function ExpensePage() {
     setStatisticsMode,
   ] = useState<"month" | "year">("month");
 
+  // xx / 其他详细数字表格模式
+  const [
+    expenseDetailMode,
+    setExpenseDetailMode,
+  ] = useState<"month" | "year">("month");
+
+  const [
+    expenseDetailYear,
+    setExpenseDetailYear,
+  ] = useState<number | null>(null);
+
   // ===================================================
   // 展开的项目
   //
   // 月度：
-  //   bookName
+  //   monthly-xx
+  //   monthly-其他
+  //   monthly-other-book-日常账本
   //
   // 年度：
   //   annual-xx
@@ -376,6 +723,10 @@ export default function ExpensePage() {
         );
 
         setSelectedYear(
+          latestYear
+        );
+
+        setExpenseDetailYear(
           latestYear
         );
       }
@@ -746,134 +1097,524 @@ export default function ExpensePage() {
     ]);
 
   // ===================================================
-  // 月度账本 → 分类
+  // ★ 统一消费数据
+  //
+  // 页面年度统计、AI、其他后续分析全部使用这里。
   // ===================================================
 
-  function buildBookStatistics(
-    items: ExpenseTransaction[]
-  ): BookStat[] {
-    const bookMap =
-      new Map<
-        string,
-        Map<string, number>
-      >();
-
-    items.forEach(item => {
-      const bookName = (
-        item.book_name ||
-        "未设置账本"
-      ).trim();
-
-      const category = (
-        item.category ||
-        "未分类"
-      ).trim();
-
-      const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
-        );
-
-      if (
-        !bookMap.has(
-          bookName
-        )
-      ) {
-        bookMap.set(
-          bookName,
-          new Map<
-            string,
-            number
-          >()
-        );
-      }
-
-      const categoryMap =
-        bookMap.get(
-          bookName
-        )!;
-
-      categoryMap.set(
-        category,
-        (
-          categoryMap.get(
-            category
-          ) || 0
-        ) + amount
-      );
-    });
-
-    const result: BookStat[] =
-      Array.from(
-        bookMap.entries()
-      ).map(
-        ([
-          bookName,
-          categoryMap,
-        ]) => {
-          const categories =
-            Array.from(
-              categoryMap.entries()
-            )
-              .map(
-                ([
-                  category,
-                  amount,
-                ]) => ({
-                  category,
-                  amount,
-                })
-              )
-              .sort(
-                (a, b) =>
-                  b.amount -
-                  a.amount
-              );
-
-          const amount =
-            categories.reduce(
-              (
-                total,
-                item
-              ) =>
-                total +
-                item.amount,
-              0
-            );
-
-          return {
-            bookName,
-            amount,
-            categories,
-          };
-        }
-      );
-
-    result.sort(
-      (a, b) =>
-        b.amount -
-        a.amount
-    );
-
-    return result;
-  }
-
-  // ===================================================
-  // 月度统计
-  // ===================================================
-
-  const monthlyBookStatistics =
+  const unifiedExpenseRecords =
     useMemo(
       () =>
-        buildBookStatistics(
-          monthlyTransactions
+        buildUnifiedExpenseRecords(
+          transactions
         ),
+      [transactions]
+    );
+
+  // ===================================================
+  // ★ 生成 aiExpenseYears
+  // ===================================================
+
+  const aiExpenseYears =
+    useMemo<AIExpenseYear[]>(
+      () => {
+        const yearMap =
+          new Map<
+            number,
+            {
+              xxAmount: number;
+              xxCategories:
+                Map<string, number>;
+
+              otherAmount: number;
+
+              otherBooks:
+                Map<
+                  string,
+                  {
+                    amount: number;
+                    categories:
+                      Map<string, number>;
+                  }
+                >;
+            }
+          >();
+
+        unifiedExpenseRecords.forEach(
+          record => {
+            if (
+              !yearMap.has(
+                record.year
+              )
+            ) {
+              yearMap.set(
+                record.year,
+                {
+                  xxAmount: 0,
+                  xxCategories:
+                    new Map(),
+
+                  otherAmount: 0,
+                  otherBooks:
+                    new Map(),
+                }
+              );
+            }
+
+            const yearData =
+              yearMap.get(
+                record.year
+              )!;
+
+            if (
+              record.group === "xx"
+            ) {
+              yearData.xxAmount +=
+                record.amount;
+
+              yearData.xxCategories.set(
+                record.category,
+                (
+                  yearData.xxCategories.get(
+                    record.category
+                  ) || 0
+                ) +
+                  record.amount
+              );
+
+              return;
+            }
+
+            // ★ xx 不允许进入其他
+            if (
+              record.bookName === "xx"
+            ) {
+              return;
+            }
+
+            yearData.otherAmount +=
+              record.amount;
+
+            if (
+              !yearData.otherBooks.has(
+                record.bookName
+              )
+            ) {
+              yearData.otherBooks.set(
+                record.bookName,
+                {
+                  amount: 0,
+                  categories:
+                    new Map(),
+                }
+              );
+            }
+
+            const bookData =
+              yearData.otherBooks.get(
+                record.bookName
+              )!;
+
+            bookData.amount +=
+              record.amount;
+
+            bookData.categories.set(
+              record.category,
+              (
+                bookData.categories.get(
+                  record.category
+                ) || 0
+              ) +
+                record.amount
+            );
+          }
+        );
+
+        return Array.from(
+          yearMap.entries()
+        )
+          .map(
+            (
+              [
+                year,
+                data,
+              ]
+            ) => {
+              const xxCategories =
+                Array.from(
+                  data.xxCategories.entries()
+                )
+                  .map(
+                    ([
+                      category,
+                      amount,
+                    ]) => ({
+                      category,
+                      amount,
+                    })
+                  )
+                  .sort(
+                    (a, b) =>
+                      b.amount -
+                      a.amount
+                  );
+
+              const otherBooks =
+                Array.from(
+                  data.otherBooks.entries()
+                )
+                  .filter(
+                    ([
+                      bookName,
+                    ]) =>
+                      bookName !== "xx"
+                  )
+                  .map(
+                    ([
+                      bookName,
+                      bookData,
+                    ]) => ({
+                      bookName,
+                      amount:
+                        bookData.amount,
+
+                      categories:
+                        Array.from(
+                          bookData.categories.entries()
+                        )
+                          .map(
+                            ([
+                              category,
+                              amount,
+                            ]) => ({
+                              category,
+                              amount,
+                            })
+                          )
+                          .sort(
+                            (a, b) =>
+                              b.amount -
+                              a.amount
+                          ),
+                    })
+                  )
+                  .sort(
+                    (a, b) =>
+                      b.amount -
+                      a.amount
+                  );
+
+              return {
+                year,
+
+                xx: {
+                  amount:
+                    data.xxAmount,
+
+                  categories:
+                    xxCategories,
+                },
+
+                other: {
+                  amount:
+                    data.otherAmount,
+
+                  books:
+                    otherBooks,
+                },
+
+                total:
+                  data.xxAmount +
+                  data.otherAmount,
+              };
+            }
+          )
+          .sort(
+            (a, b) =>
+              b.year -
+              a.year
+          );
+      },
       [
-        monthlyTransactions,
+        unifiedExpenseRecords,
       ]
     );
+
+  // ===================================================
+  // ★ xx / 其他详细数字表格
+  //
+  // 重要：
+  // 1. 按月显示用户选择年份的 1–12 月，即使某个月没有消费也显示 ¥0。
+  // 2. 按年显示全部历史年份。
+  // 3. 金额只来自 unifiedExpenseRecords，和页面 / AI 使用完全相同的消费口径。
+  // ===================================================
+
+  const expenseDetailRows = useMemo(() => {
+    type DetailRow = {
+      period: string;
+      xx: number;
+      other: number;
+    };
+
+    // -------------------------------------------------
+    // 按月：只显示当前自然年
+    // -------------------------------------------------
+    if (expenseDetailMode === "month") {
+      const currentYear =
+        new Date().getFullYear();
+
+      // ★ 先无条件建立 1–12 月。
+      // 这样即使 unifiedExpenseRecords 暂时为空，
+      // 页面也不会出现「暂无消费数据」而是正常显示今年 12 个月。
+      const monthRows: DetailRow[] = Array.from(
+        { length: 12 },
+        (_, index) => ({
+          period:
+            `${currentYear}-${String(index + 1).padStart(2, "0")}`,
+          xx: 0,
+          other: 0,
+        })
+      );
+
+      const rowMap = new Map(
+        monthRows.map(row => [row.period, row])
+      );
+
+      unifiedExpenseRecords.forEach(record => {
+        // 只统计用户选择的年份
+        if (
+          Number(record.year) !==
+          currentYear
+        ) {
+          return;
+        }
+
+        const month = Number(record.month);
+
+        if (
+          !Number.isInteger(month) ||
+          month < 1 ||
+          month > 12
+        ) {
+          return;
+        }
+
+        const period =
+          `${currentYear}-${String(month).padStart(2, "0")}`;
+
+        const row = rowMap.get(period);
+
+        if (!row) {
+          return;
+        }
+
+        const amount = Math.abs(
+          Number(record.amount || 0)
+        );
+
+        if (
+          !Number.isFinite(amount) ||
+          amount <= 0
+        ) {
+          return;
+        }
+
+        // ★ xx 永远只进入 xx
+        if (record.group === "xx") {
+          row.xx += amount;
+          return;
+        }
+
+        // ★ 其他中再保险排除 xx
+        if (
+          record.group === "其他" &&
+          record.bookName !== "xx"
+        ) {
+          row.other += amount;
+        }
+      });
+
+      return monthRows;
+    }
+
+    // -------------------------------------------------
+    // 按年：全部历史年份
+    // -------------------------------------------------
+    const yearMap = new Map<
+      string,
+      DetailRow
+    >();
+
+    unifiedExpenseRecords.forEach(record => {
+      const year = Number(record.year);
+
+      if (!Number.isInteger(year)) {
+        return;
+      }
+
+      const period = String(year);
+
+      if (!yearMap.has(period)) {
+        yearMap.set(period, {
+          period,
+          xx: 0,
+          other: 0,
+        });
+      }
+
+      const row = yearMap.get(period)!;
+      const amount = Math.abs(
+        Number(record.amount || 0)
+      );
+
+      if (
+        !Number.isFinite(amount) ||
+        amount <= 0
+      ) {
+        return;
+      }
+
+      if (record.group === "xx") {
+        row.xx += amount;
+      } else if (
+        record.group === "其他" &&
+        record.bookName !== "xx"
+      ) {
+        row.other += amount;
+      }
+    });
+
+    return Array.from(
+      yearMap.values()
+    ).sort(
+      (a, b) =>
+        Number(b.period) -
+        Number(a.period)
+    );
+  }, [
+    unifiedExpenseRecords,
+    expenseDetailMode,
+    expenseDetailYear,
+  ]);
+
+  // ===================================================
+  // ★ 月度 xx / 其他统计
+  //
+  // 月度统计与年度统计必须使用完全相同的统一消费规则。
+  // 不再直接按原始账簿显示，统一为：
+  //
+  // xx：
+  //   ▼ xx
+  //       餐饮
+  //       购物
+  //       ...
+  //
+  // 其他：
+  //   ▼ 其他
+  //       ▶ 日常账本
+  //       ▶ 家庭账本
+  //       ▶ 旅游
+  //
+  // 再点击具体账簿：
+  //       ▼ 日常账本
+  //           餐饮
+  //           交通
+  //           购物
+  //
+  // ★ 数据直接来自 unifiedExpenseRecords，确保月度、年度、
+  // AI 和「xx / 其他详细数字」完全使用同一套消费口径。
+  // ===================================================
+
+  const monthlyBookGroups =
+    useMemo(() => {
+      const groups: Record<
+        "xx" | "其他",
+        AnnualBookGroup
+      > = {
+        xx: {
+          amount: 0,
+          categories: new Map(),
+          books: new Map(),
+          bookCategories: new Map(),
+        },
+
+        其他: {
+          amount: 0,
+          categories: new Map(),
+          books: new Map(),
+          bookCategories: new Map(),
+        },
+      };
+
+      unifiedExpenseRecords
+        .filter(record =>
+          selectedMonthYear !== null &&
+          selectedMonth !== null &&
+          record.year === selectedMonthYear &&
+          record.month === selectedMonth
+        )
+        .forEach(record => {
+          const group = record.group;
+
+          // ★ 最后一道保险：xx 永远不能进入「其他」。
+          if (
+            group === "其他" &&
+            record.bookName === "xx"
+          ) {
+            return;
+          }
+
+          const groupData = groups[group];
+          groupData.amount += record.amount;
+
+          // 分组内部的分类统计。
+          // xx 直接按分类显示；其他仅作为统一数据结构保留。
+          groupData.categories.set(
+            record.category,
+            (groupData.categories.get(record.category) || 0) +
+              record.amount
+          );
+
+          if (group === "xx") {
+            groupData.books.set(
+              "xx",
+              (groupData.books.get("xx") || 0) +
+                record.amount
+            );
+            return;
+          }
+
+          // 其他 → 具体账簿。
+          groupData.books.set(
+            record.bookName,
+            (groupData.books.get(record.bookName) || 0) +
+              record.amount
+          );
+
+          // 其他 → 具体账簿 → 分类。
+          if (!groupData.bookCategories.has(record.bookName)) {
+            groupData.bookCategories.set(
+              record.bookName,
+              new Map()
+            );
+          }
+
+          const bookCategoryMap =
+            groupData.bookCategories.get(record.bookName)!;
+
+          bookCategoryMap.set(
+            record.category,
+            (bookCategoryMap.get(record.category) || 0) +
+              record.amount
+          );
+        });
+
+      return groups;
+    }, [
+      unifiedExpenseRecords,
+      selectedMonthYear,
+      selectedMonth,
+    ]);
 
   // ===================================================
   // 年度 xx / 其他统计
@@ -918,133 +1659,101 @@ export default function ExpensePage() {
         },
       };
 
-      yearlyTransactions.forEach(
-        item => {
-          const group =
-            getAnnualBookGroup(
-              item
-            );
+      unifiedExpenseRecords
+        .filter(
+          record =>
+            selectedYear !== null &&
+            record.year ===
+              selectedYear
+        )
+        .forEach(
+          record => {
+            const group =
+              record.group;
 
-          const amount =
-            Math.abs(
-              Number(
-                item.amount || 0
-              )
-            );
+            // ★ 再保险：
+            // xx 永远不进入其他
+            if (
+              group === "其他" &&
+              record.bookName === "xx"
+            ) {
+              return;
+            }
 
-          const category = (
-            item.category ||
-            "未分类"
-          ).trim();
+            const groupData =
+              groups[group];
 
-          const bookName = (
-            item.book_name ||
-            "未设置账本"
-          ).trim();
+            groupData.amount +=
+              record.amount;
 
-          // ---------------------------------------------
-          // 分组总金额
-          // ---------------------------------------------
-
-          groups[group].amount +=
-            amount;
-
-          // ---------------------------------------------
-          // 分组分类
-          // ---------------------------------------------
-
-          groups[
-            group
-          ].categories.set(
-            category,
-            (
-              groups[
-                group
-              ].categories.get(
-                category
-              ) || 0
-            ) + amount
-          );
-
-          // ---------------------------------------------
-          // xx
-          //
-          // xx 本身也是一个账簿
-          // ---------------------------------------------
-
-          if (group === "xx") {
-            groups[
-              group
-            ].books.set(
-              bookName,
+            groupData.categories.set(
+              record.category,
               (
-                groups[
-                  group
-                ].books.get(
-                  bookName
+                groupData.categories.get(
+                  record.category
                 ) || 0
-              ) + amount
-            );
-          }
-
-          // ---------------------------------------------
-          // 其他
-          //
-          // 保存：
-          // 其他 → 日常账本 → 分类
-          // ---------------------------------------------
-
-          if (group === "其他") {
-            groups[
-              group
-            ].books.set(
-              bookName,
-              (
-                groups[
-                  group
-                ].books.get(
-                  bookName
-                ) || 0
-              ) + amount
+              ) +
+                record.amount
             );
 
             if (
-              !groups[
-                group
-              ].bookCategories.has(
-                bookName
+              group === "xx"
+            ) {
+              groupData.books.set(
+                "xx",
+                (
+                  groupData.books.get(
+                    "xx"
+                  ) || 0
+                ) +
+                  record.amount
+              );
+
+              return;
+            }
+
+            groupData.books.set(
+              record.bookName,
+              (
+                groupData.books.get(
+                  record.bookName
+                ) || 0
+              ) +
+                record.amount
+            );
+
+            if (
+              !groupData.bookCategories.has(
+                record.bookName
               )
             ) {
-              groups[
-                group
-              ].bookCategories.set(
-                bookName,
+              groupData.bookCategories.set(
+                record.bookName,
                 new Map()
               );
             }
 
             const bookCategoryMap =
-              groups[
-                group
-              ].bookCategories.get(
-                bookName
+              groupData.bookCategories.get(
+                record.bookName
               )!;
 
             bookCategoryMap.set(
-              category,
+              record.category,
               (
                 bookCategoryMap.get(
-                  category
+                  record.category
                 ) || 0
-              ) + amount
+              ) +
+                record.amount
             );
           }
-        }
-      );
+        );
 
       return groups;
     }, [
-      yearlyTransactions,
+      unifiedExpenseRecords,
+      selectedYear,
     ]);
 
   // ===================================================
@@ -2028,7 +2737,7 @@ export default function ExpensePage() {
                   text-gray-500
                 "
               >
-                按月查看消费；按年按账簿额度统计
+                按月、按年使用完全相同的「xx + 其他」消费归类规则
               </div>
             </div>
 
@@ -2281,6 +2990,8 @@ export default function ExpensePage() {
               {statisticsMode ===
                 "month" && (
                 <>
+                  {/* 月度总览 */}
+
                   <div
                     className="
                       border-b
@@ -2317,15 +3028,8 @@ export default function ExpensePage() {
                           {loading
                             ? "-"
                             : formatMoney(
-                                monthlyBookStatistics.reduce(
-                                  (
-                                    total,
-                                    item
-                                  ) =>
-                                    total +
-                                    item.amount,
-                                  0
-                                )
+                                monthlyBookGroups.xx.amount +
+                                  monthlyBookGroups.其他.amount
                               )}
                         </div>
                       </div>
@@ -2337,162 +3041,384 @@ export default function ExpensePage() {
                           text-gray-500
                         "
                       >
-                        {selectedMonthYear ??
-                          "-"}
+                        {selectedMonthYear ?? "-"}
                         年
-                        {selectedMonth ??
-                          "-"}
+                        {selectedMonth ?? "-"}
                         月
                       </div>
                     </div>
                   </div>
 
+                  {/* =================================================
+                      月度 xx / 其他明细
+
+                      与年度统计保持完全相同的层级结构：
+
+                      xx
+                        → 分类
+
+                      其他
+                        → 账簿
+                          → 分类
+                  ================================================= */}
+
                   <div className="divide-y">
-                    {!loading &&
-                      monthlyBookStatistics.length ===
-                        0 && (
-                        <div
-                          className="
-                            px-5
-                            py-12
-                            text-center
-                            text-sm
-                            text-gray-500
-                          "
-                        >
-                          选择月份暂无消费数据
-                        </div>
-                      )}
+                    {([
+                      "xx",
+                      "其他",
+                    ] as const).map(group => {
+                      const groupData =
+                        monthlyBookGroups[group];
 
-                    {monthlyBookStatistics.map(
-                      book => {
-                        const expanded =
-                          expandedBooks.has(
-                            book.bookName
-                          );
+                      const expanded =
+                        expandedBooks.has(
+                          `monthly-${group}`
+                        );
 
-                        return (
-                          <div
-                            key={
-                              book.bookName
+                      const categories =
+                        Array.from(
+                          groupData.categories.entries()
+                        ).sort(
+                          (a, b) => b[1] - a[1]
+                        );
+
+                      const books =
+                        Array.from(
+                          groupData.books.entries()
+                        ).sort(
+                          (a, b) => b[1] - a[1]
+                        );
+
+                      return (
+                        <div key={group}>
+                          {/* 第一层：xx / 其他 */}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toggleBook(
+                                `monthly-${group}`
+                              )
                             }
+                            className="
+                              flex
+                              w-full
+                              items-center
+                              justify-start
+                              gap-3
+                              px-5
+                              py-4
+                              text-left
+                              hover:bg-gray-50
+                            "
                           >
-                            <button
-                              type="button"
-                              onClick={() =>
-                                toggleBook(
-                                  book.bookName
-                                )
-                              }
+                            <div
                               className="
                                 flex
-                                w-full
+                                min-w-0
                                 items-center
-                                justify-between
-                                gap-4
-                                px-5
-                                py-4
-                                text-left
-                                hover:bg-gray-50
+                                gap-3
                               "
                             >
-                              <div
-                                className="
-                                  flex
-                                  min-w-0
-                                  items-center
-                                  gap-3
-                                "
-                              >
-                                <span
-                                  className="
-                                    w-4
-                                    text-sm
-                                    text-gray-500
-                                  "
-                                >
-                                  {expanded
-                                    ? "▼"
-                                    : "▶"}
-                                </span>
-
-                                <span
-                                  className="
-                                    font-semibold
-                                  "
-                                >
-                                  {
-                                    book.bookName
-                                  }
-                                </span>
-                              </div>
-
                               <span
                                 className="
+                                  w-4
                                   shrink-0
-                                  font-semibold
+                                  text-sm
+                                  text-gray-500
                                 "
                               >
-                                {formatMoney(
-                                  book.amount
-                                )}
+                                {expanded ? "▼" : "▶"}
                               </span>
-                            </button>
 
-                            {expanded && (
-                              <div
-                                className="
-                                  border-t
-                                  bg-gray-50
-                                "
-                              >
-                                {book.categories.map(
-                                  category => (
+                              <span className="font-semibold">
+                                {group}
+                              </span>
+
+                              {group === "其他" &&
+                                books.length > 0 && (
+                                  <span
+                                    className="
+                                      text-xs
+                                      text-gray-400
+                                    "
+                                  >
+                                    {books.length} 个账本
+                                  </span>
+                                )}
+                            </div>
+
+                            <span
+                              className="
+                                shrink-0
+                                font-semibold
+                              "
+                            >
+                              {formatMoney(
+                                groupData.amount
+                              )}
+                            </span>
+                          </button>
+
+                          {expanded && (
+                            <div
+                              className="
+                                border-t
+                                bg-gray-50
+                              "
+                            >
+                              {/* xx：展开后直接显示分类 */}
+
+                              {group === "xx" && (
+                                <div className="px-5 py-4">
+                                  <div
+                                    className="
+                                      mb-3
+                                      text-xs
+                                      font-medium
+                                      text-gray-500
+                                    "
+                                  >
+                                    xx 消费分类构成
+                                  </div>
+
+                                  {categories.length === 0 ? (
                                     <div
-                                      key={
-                                        category.category
-                                      }
                                       className="
-                                        flex
-                                        items-center
-                                        justify-between
-                                        gap-4
-                                        px-5
-                                        py-3
-                                        pl-14
+                                        text-sm
+                                        text-gray-400
                                       "
                                     >
-                                      <div
-                                        className="
-                                          text-sm
-                                          text-gray-600
-                                        "
-                                      >
-                                        {
-                                          category.category
-                                        }
-                                      </div>
-
-                                      <div
-                                        className="
-                                          text-sm
-                                          font-medium
-                                          text-gray-700
-                                        "
-                                      >
-                                        {formatMoney(
-                                          category.amount
-                                        )}
-                                      </div>
+                                      暂无消费
                                     </div>
-                                  )
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-                    )}
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {categories.map(
+                                        ([category, amount]) => (
+                                          <div
+                                            key={category}
+                                            className="
+                                              flex
+                                              items-center
+                                              justify-start
+                                              gap-3
+                                              rounded-lg
+                                              bg-white
+                                              px-4
+                                              py-3
+                                            "
+                                          >
+                                            <span
+                                              className="
+                                                text-sm
+                                                text-gray-600
+                                              "
+                                            >
+                                              {category}
+                                            </span>
+
+                                            <span
+                                              className="
+                                                text-sm
+                                                font-medium
+                                              "
+                                            >
+                                              {formatMoney(amount)}
+                                            </span>
+                                          </div>
+                                        )
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* 其他：展开后只显示账簿 */}
+
+                              {group === "其他" && (
+                                <div className="divide-y">
+                                  {books.length === 0 ? (
+                                    <div
+                                      className="
+                                        px-5
+                                        py-6
+                                        text-sm
+                                        text-gray-400
+                                      "
+                                    >
+                                      暂无消费
+                                    </div>
+                                  ) : (
+                                    books.map(
+                                      ([bookName, bookAmount]) => {
+                                        const bookKey =
+                                          `monthly-other-book-${bookName}`;
+
+                                        const bookExpanded =
+                                          expandedBooks.has(
+                                            bookKey
+                                          );
+
+                                        const bookCategoryMap =
+                                          groupData.bookCategories.get(
+                                            bookName
+                                          ) ?? new Map<string, number>();
+
+                                        const bookCategories =
+                                          Array.from(
+                                            bookCategoryMap.entries()
+                                          ).sort(
+                                            (a, b) => b[1] - a[1]
+                                          );
+
+                                        return (
+                                          <div key={bookName}>
+                                            {/* 第二层：具体账簿 */}
+
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                toggleBook(bookKey)
+                                              }
+                                              className="
+                                                flex
+                                                w-full
+                                                items-center
+                                                justify-start
+                                                gap-3
+                                                px-5
+                                                py-3.5
+                                                pl-10
+                                                text-left
+                                                hover:bg-white
+                                              "
+                                            >
+                                              <div
+                                                className="
+                                                  flex
+                                                  min-w-0
+                                                  items-center
+                                                  gap-3
+                                                "
+                                              >
+                                                <span
+                                                  className="
+                                                    w-4
+                                                    shrink-0
+                                                    text-sm
+                                                    text-gray-500
+                                                  "
+                                                >
+                                                  {bookExpanded
+                                                    ? "▼"
+                                                    : "▶"}
+                                                </span>
+
+                                                <span
+                                                  className="
+                                                    text-sm
+                                                    font-medium
+                                                    text-gray-700
+                                                  "
+                                                >
+                                                  {bookName}
+                                                </span>
+                                              </div>
+
+                                              <span
+                                                className="
+                                                  shrink-0
+                                                  text-sm
+                                                  font-semibold
+                                                  text-gray-700
+                                                "
+                                              >
+                                                {formatMoney(
+                                                  bookAmount
+                                                )}
+                                              </span>
+                                            </button>
+
+                                            {/* 第三层：账簿分类 */}
+
+                                            {bookExpanded && (
+                                              <div
+                                                className="
+                                                  border-t
+                                                  bg-white
+                                                  px-5
+                                                  py-3
+                                                  pl-10
+                                                "
+                                              >
+                                                {bookCategories.length === 0 ? (
+                                                  <div
+                                                    className="
+                                                      text-sm
+                                                      text-gray-400
+                                                    "
+                                                  >
+                                                    暂无分类消费
+                                                  </div>
+                                                ) : (
+                                                  <div className="space-y-2">
+                                                    {bookCategories.map(
+                                                      ([
+                                                        category,
+                                                        amount,
+                                                      ]) => (
+                                                        <div
+                                                          key={category}
+                                                          className="
+                                                            flex
+                                                            items-center
+                                                            justify-start
+                                                            gap-3
+                                                            rounded-lg
+                                                            bg-gray-50
+                                                            px-4
+                                                            py-2.5
+                                                          "
+                                                        >
+                                                          <span
+                                                            className="
+                                                              text-sm
+                                                              text-gray-600
+                                                            "
+                                                          >
+                                                            {category}
+                                                          </span>
+
+                                                          <span
+                                                            className="
+                                                              text-sm
+                                                              font-medium
+                                                              text-gray-700
+                                                            "
+                                                          >
+                                                            {formatMoney(
+                                                              amount
+                                                            )}
+                                                          </span>
+                                                        </div>
+                                                      )
+                                                    )}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      }
+                                    )
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </>
               )}
@@ -3171,8 +4097,8 @@ export default function ExpensePage() {
                                 flex
                                 w-full
                                 items-center
-                                justify-between
-                                gap-4
+                                justify-start
+                                gap-3
                                 px-5
                                 py-4
                                 text-left
@@ -3284,8 +4210,8 @@ export default function ExpensePage() {
                                               className="
                                                 flex
                                                 items-center
-                                                justify-between
-                                                gap-4
+                                                justify-start
+                                                gap-3
                                                 rounded-lg
                                                 bg-white
                                                 px-4
@@ -3403,8 +4329,8 @@ export default function ExpensePage() {
                                                   flex
                                                   w-full
                                                   items-center
-                                                  justify-between
-                                                  gap-4
+                                                  justify-start
+                                                  gap-3
                                                   px-5
                                                   py-3.5
                                                   pl-10
@@ -3471,7 +4397,7 @@ export default function ExpensePage() {
                                                     bg-white
                                                     px-5
                                                     py-3
-                                                    pl-20
+                                                    pl-10
                                                   "
                                                 >
                                                   {bookCategories.length ===
@@ -3498,8 +4424,8 @@ export default function ExpensePage() {
                                                             className="
                                                               flex
                                                               items-center
-                                                              justify-between
-                                                              gap-4
+                                                              justify-start
+                                                              gap-3
                                                               rounded-lg
                                                               bg-gray-50
                                                               px-4
@@ -3553,6 +4479,160 @@ export default function ExpensePage() {
               )}
             </div>
           )}
+        </div>
+
+        {/* =================================================
+            ★ xx / 其他详细数字
+        ================================================= */}
+
+        <div className="mb-6 overflow-hidden rounded-xl border bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
+            <div>
+              <div className="font-semibold">xx / 其他详细数字</div>
+              <div className="mt-1 text-xs text-gray-500">
+                按月仅显示今年；按年显示全部历史年份。与页面实际消费、AI 分析使用同一套统一消费统计结果
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {expenseDetailMode === "month" && (
+                <select
+                  value={
+                    expenseDetailYear ??
+                    ""
+                  }
+                  onChange={event => {
+                    const value =
+                      Number(event.target.value);
+
+                    if (
+                      Number.isInteger(value)
+                    ) {
+                      setExpenseDetailYear(
+                        value
+                      );
+                    }
+                  }}
+                  className="rounded-lg border bg-white px-3 py-2 text-sm font-medium outline-none"
+                >
+                  {availableYears.length === 0 ? (
+                    <option value="">
+                      选择年份
+                    </option>
+                  ) : (
+                    availableYears.map(year => (
+                      <option
+                        key={year}
+                        value={year}
+                      >
+                        {year} 年
+                      </option>
+                    ))
+                  )}
+                </select>
+              )}
+
+              <div className="flex rounded-lg border bg-gray-50 p-1">
+              <button
+                type="button"
+                onClick={() => setExpenseDetailMode("month")}
+                className={`rounded-md px-4 py-1.5 text-sm ${
+                  expenseDetailMode === "month"
+                    ? "bg-white font-semibold shadow-sm"
+                    : "text-gray-500"
+                }`}
+              >
+                按月
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpenseDetailMode("year")}
+                className={`rounded-md px-4 py-1.5 text-sm ${
+                  expenseDetailMode === "year"
+                    ? "bg-white font-semibold shadow-sm"
+                    : "text-gray-500"
+                }`}
+              >
+                按年
+              </button>
+            </div>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] text-sm">
+              <thead className="border-b bg-gray-50">
+                <tr>
+                  <th className="px-5 py-3 text-left font-semibold text-gray-600">
+                    {expenseDetailMode === "month" ? "月份" : "年份"}
+                  </th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">xx</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">其他</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">合计</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">xx 占比</th>
+                  <th className="px-5 py-3 text-right font-semibold text-gray-600">其他占比</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y">
+                {expenseDetailRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-500">
+                      暂无消费数据
+                    </td>
+                  </tr>
+                ) : (
+                  expenseDetailRows.map(row => {
+                    const total = row.xx + row.other;
+                    const xxRate = total > 0 ? (row.xx / total) * 100 : 0;
+                    const otherRate = total > 0 ? (row.other / total) * 100 : 0;
+
+                    return (
+                      <tr key={row.period} className="hover:bg-gray-50">
+                        <td className="px-5 py-3 font-medium">
+                          {expenseDetailMode === "month" ? row.period : `${row.period} 年`}
+                        </td>
+                        <td className="px-5 py-3 text-right font-medium">{formatMoney(row.xx)}</td>
+                        <td className="px-5 py-3 text-right font-medium">{formatMoney(row.other)}</td>
+                        <td className="px-5 py-3 text-right font-semibold">{formatMoney(total)}</td>
+                        <td className="px-5 py-3 text-right text-gray-600">{xxRate.toFixed(1)}%</td>
+                        <td className="px-5 py-3 text-right text-gray-600">{otherRate.toFixed(1)}%</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+
+              {expenseDetailRows.length > 0 && (
+                <tfoot>
+                  <tr className="border-t bg-gray-50">
+                    <td className="px-5 py-3 font-bold">合计</td>
+                    <td className="px-5 py-3 text-right font-bold">
+                      {formatMoney(expenseDetailRows.reduce((sum, row) => sum + row.xx, 0))}
+                    </td>
+                    <td className="px-5 py-3 text-right font-bold">
+                      {formatMoney(expenseDetailRows.reduce((sum, row) => sum + row.other, 0))}
+                    </td>
+                    <td className="px-5 py-3 text-right font-bold">
+                      {formatMoney(expenseDetailRows.reduce((sum, row) => sum + row.xx + row.other, 0))}
+                    </td>
+                    <td className="px-5 py-3 text-right text-gray-500">-</td>
+                    <td className="px-5 py-3 text-right text-gray-500">-</td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+
+        {/* =================================================
+            ★ AI 消费分析
+        ================================================= */}
+
+        <div className="mb-6">
+          <ExpenseAIAnalysis
+            years={aiExpenseYears}
+          />
         </div>
 
         {/* =================================================
@@ -3861,25 +4941,31 @@ export default function ExpensePage() {
           </div>
 
           <div>
-            ⑧ 按年统计中，严格按照：
-            book_name === "xx" → xx，
-            其余全部 → 其他。
+            ⑧ 消费统计统一排除：平账、法24.6、法国出差、借出款、年金、理财、替别人先付。
           </div>
 
           <div>
-            ⑨ 年度额度按照「xx」和「其他」分别保存。
+            ⑨ 账簿名称 = "xx" → xx；日常账本 + 修行 → xx；日常账本其他分类 → 其他 / 日常账本。
           </div>
 
           <div>
-            ⑩ 「其他」实际消费是所有非 xx 账簿消费合计。
+            ⑩ 其他实际消费 = 所有符合消费统计条件、且不属于 xx 的消费。
           </div>
 
           <div>
-            ⑪ 「其他」展开后，可以继续展开具体账簿，再查看该账簿下面的消费分类。
+            ⑪ 年度额度按照「xx」和「其他」分别保存。
           </div>
 
           <div>
-            ⑫ 最近流水只显示最新100笔，但年度统计使用全部消费流水。
+            ⑫ 「其他」展开后，可以继续展开具体账簿，再查看该账簿下面的消费分类。
+          </div>
+
+          <div>
+            ⑬ 页面年度统计与 AI 消费分析使用同一份统一消费统计结果，避免页面数字与 AI 数字不一致。
+          </div>
+
+          <div>
+            ⑭ 最近流水只显示最新100笔，但年度统计与 AI 使用全部已读取的消费流水。
           </div>
         </div>
 

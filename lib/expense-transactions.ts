@@ -9,36 +9,39 @@
 // 数据保存：
 // expense_transactions
 //
-// 核心功能：
-// 1. 消费流水读取
-// 2. 消费流水写入
-// 3. 批量导入
-// 4. 自动去重
-// 5. 自动识别信用卡
-// 6. 自动标记平账
-// 7. 自动判断消费归属
-// 8. 消费统计
-// 9. 信用卡消费统计
-// 10. 分类统计
-// 11. 账户统计
-// 12. 成员统计
-// 13. 月度统计
+// =====================================================
 //
-// 消费归属规则：
+// ★★★ 统一消费规则 ★★★
 //
-// 账本名称 = 「替别人先付」
-//      ↓
-// 代付
+// 所有消费页面、信用卡页面、AI CFO
+// 都必须使用本文件的统一规则。
 //
-// 其他所有账本
-//      ↓
-// 自己支出
+// 1. 平账
+//    → 不属于消费
+//    → consumption_type = null
 //
-// 平账：
-// 不参与消费统计
-// consumption_type = null
+// 2. 收入
+//    → 不属于消费
+//
+// 3. 资金账户名称包含「替别人先付」
+//    → paid_for_others
+//    → 替别人提前付
+//
+// 4. 其他非平账、非收入交易
+//    → self
+//    → 自己消费
+//
+// 5. 实际支出
+//    = 自己消费 + 替别人提前付
+//
+// 6. 信用卡总消费
+//    = 信用卡自己消费
+//    + 信用卡替别人提前付
+//
+// =====================================================
 //
 // 设计原则：
+//
 // - Excel 可以反复上传
 // - 同一笔交易不会重复保存
 // - 原始数据尽量完整保存
@@ -47,8 +50,18 @@
 // - 信用卡和非信用卡分开
 // - 实际支出 = 自己支出 + 代付
 // - source_file 不参与交易 Hash
+// - source_sheet 不参与交易 Hash
 // - consumption_type 不参与交易 Hash
 // - 允许一次上传多个 Excel
+//
+// =====================================================
+//
+// ★ Supabase 默认单次查询最多返回 1000 条
+//
+// getExpenseTransactions() 使用自动分页，
+// 因此 2023 年 1157 条等数据可以完整读取。
+//
+// =====================================================
 //
 // 注意：
 // 本文件不要使用 "use server"
@@ -97,10 +110,10 @@ export interface ExpenseTransaction {
    * 消费归属：
    *
    * self
-   *      自己支出
+   *      自己消费
    *
    * paid_for_others
-   *      代付
+   *      替别人提前付
    *
    * null
    *      平账 / 非消费
@@ -189,7 +202,67 @@ export interface ExpenseImportResult {
 
 
 // =====================================================
-// 工具函数
+// ★ 统一消费统计结果
+// =====================================================
+//
+// 所有页面需要消费拆分时，优先使用这个结构。
+//
+// actual_expense
+//     全部实际支出
+//
+// self_expense
+//     自己消费
+//
+// paid_for_others
+//     替别人提前付
+//
+// credit_card
+//     信用卡总消费
+//
+// credit_card_self
+//     信用卡自己消费
+//
+// credit_card_paid_for_others
+//     信用卡替别人提前付
+//
+// non_credit_card
+//     非信用卡总消费
+//
+// settlement
+//     平账
+//
+// income
+//     收入
+//
+// =====================================================
+
+export interface ExpenseConsumptionSummary {
+
+  actual_expense: number;
+
+  self_expense: number;
+
+  paid_for_others: number;
+
+  credit_card: number;
+
+  credit_card_self: number;
+
+  credit_card_paid_for_others: number;
+
+  non_credit_card: number;
+
+  settlement: number;
+
+  income: number;
+
+  transaction_count: number;
+
+}
+
+
+// =====================================================
+// 工具函数：字符串标准化
 // =====================================================
 
 function normalizeString(
@@ -212,6 +285,10 @@ function normalizeString(
 
 }
 
+
+// =====================================================
+// 工具函数：金额标准化
+// =====================================================
 
 function normalizeAmount(
   value: unknown
@@ -255,40 +332,120 @@ function normalizeAmount(
 
 
 // =====================================================
+// 平账识别
+//
+// ★ 统一规则
+//
+// 平账不是消费。
+//
+// 明确出现：
+// 「平账」
+// 「平帐」
+//
+// 才自动判断为平账。
+//
+// 普通「转账」不会自动判断为平账。
+// =====================================================
+
+export function detectSettlement(
+  input: ExpenseTransactionInput
+): boolean {
+
+  if (
+    input.is_settlement === true
+  ) {
+
+    return true;
+
+  }
+
+
+  const values = [
+
+    input.account_name,
+
+    input.account_type,
+
+    input.account_remark,
+
+    input.income_expense_type,
+
+    input.category,
+
+    input.remark,
+
+    input.payment_method,
+
+    input.book_name,
+
+  ];
+
+
+  const text =
+    values
+      .filter(
+        value =>
+          value !== null &&
+          value !== undefined
+      )
+      .map(
+        value =>
+          String(value).trim()
+      )
+      .join("|");
+
+
+  if (!text) {
+
+    return false;
+
+  }
+
+
+  return (
+    text.includes("平账") ||
+    text.includes("平帐")
+  );
+
+}
+
+
+// =====================================================
 // ★ 消费归属判断
 //
-// 唯一规则：
+// 统一规则：
 //
 // 1. 平账
 //    → null
 //
-// 2. 账本名称 = 「替别人先付」
+// 2. account_name 包含「替别人先付」
 //    → paid_for_others
 //
-// 3. 其他所有账本
+// 3. 其他
 //    → self
 //
-// 注意：
-// 不根据成员判断。
-// 不根据账户判断。
-// 不根据分类判断。
-// 不根据商户判断。
+// ★ 注意：
+//
+// 「替别人先付」必须检查：
+// account_name = 资金账户名称
+//
+// 不是 book_name。
 // =====================================================
 
 // =====================================================
 // ★ 消费归属判断
 //
-// 最终统一规则：
+// 统一消费规则
 //
 // 1. 平账
 //    → null
 //
-// 2. 资金账户名称包含「替别人先付」
-//    → paid_for_others
+// 2. 「替别人先付」/「替别人先付款」
+//    出现在：
+//      - 资金账户名称 account_name
+//      - 账簿 book_name
 //
-//    例如：
-//    「替别人先付」
-//    「替别人先付款」
+//    → paid_for_others
 //
 // 3. 其他所有非平账交易
 //    → self
@@ -298,24 +455,22 @@ function normalizeAmount(
 // - 不根据账户类型判断
 // - 不根据分类判断
 // - 不根据商户判断
-// - 不根据账本名称判断
 //
-// 特别注意：
-// 「替别人先付款」是在 Excel 的
-// 「资金账户名称」字段中出现，
-// 不是「账本名称」。
+// ★ 特别注意：
+// 「替别人先付款」有可能出现在“账簿”字段，
+// 因此 account_name 和 book_name 都必须检查。
 // =====================================================
 
 export function detectConsumptionType(
   input: ExpenseTransactionInput
 ): ConsumptionType {
 
-  // -------------------------------------------------
+  // =================================================
   // 1. 平账
-  // -------------------------------------------------
   //
   // 平账永远不是消费
-  //
+  // =================================================
+
   if (
     detectSettlement(input)
   ) {
@@ -325,18 +480,81 @@ export function detectConsumptionType(
   }
 
 
-  // -------------------------------------------------
-  // 2. 「替别人先付」/「替别人先付款」
-  //    = 代付
-  // -------------------------------------------------
+  // =================================================
+  // 2. 资金账户名称
+  // =================================================
 
   const accountName =
+    normalizeString(
+      input.account_name
+    ) || "";
+
+
+  // =================================================
+  // 3. 账本名称
+  // =================================================
+
+  const bookName =
     normalizeString(
       input.book_name
     ) || "";
 
+
+  // =================================================
+  // 4. 统一检查“替别人先付”
+  //
+  // 只要：
+  //
+  // 资金账户名称
+  // 或
+  // 账本名称
+  //
+  // 出现以下任意表达：
+  //
+  // 替别人先付
+  // 替别人先付款
+  // 替别人先支付
+  // 替别人付
+  // 替别人付款
+  // 替别人支付
+  //
+  // 就认定：
+  //
+  // consumption_type =
+  // "paid_for_others"
+  // =================================================
+
+  const paidForOthersKeywords = [
+
+    "替别人先付",
+
+    "替别人先付款",
+
+    "替别人先支付",
+
+    "替别人付",
+
+    "替别人付款",
+
+    "替别人支付",
+
+  ];
+
+
+  const isPaidForOthers =
+    paidForOthersKeywords.some(
+      keyword =>
+        accountName.includes(keyword) ||
+        bookName.includes(keyword)
+    );
+
+
+  // =================================================
+  // 5. 替别人提前付
+  // =================================================
+
   if (
-    accountName.includes("替别人先付")
+    isPaidForOthers
   ) {
 
     return "paid_for_others";
@@ -344,10 +562,11 @@ export function detectConsumptionType(
   }
 
 
-  // -------------------------------------------------
-  // 3. 其他非平账交易
-  //    = 自己支出
-  // -------------------------------------------------
+  // =================================================
+  // 6. 其他所有非平账交易
+  //
+  // = 自己消费
+  // =================================================
 
   return "self";
 
@@ -366,7 +585,7 @@ export function getConsumptionTypeLabel(
     "paid_for_others"
   ) {
 
-    return "代付";
+    return "替别人提前付";
 
   }
 
@@ -375,7 +594,7 @@ export function getConsumptionTypeLabel(
     "self"
   ) {
 
-    return "自己支出";
+    return "自己消费";
 
   }
 
@@ -388,7 +607,7 @@ export function getConsumptionTypeLabel(
 // 信用卡识别
 //
 // 第一优先级：
-// Excel 已经明确传入 is_credit_card = true
+// Excel 已明确传入 true
 //
 // 第二优先级：
 // account_type
@@ -414,20 +633,24 @@ export function detectCreditCard(
 
   }
 
+
   const accountType =
     normalizeString(
       input.account_type
     ) || "";
+
 
   const accountName =
     normalizeString(
       input.account_name
     ) || "";
 
+
   const accountRemark =
     normalizeString(
       input.account_remark
     ) || "";
+
 
   if (
     accountType.includes("信用卡")
@@ -437,6 +660,7 @@ export function detectCreditCard(
 
   }
 
+
   if (
     accountName.includes("信用卡")
   ) {
@@ -444,6 +668,7 @@ export function detectCreditCard(
     return true;
 
   }
+
 
   if (
     accountRemark.includes("信用卡")
@@ -453,78 +678,8 @@ export function detectCreditCard(
 
   }
 
+
   return false;
-
-}
-
-
-// =====================================================
-// 平账识别
-//
-// 平账不是消费。
-//
-// 注意：
-// 不把普通“转账”自动判断成平账。
-// 只有明确出现：
-// 平账 / 平帐
-// 才自动标记。
-// =====================================================
-
-export function detectSettlement(
-  input: ExpenseTransactionInput
-): boolean {
-
-  if (
-    input.is_settlement === true
-  ) {
-
-    return true;
-
-  }
-
-  const values = [
-
-    input.account_name,
-
-    input.account_type,
-
-    input.account_remark,
-
-    input.income_expense_type,
-
-    input.category,
-
-    input.remark,
-
-    input.payment_method,
-
-    input.book_name,
-
-  ];
-
-  const text =
-    values
-      .filter(
-        value =>
-          value !== null &&
-          value !== undefined
-      )
-      .map(
-        value =>
-          String(value).trim()
-      )
-      .join("|");
-
-  if (!text) {
-
-    return false;
-
-  }
-
-  return (
-    text.includes("平账") ||
-    text.includes("平帐")
-  );
 
 }
 
@@ -547,6 +702,7 @@ function normalizeDate(
 
   }
 
+
   if (
     value instanceof Date
   ) {
@@ -561,12 +717,15 @@ function normalizeDate(
 
     }
 
+
     return value.toISOString();
 
   }
 
+
   const text =
     String(value).trim();
+
 
   if (!text) {
 
@@ -574,8 +733,10 @@ function normalizeDate(
 
   }
 
+
   const date =
     new Date(text);
+
 
   if (
     Number.isNaN(
@@ -587,6 +748,7 @@ function normalizeDate(
 
   }
 
+
   return date.toISOString();
 
 }
@@ -595,16 +757,13 @@ function normalizeDate(
 // =====================================================
 // 交易 Hash
 //
+// 以下字段不参与 Hash：
+//
 // source_file
 // source_sheet
 // consumption_type
 //
-// 都不参与 Hash。
-//
-// 这样：
-// 同一个有鱼 Excel
-// 重复上传
-// 不会产生重复交易。
+// 这样同一个 Excel 重复上传不会产生重复交易。
 // =====================================================
 
 export function createTransactionHash(
@@ -616,55 +775,66 @@ export function createTransactionHash(
       input.transaction_time
     ) || "";
 
+
   const account =
     normalizeString(
       input.account_name
     ) || "";
+
 
   const accountType =
     normalizeString(
       input.account_type
     ) || "";
 
+
   const accountRemark =
     normalizeString(
       input.account_remark
     ) || "";
+
 
   const incomeExpenseType =
     normalizeString(
       input.income_expense_type
     ) || "";
 
+
   const category =
     normalizeString(
       input.category
     ) || "";
+
 
   const amount =
     normalizeAmount(
       input.amount
     );
 
+
   const member =
     normalizeString(
       input.member
     ) || "";
+
 
   const remark =
     normalizeString(
       input.remark
     ) || "";
 
+
   const book =
     normalizeString(
       input.book_name
     ) || "";
 
+
   const paymentMethod =
     normalizeString(
       input.payment_method
     ) || "";
+
 
   const raw = [
 
@@ -699,6 +869,7 @@ export function createTransactionHash(
 
   let hash = 0x811c9dc5;
 
+
   for (
     let i = 0;
     i < raw.length;
@@ -708,6 +879,7 @@ export function createTransactionHash(
     hash ^=
       raw.charCodeAt(i);
 
+
     hash =
       Math.imul(
         hash,
@@ -715,6 +887,7 @@ export function createTransactionHash(
       );
 
   }
+
 
   return (
     (hash >>> 0)
@@ -737,6 +910,7 @@ function normalizeTransaction(
     detectSettlement(
       input
     );
+
 
   const transaction:
     ExpenseTransactionInput = {
@@ -791,6 +965,10 @@ function normalizeTransaction(
         input.book_name
       ),
 
+    // -----------------------------------------------
+    // ★ 消费归属统一计算
+    // -----------------------------------------------
+
     consumption_type:
       normalizedSettlement
         ? null
@@ -802,6 +980,10 @@ function normalizeTransaction(
       normalizeString(
         input.payment_method
       ),
+
+    // -----------------------------------------------
+    // ★ 信用卡统一计算
+    // -----------------------------------------------
 
     is_credit_card:
       detectCreditCard(
@@ -839,6 +1021,7 @@ function normalizeTransaction(
       );
 
   }
+
 
   return transaction;
 
@@ -926,6 +1109,8 @@ function mapExpenseTransaction(
 
 // =====================================================
 // 获取全部消费流水
+//
+// ★ 自动分页
 // =====================================================
 
 export async function getExpenseTransactions(
@@ -948,156 +1133,247 @@ export async function getExpenseTransactions(
   }
 ): Promise<ExpenseTransaction[]> {
 
-  let query =
-    supabase
-      .from(
-        "expense_transactions"
-      )
-      .select(
-        `
-        id,
-        transaction_time,
-        account_name,
-        account_type,
-        account_remark,
-        income_expense_type,
-        category,
-        amount,
-        member,
-        remark,
-        book_name,
-        consumption_type,
-        payment_method,
-        is_credit_card,
-        is_settlement,
-        source_file,
-        source_sheet,
-        transaction_hash,
-        created_at
-        `
-      )
-      .order(
-        "transaction_time",
-        {
-          ascending: false,
-        }
+  const PAGE_SIZE = 1000;
+
+
+  const allTransactions:
+    ExpenseTransaction[] = [];
+
+
+  let from = 0;
+
+
+  while (true) {
+
+    let query =
+      supabase
+        .from(
+          "expense_transactions"
+        )
+        .select(
+          `
+          id,
+          transaction_time,
+          account_name,
+          account_type,
+          account_remark,
+          income_expense_type,
+          category,
+          amount,
+          member,
+          remark,
+          book_name,
+          consumption_type,
+          payment_method,
+          is_credit_card,
+          is_settlement,
+          source_file,
+          source_sheet,
+          transaction_hash,
+          created_at
+          `
+        )
+        .order(
+          "transaction_time",
+          {
+            ascending: false,
+          }
+        )
+        .range(
+          from,
+          from + PAGE_SIZE - 1
+        );
+
+
+    // -----------------------------------------------
+    // 开始日期
+    // -----------------------------------------------
+
+    if (
+      options?.startDate
+    ) {
+
+      query =
+        query.gte(
+          "transaction_time",
+          options.startDate
+        );
+
+    }
+
+
+    // -----------------------------------------------
+    // 结束日期
+    // -----------------------------------------------
+
+    if (
+      options?.endDate
+    ) {
+
+      query =
+        query.lt(
+          "transaction_time",
+          options.endDate
+        );
+
+    }
+
+
+    // -----------------------------------------------
+    // 信用卡
+    // -----------------------------------------------
+
+    if (
+      options?.creditCardOnly
+    ) {
+
+      query =
+        query.eq(
+          "is_credit_card",
+          true
+        );
+
+    }
+
+
+    // -----------------------------------------------
+    // 排除平账
+    // -----------------------------------------------
+
+    if (
+      options?.excludeSettlement
+    ) {
+
+      query =
+        query.eq(
+          "is_settlement",
+          false
+        );
+
+    }
+
+
+    // -----------------------------------------------
+    // 指定账户
+    // -----------------------------------------------
+
+    if (
+      options?.accountName
+    ) {
+
+      query =
+        query.eq(
+          "account_name",
+          options.accountName
+        );
+
+    }
+
+
+    // -----------------------------------------------
+    // 指定分类
+    // -----------------------------------------------
+
+    if (
+      options?.category
+    ) {
+
+      query =
+        query.eq(
+          "category",
+          options.category
+        );
+
+    }
+
+
+    const {
+      data,
+      error,
+    } =
+      await query;
+
+
+    if (error) {
+
+      console.error(
+        "getExpenseTransactions error:",
+        error
+      );
+
+      return allTransactions;
+
+    }
+
+
+    const page:
+      ExpenseTransaction[] =
+      (
+        data || []
+      ).map(
+        mapExpenseTransaction
       );
 
 
-  if (
-    options?.startDate
-  ) {
-
-    query =
-      query.gte(
-        "transaction_time",
-        options.startDate
-      );
-
-  }
-
-
-  if (
-    options?.endDate
-  ) {
-
-    query =
-      query.lt(
-        "transaction_time",
-        options.endDate
-      );
-
-  }
-
-
-  if (
-    options?.creditCardOnly
-  ) {
-
-    query =
-      query.eq(
-        "is_credit_card",
-        true
-      );
-
-  }
-
-
-  if (
-    options?.excludeSettlement
-  ) {
-
-    query =
-      query.eq(
-        "is_settlement",
-        false
-      );
-
-  }
-
-
-  if (
-    options?.accountName
-  ) {
-
-    query =
-      query.eq(
-        "account_name",
-        options.accountName
-      );
-
-  }
-
-
-  if (
-    options?.category
-  ) {
-
-    query =
-      query.eq(
-        "category",
-        options.category
-      );
-
-  }
-
-
-  if (
-    options?.limit
-  ) {
-
-    query =
-      query.limit(
-        options.limit
-      );
-
-  }
-
-
-  const {
-    data,
-    error,
-  } =
-    await query;
-
-
-  if (error) {
-
-    console.error(
-      "getExpenseTransactions error:",
-      error
+    allTransactions.push(
+      ...page
     );
 
-    return [];
+
+    // -----------------------------------------------
+    // limit
+    // -----------------------------------------------
+
+    if (
+      options?.limit &&
+      allTransactions.length >=
+        options.limit
+    ) {
+
+      break;
+
+    }
+
+
+    // -----------------------------------------------
+    // 已经读取完
+    // -----------------------------------------------
+
+    if (
+      page.length <
+      PAGE_SIZE
+    ) {
+
+      break;
+
+    }
+
+
+    from +=
+      PAGE_SIZE;
 
   }
 
 
-  return (
-    data || []
-  ).map(
-    mapExpenseTransaction
-  );
+  // -----------------------------------------------
+  // 最终 limit
+  // -----------------------------------------------
+
+  if (
+    options?.limit &&
+    allTransactions.length >
+      options.limit
+  ) {
+
+    return allTransactions.slice(
+      0,
+      options.limit
+    );
+
+  }
+
+
+  return allTransactions;
 
 }
 
@@ -1326,6 +1602,10 @@ export async function createExpenseTransaction(
 
     if (error) {
 
+      // ---------------------------------------------
+      // Hash 唯一约束
+      // ---------------------------------------------
+
       if (
         error.code === "23505"
       ) {
@@ -1470,6 +1750,10 @@ export async function createExpenseTransactions(
       );
 
 
+    // ---------------------------------------------
+    // 信用卡统计
+    // ---------------------------------------------
+
     if (
       normalized.is_credit_card
     ) {
@@ -1483,6 +1767,10 @@ export async function createExpenseTransactions(
     }
 
 
+    // ---------------------------------------------
+    // 平账统计
+    // ---------------------------------------------
+
     if (
       normalized.is_settlement
     ) {
@@ -1492,11 +1780,19 @@ export async function createExpenseTransactions(
     }
 
 
+    // ---------------------------------------------
+    // 正式创建
+    // ---------------------------------------------
+
     const created =
       await createExpenseTransaction(
         normalized
       );
 
+
+    // ---------------------------------------------
+    // 重复
+    // ---------------------------------------------
 
     if (
       created.duplicate
@@ -1508,6 +1804,10 @@ export async function createExpenseTransactions(
 
     }
 
+
+    // ---------------------------------------------
+    // 失败
+    // ---------------------------------------------
 
     if (
       !created.success
@@ -1628,18 +1928,22 @@ export async function deleteExpenseTransaction(
 
 
 // =====================================================
-// 判断是否为消费
+// ★★★ 统一判断：是否为实际消费 ★★★
 //
-// 统一口径：
+// 平账 → false
+// 收入 → false
+// 其他 → true
 //
-// 平账 → 不是
-// 收入 → 不是
-// 其他 → 是
+// 所有统计函数都使用这一规则。
 // =====================================================
 
 function isActualExpense(
   item: ExpenseTransaction
 ): boolean {
+
+  // -----------------------------------------------
+  // 平账
+  // -----------------------------------------------
 
   if (
     item.is_settlement
@@ -1649,6 +1953,10 @@ function isActualExpense(
 
   }
 
+
+  // -----------------------------------------------
+  // 收入
+  // -----------------------------------------------
 
   const type =
     item.income_expense_type || "";
@@ -1663,7 +1971,464 @@ function isActualExpense(
   }
 
 
+  // -----------------------------------------------
+  // 其他 = 实际支出
+  // -----------------------------------------------
+
   return true;
+
+}
+
+
+// =====================================================
+// ★★★ 单笔金额标准化 ★★★
+// =====================================================
+
+function getTransactionAmount(
+  item: ExpenseTransaction
+): number {
+
+  return Math.abs(
+    Number(
+      item.amount || 0
+    )
+  );
+
+}
+
+
+// =====================================================
+// ★★★ 统一消费分类核心函数 ★★★
+//
+// 这个函数是整个消费系统最重要的统一入口。
+//
+// 返回单笔交易应该进入哪些统计。
+//
+// 不再让不同页面自己重新判断。
+// =====================================================
+
+function classifyExpenseTransaction(
+  item: ExpenseTransaction
+) {
+
+  const amount =
+    getTransactionAmount(
+      item
+    );
+
+
+  // -----------------------------------------------
+  // 平账
+  // -----------------------------------------------
+
+  if (
+    item.is_settlement
+  ) {
+
+    return {
+
+      is_expense: false,
+
+      is_income: false,
+
+      is_settlement: true,
+
+      amount,
+
+      consumption_type:
+        null as ConsumptionType,
+
+      is_credit_card:
+        item.is_credit_card,
+
+    };
+
+  }
+
+
+  // -----------------------------------------------
+  // 收入
+  // -----------------------------------------------
+
+  const type =
+    item.income_expense_type || "";
+
+
+  if (
+    type.includes("收入")
+  ) {
+
+    return {
+
+      is_expense: false,
+
+      is_income: true,
+
+      is_settlement: false,
+
+      amount,
+
+      consumption_type:
+        null as ConsumptionType,
+
+      is_credit_card:
+        item.is_credit_card,
+
+    };
+
+  }
+
+
+  // -----------------------------------------------
+  // 实际消费
+  // -----------------------------------------------
+
+  const consumptionType =
+    item.consumption_type ===
+      "paid_for_others"
+      ? "paid_for_others"
+      : "self";
+
+
+  return {
+
+    is_expense: true,
+
+    is_income: false,
+
+    is_settlement: false,
+
+    amount,
+
+    consumption_type:
+      consumptionType as ConsumptionType,
+
+    is_credit_card:
+      item.is_credit_card,
+
+  };
+
+}
+
+
+// =====================================================
+// ★★★ 统一消费汇总 ★★★
+//
+// 这是所有消费页面最应该使用的核心函数。
+//
+// 返回：
+//
+// actual_expense
+// self_expense
+// paid_for_others
+//
+// credit_card
+// credit_card_self
+// credit_card_paid_for_others
+//
+// non_credit_card
+//
+// settlement
+// income
+//
+// transaction_count
+//
+// =====================================================
+
+export async function getExpenseConsumptionSummary(
+  startDate?: string,
+  endDate?: string
+): Promise<ExpenseConsumptionSummary> {
+
+  const transactions =
+    await getExpenseTransactions({
+
+      startDate,
+
+      endDate,
+
+    });
+
+
+  let actualExpense = 0;
+
+  let selfExpense = 0;
+
+  let paidForOthers = 0;
+
+  let creditCard = 0;
+
+  let creditCardSelf = 0;
+
+  let creditCardPaidForOthers = 0;
+
+  let nonCreditCard = 0;
+
+  let settlement = 0;
+
+  let income = 0;
+
+
+  transactions.forEach(
+    item => {
+
+      const classified =
+        classifyExpenseTransaction(
+          item
+        );
+
+
+      // ---------------------------------------------
+      // 平账
+      // ---------------------------------------------
+
+      if (
+        classified.is_settlement
+      ) {
+
+        settlement +=
+          classified.amount;
+
+        return;
+
+      }
+
+
+      // ---------------------------------------------
+      // 收入
+      // ---------------------------------------------
+
+      if (
+        classified.is_income
+      ) {
+
+        income +=
+          classified.amount;
+
+        return;
+
+      }
+
+
+      // ---------------------------------------------
+      // 实际消费
+      // ---------------------------------------------
+
+      if (
+        !classified.is_expense
+      ) {
+
+        return;
+
+      }
+
+
+      actualExpense +=
+        classified.amount;
+
+
+      // ---------------------------------------------
+      // 消费归属
+      // ---------------------------------------------
+
+      if (
+        classified.consumption_type ===
+        "paid_for_others"
+      ) {
+
+        paidForOthers +=
+          classified.amount;
+
+      } else {
+
+        selfExpense +=
+          classified.amount;
+
+      }
+
+
+      // ---------------------------------------------
+      // 支付方式
+      // ---------------------------------------------
+
+      if (
+        classified.is_credit_card
+      ) {
+
+        creditCard +=
+          classified.amount;
+
+
+        if (
+          classified.consumption_type ===
+          "paid_for_others"
+        ) {
+
+          creditCardPaidForOthers +=
+            classified.amount;
+
+        } else {
+
+          creditCardSelf +=
+            classified.amount;
+
+        }
+
+      } else {
+
+        nonCreditCard +=
+          classified.amount;
+
+      }
+
+    }
+  );
+
+
+  return {
+
+    actual_expense:
+      actualExpense,
+
+    self_expense:
+      selfExpense,
+
+    paid_for_others:
+      paidForOthers,
+
+    credit_card:
+      creditCard,
+
+    credit_card_self:
+      creditCardSelf,
+
+    credit_card_paid_for_others:
+      creditCardPaidForOthers,
+
+    non_credit_card:
+      nonCreditCard,
+
+    settlement,
+
+    income,
+
+    transaction_count:
+      transactions.length,
+
+  };
+
+}
+
+
+// =====================================================
+// ★★★ 信用卡消费统一汇总 ★★★
+//
+// 专门供：
+//
+// /credit-card
+// /credit-card-from-yu
+// AI CFO
+//
+// 使用。
+//
+// 返回：
+//
+// credit_card
+//     信用卡总消费
+//
+// self_expense
+//     信用卡自己消费总共
+//
+// paid_for_others
+//     信用卡替别人提前付总共
+//
+// actual_expense
+//     信用卡实际消费
+//
+// settlement
+//     信用卡平账
+//
+// income
+//     信用卡收入
+//
+// transaction_count
+//     信用卡交易数量
+//
+// =====================================================
+
+export async function getCreditCardConsumptionSummary(
+  startDate?: string,
+  endDate?: string
+): Promise<{
+
+  credit_card: number;
+
+  self_expense: number;
+
+  paid_for_others: number;
+
+  actual_expense: number;
+
+  settlement: number;
+
+  income: number;
+
+  transaction_count: number;
+
+}> {
+
+  const summary =
+    await getExpenseConsumptionSummary(
+
+      startDate,
+
+      endDate
+
+    );
+
+
+  return {
+
+    // -----------------------------------------------
+    // 信用卡总消费
+    // -----------------------------------------------
+
+    credit_card:
+      summary.credit_card,
+
+    // -----------------------------------------------
+    // 信用卡自己消费
+    // -----------------------------------------------
+
+    self_expense:
+      summary.credit_card_self,
+
+    // -----------------------------------------------
+    // 信用卡替别人提前付
+    // -----------------------------------------------
+
+    paid_for_others:
+      summary.credit_card_paid_for_others,
+
+    // -----------------------------------------------
+    // 信用卡实际消费
+    //
+    // 与信用卡总消费相同
+    // -----------------------------------------------
+
+    actual_expense:
+      summary.credit_card,
+
+    settlement:
+      summary.settlement,
+
+    income:
+      summary.income,
+
+    transaction_count:
+      summary.transaction_count,
+
+  };
 
 }
 
@@ -1671,7 +2436,11 @@ function isActualExpense(
 // =====================================================
 // 获取消费总额
 //
-// 实际支出 = 自己支出 + 代付
+// 实际支出 = 自己消费 + 替别人提前付
+//
+// 不包含：
+// - 平账
+// - 收入
 // =====================================================
 
 export async function getExpenseTotal(
@@ -1686,60 +2455,48 @@ export async function getExpenseTotal(
   }
 ): Promise<number> {
 
-  const transactions =
-    await getExpenseTransactions({
+  // -----------------------------------------------
+  // 如果要求只看信用卡
+  // -----------------------------------------------
 
-      startDate:
-        options?.startDate,
+  if (
+    options?.creditCardOnly
+  ) {
 
-      endDate:
-        options?.endDate,
+    const summary =
+      await getCreditCardConsumptionSummary(
 
-      creditCardOnly:
-        options?.creditCardOnly,
+        options.startDate,
 
-      excludeSettlement:
-        true,
+        options.endDate
 
-    });
-
-
-  return transactions.reduce(
-
-    (
-      sum,
-      item
-    ) => {
-
-      if (
-        !isActualExpense(item)
-      ) {
-
-        return sum;
-
-      }
-
-
-      return (
-        sum +
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
-        )
       );
 
-    },
 
-    0
+    return summary.credit_card;
 
-  );
+  }
+
+
+  const summary =
+    await getExpenseConsumptionSummary(
+
+      options?.startDate,
+
+      options?.endDate
+
+    );
+
+
+  return summary.actual_expense;
 
 }
 
 
 // =====================================================
 // 获取信用卡消费总额
+//
+// ★ 统一规则
 // =====================================================
 
 export async function getCreditCardExpenseTotal(
@@ -1747,22 +2504,25 @@ export async function getCreditCardExpenseTotal(
   endDate?: string
 ): Promise<number> {
 
-  return getExpenseTotal({
+  const summary =
+    await getCreditCardConsumptionSummary(
 
-    startDate,
+      startDate,
 
-    endDate,
+      endDate
 
-    creditCardOnly:
-      true,
+    );
 
-  });
+
+  return summary.credit_card;
 
 }
 
 
 // =====================================================
 // 获取非信用卡消费总额
+//
+// ★ 统一规则
 // =====================================================
 
 export async function getNonCreditCardExpenseTotal(
@@ -1770,58 +2530,17 @@ export async function getNonCreditCardExpenseTotal(
   endDate?: string
 ): Promise<number> {
 
-  const transactions =
-    await getExpenseTransactions({
+  const summary =
+    await getExpenseConsumptionSummary(
 
       startDate,
 
-      endDate,
+      endDate
 
-      excludeSettlement:
-        true,
-
-    });
+    );
 
 
-  return transactions.reduce(
-
-    (
-      sum,
-      item
-    ) => {
-
-      if (
-        item.is_credit_card
-      ) {
-
-        return sum;
-
-      }
-
-
-      if (
-        !isActualExpense(item)
-      ) {
-
-        return sum;
-
-      }
-
-
-      return (
-        sum +
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
-        )
-      );
-
-    },
-
-    0
-
-  );
+  return summary.non_credit_card;
 
 }
 
@@ -1870,10 +2589,8 @@ export async function getExpenseCategorySummary(
 
 
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
@@ -1936,10 +2653,8 @@ export async function getExpenseAccountSummary(
 
 
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
@@ -2005,10 +2720,8 @@ export async function getCreditCardBankSummary(
 
 
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
@@ -2071,10 +2784,8 @@ export async function getExpenseMemberSummary(
 
 
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
@@ -2164,10 +2875,8 @@ export async function getExpenseMonthlySummary(
 
 
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
@@ -2187,147 +2896,16 @@ export async function getExpenseMonthlySummary(
 
 
 // =====================================================
-// ★ 消费归属统计
-//
-// 返回：
-//
-// actual_expense
-//     实际支出
-//
-// self_expense
-//     自己支出
-//
-// paid_for_others
-//     代付
-//
-// settlement
-//     平账
-//
-// income
-//     收入
-//
-// 统一口径。
-// =====================================================
-
-export async function getExpenseConsumptionSummary(
-  startDate?: string,
-  endDate?: string
-) {
-
-  const transactions =
-    await getExpenseTransactions({
-
-      startDate,
-
-      endDate,
-
-    });
-
-
-  let actualExpense = 0;
-
-  let selfExpense = 0;
-
-  let paidForOthers = 0;
-
-  let settlement = 0;
-
-  let income = 0;
-
-
-  transactions.forEach(
-    item => {
-
-      const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
-        );
-
-
-      if (
-        item.is_settlement
-      ) {
-
-        settlement +=
-          amount;
-
-        return;
-
-      }
-
-
-      const type =
-        item.income_expense_type || "";
-
-
-      if (
-        type.includes("收入")
-      ) {
-
-        income +=
-          amount;
-
-        return;
-
-      }
-
-
-      actualExpense +=
-        amount;
-
-
-      if (
-        item.consumption_type ===
-        "paid_for_others"
-      ) {
-
-        paidForOthers +=
-          amount;
-
-      } else {
-
-        selfExpense +=
-          amount;
-
-      }
-
-    }
-  );
-
-
-  return {
-
-    actual_expense:
-      actualExpense,
-
-    self_expense:
-      selfExpense,
-
-    paid_for_others:
-      paidForOthers,
-
-    settlement,
-
-    income,
-
-    transaction_count:
-      transactions.length,
-
-  };
-
-}
-
-
-// =====================================================
 // 获取信用卡消费明细
 //
 // 专门供：
+//
 // 信用卡账单预测
 //
 // 上一个账单日后一天
 // → 本账单日
+//
+// 底层自动分页。
 // =====================================================
 
 export async function getCreditCardTransactions(
@@ -2367,16 +2945,17 @@ export async function getCreditCardTransactions(
 // =====================================================
 // 获取指定信用卡消费金额
 //
-// 这个函数就是：
+// ★ 统一消费规则
 //
-// getCreditCardAmountBetween()
+// 返回：
 //
-// 给：
+// 自己消费
+// + 替别人提前付
 //
-// /credit-card
-// /credit-card-from-yu
+// 不包含：
 //
-// 使用。
+// 平账
+// 收入
 // =====================================================
 
 export async function getCreditCardAmountBetween(
@@ -2397,68 +2976,79 @@ export async function getCreditCardAmountBetween(
     });
 
 
-  return transactions.reduce(
+  let total = 0;
 
-    (
-      sum,
-      item
-    ) => {
+
+  transactions.forEach(
+    item => {
 
       if (
         !isActualExpense(item)
       ) {
 
-        return sum;
+        return;
 
       }
 
 
-      return (
-        sum +
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
-        )
-      );
+      total +=
+        getTransactionAmount(
+          item
+        );
 
-    },
-
-    0
-
+    }
   );
+
+
+  return total;
 
 }
 
 
 // =====================================================
-// ★ 消费分析总览
+// ★★★ 指定信用卡消费拆分 ★★★
 //
-// 统一返回：
+// 供 /credit-card-from-yu 使用。
 //
-// total
-// expense
-// actual_expense
-// self_expense
-// paid_for_others
-// income
+// 返回：
+//
 // credit_card
-// non_credit_card
-// settlement
+//     信用卡总消费
 //
-// total / expense / actual_expense
-// 三者统一代表「实际支出」
+// self_expense
+//     自己消费总共
 //
-// 实际支出 = 自己支出 + 代付
+// paid_for_others
+//     替别人提前付总共
+//
+// 三者关系：
+//
+// credit_card
+// = self_expense
+// + paid_for_others
+//
 // =====================================================
 
-export async function getExpenseOverview(
-  startDate?: string,
-  endDate?: string
-) {
+export async function getCreditCardConsumptionSummaryBetween(
+  accountName: string,
+  startDate: string,
+  endDate: string
+): Promise<{
+
+  credit_card: number;
+
+  self_expense: number;
+
+  paid_for_others: number;
+
+  transaction_count: number;
+
+}> {
 
   const transactions =
-    await getExpenseTransactions({
+    await getCreditCardTransactions({
+
+      accountName,
 
       startDate,
 
@@ -2469,14 +3059,6 @@ export async function getExpenseOverview(
 
   let creditCard = 0;
 
-  let nonCreditCard = 0;
-
-  let settlement = 0;
-
-  let income = 0;
-
-  let expense = 0;
-
   let selfExpense = 0;
 
   let paidForOthers = 0;
@@ -2485,43 +3067,22 @@ export async function getExpenseOverview(
   transactions.forEach(
     item => {
 
+      if (
+        !isActualExpense(item)
+      ) {
+
+        return;
+
+      }
+
+
       const amount =
-        Math.abs(
-          Number(
-            item.amount || 0
-          )
+        getTransactionAmount(
+          item
         );
 
 
-      if (
-        item.is_settlement
-      ) {
-
-        settlement +=
-          amount;
-
-        return;
-
-      }
-
-
-      const type =
-        item.income_expense_type || "";
-
-
-      if (
-        type.includes("收入")
-      ) {
-
-        income +=
-          amount;
-
-        return;
-
-      }
-
-
-      expense +=
+      creditCard +=
         amount;
 
 
@@ -2540,56 +3101,20 @@ export async function getExpenseOverview(
 
       }
 
-
-      if (
-        item.is_credit_card
-      ) {
-
-        creditCard +=
-          amount;
-
-      } else {
-
-        nonCreditCard +=
-          amount;
-
-      }
-
     }
   );
 
 
   return {
 
-    // 实际支出
-    total:
-      expense,
-
-    expense,
-
-    actual_expense:
-      expense,
-
-    // 自己支出
-    self_expense:
-      selfExpense,
-
-    // 代付
-    paid_for_others:
-      paidForOthers,
-
-    // 收入
-    income,
-
-    // 支付方式
     credit_card:
       creditCard,
 
-    non_credit_card:
-      nonCreditCard,
+    self_expense:
+      selfExpense,
 
-    // 平账
-    settlement,
+    paid_for_others:
+      paidForOthers,
 
     transaction_count:
       transactions.length,
@@ -2710,6 +3235,175 @@ export async function getMonthlyCreditCardExpense(
     end.toISOString()
 
   );
+
+}
+
+
+// =====================================================
+// ★★★ 获取指定月份信用卡消费拆分 ★★★
+//
+// 以后如果需要信用卡页面按月份显示：
+//
+// 信用卡总消费
+// 自己消费
+// 替别人提前付
+//
+// 可以直接使用这个函数。
+//
+// =====================================================
+export async function getMonthlyCreditCardConsumptionSummary(
+  month: string
+): Promise<{
+  credit_card: number;
+  self_expense: number;
+  paid_for_others: number;
+  transaction_count: number;
+}> {
+
+  if (
+    !/^\d{4}-\d{2}$/.test(
+      month
+    )
+  ) {
+
+    return {
+      credit_card: 0,
+      self_expense: 0,
+      paid_for_others: 0,
+      transaction_count: 0,
+    };
+
+  }
+
+  const [
+    year,
+    monthNumber,
+  ] =
+    month
+      .split("-")
+      .map(Number);
+
+  const start =
+    new Date(
+      year,
+      monthNumber - 1,
+      1
+    );
+
+  const end =
+    new Date(
+      year,
+      monthNumber,
+      1
+    );
+
+  const summary =
+    await getCreditCardConsumptionSummary(
+      start.toISOString(),
+      end.toISOString()
+    );
+
+  return {
+    credit_card:
+      summary.credit_card,
+
+    self_expense:
+      summary.self_expense,
+
+    paid_for_others:
+      summary.paid_for_others,
+
+    transaction_count:
+      summary.transaction_count,
+  };
+
+}
+
+
+// =====================================================
+// ★★★ 消费总览 ★★★
+//
+// 统一返回：
+//
+// total
+// expense
+// actual_expense
+//
+// self_expense
+// paid_for_others
+//
+// credit_card
+// non_credit_card
+//
+// income
+// settlement
+//
+// =====================================================
+
+export async function getExpenseOverview(
+  startDate?: string,
+  endDate?: string
+) {
+
+  const summary =
+    await getExpenseConsumptionSummary(
+
+      startDate,
+
+      endDate
+
+    );
+
+
+  return {
+
+    // -----------------------------------------------
+    // 实际支出
+    // -----------------------------------------------
+
+    total:
+      summary.actual_expense,
+
+    expense:
+      summary.actual_expense,
+
+    actual_expense:
+      summary.actual_expense,
+
+    // -----------------------------------------------
+    // 消费归属
+    // -----------------------------------------------
+
+    self_expense:
+      summary.self_expense,
+
+    paid_for_others:
+      summary.paid_for_others,
+
+    // -----------------------------------------------
+    // 支付方式
+    // -----------------------------------------------
+
+    credit_card:
+      summary.credit_card,
+
+    non_credit_card:
+      summary.non_credit_card,
+
+    // -----------------------------------------------
+    // 其他
+    // -----------------------------------------------
+
+    income:
+      summary.income,
+
+    settlement:
+      summary.settlement,
+
+    transaction_count:
+      summary.transaction_count,
+
+  };
 
 }
 
