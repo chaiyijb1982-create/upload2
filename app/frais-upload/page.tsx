@@ -14,6 +14,15 @@ import {
 
 
 // =====================================================
+// Supabase Storage
+// =====================================================
+
+const BUCKET_NAME = "frais-invoices";
+
+const STORAGE_FOLDER = "incoming";
+
+
+// =====================================================
 // 类型
 // =====================================================
 
@@ -105,6 +114,10 @@ export default function FraisUploadPage() {
     }
 
 
+    // =================================================
+    // 检查文件类型
+    // =================================================
+
     const validFiles =
       files.filter((file) => {
 
@@ -125,6 +138,10 @@ export default function FraisUploadPage() {
       files.length -
       validFiles.length;
 
+
+    // =================================================
+    // 创建上传项目
+    // =================================================
 
     const newItems: UploadItem[] =
       validFiles.map(
@@ -149,6 +166,10 @@ export default function FraisUploadPage() {
     );
 
 
+    // =================================================
+    // 提示
+    // =================================================
+
     if (invalidCount > 0) {
 
       setMessage(
@@ -166,7 +187,9 @@ export default function FraisUploadPage() {
     }
 
 
+    // =================================================
     // 允许再次选择同一个文件
+    // =================================================
 
     event.target.value = "";
 
@@ -218,6 +241,85 @@ export default function FraisUploadPage() {
 
 
   // ===================================================
+  // 生成 Storage 文件名
+  // ===================================================
+
+  function createStorageFileName(
+    file: File
+  ): string {
+
+    // =================================================
+    // 获取扩展名
+    // =================================================
+
+    const extension =
+      file.name.includes(".")
+        ? file.name
+            .split(".")
+            .pop()
+            ?.toLowerCase() || ""
+        : "";
+
+
+    // =================================================
+    // 清理原始文件名
+    // =================================================
+
+    const originalName =
+      file.name
+        .replace(
+          /\.[^/.]+$/,
+          ""
+        )
+        .replace(
+          /[^\w\u4e00-\u9fff.-]+/g,
+          "_"
+        );
+
+
+    // =================================================
+    // 时间戳
+    // =================================================
+
+    const timestamp =
+      new Date()
+        .toISOString()
+        .replace(
+          /[:.]/g,
+          "-"
+        );
+
+
+    // =================================================
+    // 随机字符串
+    // =================================================
+
+    const random =
+      Math.random()
+        .toString(36)
+        .slice(2, 8);
+
+
+    // =================================================
+    // 最终文件名
+    //
+    // 例如：
+    //
+    // 2026-09-01T05-30-12-123Z-a8f31c-发票.pdf
+    // =================================================
+
+    return (
+      `${timestamp}-${random}-${originalName}${
+        extension
+          ? `.${extension}`
+          : ""
+      }`
+    );
+
+  }
+
+
+  // ===================================================
   // 上传单个文件
   // ===================================================
 
@@ -225,9 +327,9 @@ export default function FraisUploadPage() {
     item: UploadItem
   ) {
 
-    // -------------------------------------------------
-    // 更新状态
-    // -------------------------------------------------
+    // =================================================
+    // 更新状态：上传中
+    // =================================================
 
     setUploadItems(
       (previous) =>
@@ -236,8 +338,12 @@ export default function FraisUploadPage() {
             current.id === item.id
               ? {
                   ...current,
-                  status: "uploading",
-                  message: "",
+
+                  status:
+                    "uploading",
+
+                  message:
+                    "正在上传...",
                 }
               : current
         )
@@ -250,65 +356,60 @@ export default function FraisUploadPage() {
         item.file;
 
 
-      // -------------------------------------------------
-      // 文件名
+      // =================================================
+      // 生成 Storage 文件名
+      // =================================================
+
+      const storageFileName =
+        createStorageFileName(
+          file
+        );
+
+
+      // =================================================
+      // 关键：
       //
-      // 使用时间戳避免同名文件覆盖
-      // -------------------------------------------------
-
-      const extension =
-        file.name.includes(".")
-          ? file.name
-              .split(".")
-              .pop()
-              ?.toLowerCase() || ""
-          : "";
-
-
-      const originalName =
-        file.name
-          .replace(
-            /\.[^/.]+$/,
-            ""
-          )
-          .replace(
-            /[^\w\u4e00-\u9fff.-]+/g,
-            "_"
-          );
-
-
-      const timestamp =
-        new Date()
-          .toISOString()
-          .replace(
-            /[:.]/g,
-            "-"
-          );
-
-
-      const random =
-        Math.random()
-          .toString(36)
-          .slice(2, 8);
-
+      // 必须包含 incoming/
+      //
+      // 最终：
+      //
+      // frais-invoices/
+      // └── incoming/
+      //     └── xxx.pdf
+      // =================================================
 
       const storagePath =
-        `${timestamp}-${random}-${originalName}${
-          extension
-            ? `.${extension}`
-            : ""
-        }`;
+        `${STORAGE_FOLDER}/${storageFileName}`;
 
 
-      // -------------------------------------------------
-      // Supabase Storage
-      // -------------------------------------------------
+      console.log(
+        "[FRAIS UPLOAD]",
+        {
+          bucket:
+            BUCKET_NAME,
+
+          folder:
+            STORAGE_FOLDER,
+
+          storagePath,
+
+          originalName:
+            file.name,
+        }
+      );
+
+
+      // =================================================
+      // 上传到 Supabase Storage
+      // =================================================
 
       const {
         error,
       } =
         await supabase.storage
-          .from("frais-invoices")
+          .from(
+            BUCKET_NAME
+          )
           .upload(
             storagePath,
             file,
@@ -326,6 +427,10 @@ export default function FraisUploadPage() {
           );
 
 
+      // =================================================
+      // 上传失败
+      // =================================================
+
       if (error) {
 
         throw error;
@@ -333,9 +438,9 @@ export default function FraisUploadPage() {
       }
 
 
-      // -------------------------------------------------
-      // 成功
-      // -------------------------------------------------
+      // =================================================
+      // 上传成功
+      // =================================================
 
       setUploadItems(
         (previous) =>
@@ -344,10 +449,12 @@ export default function FraisUploadPage() {
               current.id === item.id
                 ? {
                     ...current,
+
                     status:
                       "success",
+
                     message:
-                      "已上传到 Supabase Storage",
+                      `已上传 · ${STORAGE_FOLDER}/`,
                   }
                 : current
           )
@@ -362,6 +469,10 @@ export default function FraisUploadPage() {
       );
 
 
+      // =================================================
+      // 上传失败
+      // =================================================
+
       setUploadItems(
         (previous) =>
           previous.map(
@@ -369,8 +480,10 @@ export default function FraisUploadPage() {
               current.id === item.id
                 ? {
                     ...current,
+
                     status:
                       "error",
+
                     message:
                       error?.message ||
                       "上传失败",
@@ -395,6 +508,10 @@ export default function FraisUploadPage() {
     }
 
 
+    // =================================================
+    // 找出等待上传文件
+    // =================================================
+
     const waitingItems =
       uploadItems.filter(
         (item) =>
@@ -402,6 +519,10 @@ export default function FraisUploadPage() {
           "waiting"
       );
 
+
+    // =================================================
+    // 没有文件
+    // =================================================
 
     if (
       waitingItems.length === 0
@@ -418,6 +539,10 @@ export default function FraisUploadPage() {
     }
 
 
+    // =================================================
+    // 开始上传
+    // =================================================
+
     setUploading(true);
 
     setMessage(
@@ -429,26 +554,26 @@ export default function FraisUploadPage() {
 
     try {
 
-      // -------------------------------------------------
+      // =================================================
       // 一个一个上传
-      // -------------------------------------------------
+      //
+      // 手机一次可以选择多个文件
+      // =================================================
 
       for (
         const item of waitingItems
       ) {
 
-        await uploadOne(item);
+        await uploadOne(
+          item
+        );
 
       }
 
 
-      // -------------------------------------------------
-      // 判断最终结果
-      // -------------------------------------------------
-
-      // 等待 React state 更新后，
-      // 这里不直接读取 uploadItems，
-      // 而是根据本轮 waiting 数量完成提示。
+      // =================================================
+      // 完成
+      // =================================================
 
       setMessage(
         `上传完成，共处理 ${waitingItems.length} 个文件`
@@ -471,6 +596,7 @@ export default function FraisUploadPage() {
       );
 
       setSuccess(false);
+
 
     } finally {
 
@@ -524,7 +650,9 @@ export default function FraisUploadPage() {
   return (
     <>
 
-      <TopBar title="FRAIS 发票上传" />
+      <TopBar
+        title="FRAIS 发票上传"
+      />
 
 
       <main
@@ -575,6 +703,17 @@ export default function FraisUploadPage() {
               "
             >
               手机直接上传发票到 Supabase Storage
+            </p>
+
+
+            <p
+              className="
+                mt-1
+                text-xs
+                text-gray-400
+              "
+            >
+              上传位置：frais-invoices / incoming
             </p>
 
           </div>
@@ -820,8 +959,11 @@ export default function FraisUploadPage() {
 
                             <div
                               className={`
+
                                 mt-1
+
                                 text-xs
+
                                 ${
                                   item.status ===
                                   "success"
@@ -831,6 +973,7 @@ export default function FraisUploadPage() {
                                     ? "text-red-500"
                                     : "text-gray-500"
                                 }
+
                               `}
                             >
                               {item.message}
@@ -958,9 +1101,10 @@ export default function FraisUploadPage() {
             >
 
               {uploading
-                ? `正在上传${uploadingCount > 0
-                    ? ` · ${uploadingCount} 个`
-                    : "..."
+                ? `正在上传${
+                    uploadingCount > 0
+                      ? ` · ${uploadingCount} 个`
+                      : "..."
                   }`
                 : `上传到 Supabase${
                     waitingCount > 0
@@ -979,10 +1123,15 @@ export default function FraisUploadPage() {
 
               <div
                 className={`
+
                   mt-4
+
                   rounded-xl
+
                   px-4
+
                   py-3
+
                   text-sm
 
                   ${
@@ -992,6 +1141,7 @@ export default function FraisUploadPage() {
                       ? "bg-red-50 text-red-600"
                       : "bg-gray-50 text-gray-600"
                   }
+
                 `}
               >
                 {message}
@@ -1117,7 +1267,7 @@ export default function FraisUploadPage() {
 
 
             {/* =================================================
-                说明
+                当前流程
             ================================================= */}
 
             <div
@@ -1141,13 +1291,40 @@ export default function FraisUploadPage() {
                 当前流程
               </div>
 
+
               <div
                 className="
                   mt-1
                 "
               >
-                手机选择发票 → 上传到 Supabase Storage
+                手机选择发票
+                →
+                上传到
+                frais-invoices / incoming
               </div>
+
+
+              <div
+                className="
+                  mt-1
+                  text-xs
+                  text-blue-500
+                "
+              >
+                Windows 下载程序会自动读取 incoming 中的文件。
+              </div>
+
+
+              <div
+                className="
+                  mt-1
+                  text-xs
+                  text-blue-500
+                "
+              >
+                下载并验证成功后，才会从 Supabase Storage 删除原文件。
+              </div>
+
 
               <div
                 className="
@@ -1171,4 +1348,3 @@ export default function FraisUploadPage() {
   );
 
 }
-
