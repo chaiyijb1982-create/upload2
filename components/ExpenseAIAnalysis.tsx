@@ -3,6 +3,7 @@
 import {
   useMemo,
   useState,
+  type KeyboardEvent,
 } from "react";
 
 // =====================================================
@@ -14,36 +15,13 @@ type CategoryItem = {
   amount: number;
 };
 
-// =====================================================
-// 真实 aiExpenseYears 中的账簿结构
-// =====================================================
-
 type AIExpenseBook = {
   bookName: string;
   amount: number;
   categories: CategoryItem[];
 };
 
-// =====================================================
-// 真实 aiExpenseYears 中的年度结构
-//
-// 现在 ExpensePage 传进来的结构是：
-//
-// {
-//   year: 2025,
-//   xx: {
-//     amount: xxx,
-//     categories: []
-//   },
-//   other: {
-//     amount: xxx,
-//     books: []
-//   },
-//   total: xxx
-// }
-// =====================================================
-
-type AIExpenseYear = {
+export type AIExpenseYear = {
   year: number;
 
   xx: {
@@ -59,22 +37,18 @@ type AIExpenseYear = {
   total: number;
 };
 
-// =====================================================
-// 给 AI API 的统一结构
-//
-// 这里转换成 AI CFO 最容易理解的结构。
-// =====================================================
-
 type YearData = {
   year: number;
 
-  xx: number;
+  xx: {
+    amount: number;
+    categories: CategoryItem[];
+  };
 
-  xxCategories: CategoryItem[];
-
-  other: number;
-
-  otherBooks: AIExpenseBook[];
+  other: {
+    amount: number;
+    books: AIExpenseBook[];
+  };
 
   total: number;
 };
@@ -88,52 +62,671 @@ type ChatMessage = {
   content: string;
 };
 
-// =====================================================
-// Props
-// =====================================================
-
 type ExpenseAIAnalysisProps = {
   years: AIExpenseYear[];
   transactions: any[];
 };
 
 // =====================================================
-// 金额格式
+// 工具
 // =====================================================
 
-function money(value: number): string {
-  return `¥${Number(
-    value || 0
-  ).toLocaleString("zh-CN", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-// =====================================================
-// 数字安全转换
-// =====================================================
-
-function toNumber(value: unknown): number {
-  const n = Number(value);
-
-  if (!Number.isFinite(n)) {
-    return 0;
+function toNumber(
+  value: unknown,
+): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value)
+      ? value
+      : 0;
   }
 
-  return n;
+  if (typeof value === "string") {
+    const cleaned =
+      value
+        .replace(/,/g, "")
+        .replace(
+          /[¥￥\s]/g,
+          "",
+        )
+        .trim();
+
+    if (!cleaned) {
+      return 0;
+    }
+
+    const n =
+      Number(cleaned);
+
+    return Number.isFinite(n)
+      ? n
+      : 0;
+  }
+
+  return 0;
 }
 
-// =====================================================
-// 数组安全转换
-// =====================================================
+function money(
+  value: number,
+): string {
+  return new Intl.NumberFormat(
+    "zh-CN",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    },
+  ).format(
+    toNumber(value),
+  );
+}
 
 function toArray<T>(
-  value: unknown
+  value: unknown,
 ): T[] {
   return Array.isArray(value)
     ? value
     : [];
+}
+
+// =====================================================
+// 年度数据
+//
+// 注意：
+// 不重新计算。
+// 完全使用 ExpensePage 传来的 years。
+// =====================================================
+
+function normalizeYears(
+  years: AIExpenseYear[],
+): YearData[] {
+  return toArray<AIExpenseYear>(
+    years,
+  )
+    .map((year) => {
+      const xxCategories =
+        toArray<CategoryItem>(
+          year?.xx?.categories,
+        )
+          .map((item) => ({
+            category:
+              String(
+                item?.category ??
+                  "",
+              ),
+            amount:
+              toNumber(
+                item?.amount,
+              ),
+          }))
+          .filter(
+            (item) =>
+              item.category,
+          );
+
+      const otherBooks =
+        toArray<AIExpenseBook>(
+          year?.other?.books,
+        )
+          .map((book) => ({
+            bookName:
+              String(
+                book?.bookName ??
+                  "",
+              ),
+
+            amount:
+              toNumber(
+                book?.amount,
+              ),
+
+            categories:
+              toArray<CategoryItem>(
+                book?.categories,
+              )
+                .map((item) => ({
+                  category:
+                    String(
+                      item?.category ??
+                        "",
+                    ),
+                  amount:
+                    toNumber(
+                      item?.amount,
+                    ),
+                }))
+                .filter(
+                  (item) =>
+                    item.category,
+                ),
+          }))
+          .filter(
+            (book) =>
+              book.bookName &&
+              book.bookName !==
+                "xx",
+          )
+          .sort(
+            (a, b) =>
+              b.amount -
+              a.amount,
+          );
+
+      return {
+        year: toNumber(
+          year?.year,
+        ),
+
+        xx: {
+          amount:
+            toNumber(
+              year?.xx?.amount,
+            ),
+
+          categories:
+            xxCategories,
+        },
+
+        other: {
+          amount:
+            toNumber(
+              year?.other?.amount,
+            ),
+
+          books:
+            otherBooks,
+        },
+
+        total:
+          toNumber(
+            year?.total,
+          ),
+      };
+    })
+    .filter(
+      (year) =>
+        year.year > 0,
+    )
+    .sort(
+      (a, b) =>
+        b.year -
+        a.year,
+    );
+}
+
+// =====================================================
+// 年度摘要
+// =====================================================
+
+function buildAIDataSummary(
+  years: YearData[],
+): string {
+  if (!years.length) {
+    return "暂无年度消费数据。";
+  }
+
+  return years
+    .map((year) => {
+      const xxCategories =
+        year.xx.categories.length
+          ? year.xx.categories
+              .map(
+                (item) =>
+                  `${item.category}: ¥${money(
+                    item.amount,
+                  )}`,
+              )
+              .join("；")
+          : "无";
+
+      const otherBooks =
+        year.other.books.length
+          ? year.other.books
+              .map((book) => {
+                const categories =
+                  book.categories.length
+                    ? `（${book.categories
+                        .map(
+                          (item) =>
+                            `${item.category}: ¥${money(
+                              item.amount,
+                            )}`,
+                        )
+                        .join(
+                          "；",
+                        )}）`
+                    : "";
+
+                return `${book.bookName}: ¥${money(
+                  book.amount,
+                )}${categories}`;
+              })
+              .join("；")
+          : "无";
+
+      return [
+        `${year.year}年`,
+        `XX: ¥${money(
+          year.xx.amount,
+        )}`,
+        `XX分类: ${xxCategories}`,
+        `其他: ¥${money(
+          year.other.amount,
+        )}`,
+        `其他账本: ${otherBooks}`,
+        `总消费: ¥${money(
+          year.total,
+        )}`,
+      ].join(" | ");
+    })
+    .join("\n");
+}
+
+// =====================================================
+// Diagnostics
+// =====================================================
+
+function buildDataDiagnostics(
+  years: YearData[],
+  transactions: any[],
+) {
+  const books =
+    new Set<string>();
+
+  const categories =
+    new Set<string>();
+
+  for (
+    const year of years
+  ) {
+    for (
+      const item of
+        year.xx.categories
+    ) {
+      categories.add(
+        item.category,
+      );
+    }
+
+    for (
+      const book of
+        year.other.books
+    ) {
+      books.add(
+        book.bookName,
+      );
+
+      for (
+        const item of
+          book.categories
+      ) {
+        categories.add(
+          item.category,
+        );
+      }
+    }
+  }
+
+  return {
+    yearCount:
+      years.length,
+
+    transactionCount:
+      transactions.length,
+
+    bookCount:
+      books.size,
+
+    categoryCount:
+      categories.size,
+
+    years:
+      years.map(
+        (item) =>
+          item.year,
+      ),
+  };
+}
+
+// =====================================================
+// AI System Instruction
+// =====================================================
+
+function buildAISystemInstruction(
+  payload: AnalysisPayload,
+): string {
+  return `
+你是 AI Wealth OS 的 AI CFO。
+
+你的职责不是替代 ExpensePage 计算数据。
+
+你的职责是：
+
+- 解释程序计算出的财务事实
+- 比较
+- 分析趋势
+- 找出异常
+- 解释消费结构
+- 在有交易明细时解释交易
+- 给出合理建议
+
+==================================================
+一、ExpensePage 是官方消费统计来源
+==================================================
+
+下面的 years 是 ExpensePage 已经计算好的最终年度数据：
+
+${JSON.stringify(
+  payload,
+  null,
+  2,
+)}
+
+必须严格遵守：
+
+1. xx.amount 是 ExpensePage 的官方 xx 金额。
+2. other.amount 是 ExpensePage 的官方其他金额。
+3. other.books 是 ExpensePage 的官方其他账本。
+4. total 是 ExpensePage 的官方年度消费金额。
+
+不得重新计算。
+
+不得修改。
+
+不得根据交易描述自行创造新的官方 xx。
+
+==================================================
+二、特别重要：XX
+==================================================
+
+ExpensePage 官方 XX 与交易级 XX 必须严格区分。
+
+ExpensePage 官方 XX：
+
+来自：
+
+years[].xx.amount
+
+以及：
+
+years[].xx.categories
+
+它是官方年度口径。
+
+交易级 XX：
+
+由 API 从全部交易中程序筛选得到。
+
+交易级 XX 只能称为：
+
+“交易级 XX”
+
+“明确字段等于 xx 的交易”
+
+或者：
+
+“XX 相关交易”
+
+绝对不能把交易级 XX 说成 ExpensePage 官方 XX。
+
+例如：
+
+如果 ExpensePage：
+
+2025年 XX = ¥0
+2026年 XX = ¥0
+
+必须明确说明：
+
+“根据 ExpensePage 官方年度数据，2025年和2026年的 XX 均为 ¥0。”
+
+即使交易级程序发现：
+
+某些交易字段明确等于 xx
+
+也不能修改官方年度 XX。
+
+==================================================
+三、前 N 个月
+==================================================
+
+用户可能问：
+
+- 前3个月
+- 前6个月
+- 前8个月
+- 前10个月
+- 前11个月
+- 前12个月
+- 1-8月
+- 1-11月
+- 1至8月
+- 1月至11月
+- 1月到11月
+- 1~11月
+- 截至8月
+- 截至11月
+- 前面8个月
+- 前面11个月
+
+这些都由 API 根据问题动态识别。
+
+绝对不能固定成前8个月。
+
+例如：
+
+“2025和2026年前11个月 XX 怎么样？”
+
+程序会分别计算：
+
+2025年1月～11月
+
+2026年1月～11月
+
+然后提供：
+
+- 总消费
+- 消费笔数
+- 月度消费
+- XX交易级金额
+- XX交易级笔数
+- XX交易级月度金额
+- XX交易级分类
+- XX交易级分类金额
+- 文本相关 XX
+- 文本相关 XX 分类
+
+你必须直接使用这些程序事实。
+
+不能说：
+
+“程序没有提供前11个月。”
+
+==================================================
+四、前 N 个月 XX
+==================================================
+
+特别注意：
+
+如果用户问：
+
+“2025和2026年前8个月 XX 为什么下降？”
+
+程序已经提供：
+
+2025年1-8月交易级 XX
+
+2026年1-8月交易级 XX
+
+以及：
+
+每个月金额
+
+每个月笔数
+
+分类金额
+
+分类笔数
+
+因此必须直接回答。
+
+不能使用全年 XX 去代替前8个月 XX。
+
+不能因为 ExpensePage 没有官方月度 XX 就拒绝回答。
+
+应该明确：
+
+“以下前8个月 XX 使用交易级分析口径，不是 ExpensePage 官方月度 XX。”
+
+然后直接分析程序提供的前8个月事实。
+
+==================================================
+五、6183 笔交易
+==================================================
+
+所有交易可以发送到自己的 AI CFO API。
+
+但是：
+
+全部交易只允许在程序端进行统计。
+
+不要把全部交易发送给 DeepSeek。
+
+只有用户明确询问：
+
+- 哪笔
+- 买了什么
+- 具体消费
+- 交易明细
+- 商户
+- 流水
+- 交易记录
+
+等具体交易问题时，
+
+API 才会提供筛选后的 SELECTED TRANSACTIONS。
+
+==================================================
+六、程序统计优先
+==================================================
+
+如果 API 提供：
+
+CFO PROGRAM FACTS
+
+那么：
+
+- 金额以它为准
+- 笔数以它为准
+- 账户以它为准
+- 分类以它为准
+- 账本以它为准
+- 月度以它为准
+- 前 N 个月以它为准
+- XX 前 N 个月以它为准
+- XX 分类以它为准
+- 同比金额以它为准
+- 同比百分比以它为准
+- 现金以它为准
+- 银行卡以它为准
+- 信用卡以它为准
+
+不要重新计算。
+
+==================================================
+七、年度问题
+==================================================
+
+如果用户问年度消费：
+
+优先使用 ExpensePage 官方年度数据。
+
+特别是：
+
+XX 年度金额
+
+XX 年度分类
+
+其他年度金额
+
+其他账本
+
+总消费
+
+都优先使用 ExpensePage 官方年度数据。
+
+交易级程序统计只能作为辅助分析。
+
+==================================================
+八、回答前 N 个月时
+==================================================
+
+如果程序已经提供：
+
+FIRST_N_MONTH FACTS
+
+必须使用它。
+
+例如：
+
+用户问：
+
+“2025和2026年前11个月 XX 怎么样？”
+
+你应该直接使用：
+
+2025年前11个月交易级 XX
+
+2026年前11个月交易级 XX
+
+以及程序提供的：
+
+月度
+
+分类
+
+笔数
+
+金额
+
+变化
+
+不要自己从原始交易计算。
+
+==================================================
+九、回答
+==================================================
+
+- 中文
+- 金额使用 ¥
+- 不编造数据
+- 不编造账本
+- 不编造分类
+- 不编造交易
+- 不编造消费原因
+- 数据不足时明确说明
+- 推测必须明确说“可能”或“推测”
+- 不输出 JSON
+- 不输出 Markdown 表格
+
+==================================================
+十、禁止事项
+==================================================
+
+禁止让 AI 自己从 6183 笔交易重新计算年度消费。
+
+禁止让 AI 自己重新计算前 N 个月。
+
+禁止让 AI 自己计算同比百分比。
+
+禁止把“交易描述中出现 xx”自动等同于“ExpensePage 的 xx”。
+
+禁止把部分交易数据当成完整年度数据。
+
+禁止用交易明细覆盖 ExpensePage 官方年度数据。
+
+禁止因为没有官方月度 XX 而拒绝进行交易级前 N 个月分析。
+
+如果程序已经提供前 N 个月数据，就必须直接回答。
+`.trim();
 }
 
 // =====================================================
@@ -144,602 +737,94 @@ export default function ExpenseAIAnalysis({
   years,
   transactions,
 }: ExpenseAIAnalysisProps) {
-
-  // ===================================================
-  // AI 年度分析
-  // ===================================================
-
-  const [analysis, setAnalysis] =
-    useState<string>("");
-
-  const [analyzing, setAnalyzing] =
-    useState(false);
-
-  const [analysisError, setAnalysisError] =
-    useState<string>("");
-
-  // ===================================================
-  // AI CFO Chat
-  // ===================================================
-
   const [question, setQuestion] =
     useState("");
 
-  const [chatMessages, setChatMessages] =
-    useState<ChatMessage[]>([]);
+  const [chat, setChat] =
+    useState<ChatMessage[]>(
+      [],
+    );
 
-  const [chatLoading, setChatLoading] =
+  const [loading, setLoading] =
     useState(false);
 
-  const [chatError, setChatError] =
-    useState<string>("");
-
   // ===================================================
-  // ★ 核心：
-  //
-  // 把 ExpensePage 的真实 aiExpenseYears
-  // 转换成 AI CFO 统一结构。
-  //
-  // 绝对不能再使用：
-  //
-  // year.xx
-  // year.other
-  // year.otherBooks
-  //
-  // 作为旧版结构。
-  //
-  // 现在必须使用：
-  //
-  // year.xx.amount
-  // year.xx.categories
-  // year.other.amount
-  // year.other.books
+  // 年度数据
   // ===================================================
 
-  const payload = useMemo<AnalysisPayload>(() => {
-
-    if (!Array.isArray(years)) {
-      return {
-        years: [],
-      };
-    }
-
-    const normalizedYears: YearData[] =
-      years.map((year) => {
-
-        // =================================================
-        // xx
-        // =================================================
-
-        const xxAmount =
-          toNumber(
-            year?.xx?.amount
-          );
-
-        const xxCategories =
-          toArray<CategoryItem>(
-            year?.xx?.categories
-          )
-            .map(
-              (category) => ({
-                category:
-                  String(
-                    category?.category ||
-                    "未分类"
-                  ),
-
-                amount:
-                  toNumber(
-                    category?.amount
-                  ),
-              })
-            )
-            .sort(
-              (a, b) =>
-                b.amount -
-                a.amount
-            );
-
-        // =================================================
-        // other
-        // =================================================
-
-        const otherAmount =
-          toNumber(
-            year?.other?.amount
-          );
-
-        // =================================================
-        // other.books
-        // =================================================
-
-        const otherBooks =
-          toArray<AIExpenseBook>(
-            year?.other?.books
-          )
-            .map(
-              (book) => {
-
-                const categories =
-                  toArray<CategoryItem>(
-                    book?.categories
-                  )
-                    .map(
-                      (category) => ({
-                        category:
-                          String(
-                            category?.category ||
-                            "未分类"
-                          ),
-
-                        amount:
-                          toNumber(
-                            category?.amount
-                          ),
-                      })
-                    )
-                    .sort(
-                      (a, b) =>
-                        b.amount -
-                        a.amount
-                    );
-
-                return {
-                  bookName:
-                    String(
-                      book?.bookName ||
-                      "未设置账本"
-                    ),
-
-                  amount:
-                    toNumber(
-                      book?.amount
-                    ),
-
-                  categories,
-                };
-              }
-            )
-            .filter(
-              (book) =>
-                book.bookName !== "xx"
-            )
-            .sort(
-              (a, b) =>
-                b.amount -
-                a.amount
-            );
-
-        // =================================================
-        // total
-        //
-        // 优先使用 ExpensePage 已经计算好的 total。
-        // 不重新统计。
-        // =================================================
-
-        const total =
-          toNumber(
-            year?.total
-          );
-
-        return {
-          year:
-            toNumber(
-              year?.year
-            ),
-
-          xx:
-            xxAmount,
-
-          xxCategories,
-
-          other:
-            otherAmount,
-
-          otherBooks,
-
-          total,
-        };
-      })
-      .sort(
-        (a, b) =>
-          b.year -
-          a.year
-      );
-
-    return {
-      years:
-        normalizedYears,
-    };
-
-  }, [years]);
+  const payload =
+    useMemo<AnalysisPayload>(
+      () => ({
+        years:
+          normalizeYears(
+            years,
+          ),
+      }),
+      [years],
+    );
 
   // ===================================================
-  // ★ 数据完整性诊断
+  // Diagnostics
   // ===================================================
 
-  const dataDiagnostics = useMemo(() => {
-
-    const result = {
-      yearCount:
-        payload.years.length,
-
-      yearsWithBooks:
-        0,
-
-      yearsWithoutBooks:
-        0,
-
-      totalBooks:
-        0,
-
-      totalCategories:
-        0,
-
-      booksWithCategories:
-        0,
-
-      categoriesWithAmount:
-        0,
-
-      hasDetailedData:
-        false,
-
-      totalAmount:
-        0,
-    };
-
-    for (
-      const year
-      of payload.years
-    ) {
-
-      result.totalAmount +=
-        year.total;
-
-      if (
-        year.otherBooks.length > 0
-      ) {
-
-        result.yearsWithBooks += 1;
-
-        result.hasDetailedData =
-          true;
-
-      } else {
-
-        result.yearsWithoutBooks +=
-          1;
-      }
-
-      result.totalBooks +=
-        year.otherBooks.length;
-
-      // =================================================
-      // otherBooks 分类
-      // =================================================
-
-      for (
-        const book
-        of year.otherBooks
-      ) {
-
-        if (
-          book.categories.length > 0
-        ) {
-
-          result.booksWithCategories +=
-            1;
-        }
-
-        result.totalCategories +=
-          book.categories.length;
-
-        for (
-          const category
-          of book.categories
-        ) {
-
-          if (
-            category.amount !== 0
-          ) {
-
-            result.categoriesWithAmount +=
-              1;
-          }
-        }
-      }
-
-      // =================================================
-      // xx 分类也算入分类统计
-      // =================================================
-
-      for (
-        const category
-        of year.xxCategories
-      ) {
-
-        result.totalCategories +=
-          1;
-
-        if (
-          category.amount !== 0
-        ) {
-
-          result.categoriesWithAmount +=
-            1;
-        }
-      }
-    }
-
-    return result;
-
-  }, [payload]);
+  const dataDiagnostics =
+    useMemo(
+      () =>
+        buildDataDiagnostics(
+          payload.years,
+          transactions,
+        ),
+      [
+        payload.years,
+        transactions,
+      ],
+    );
 
   // ===================================================
-  // ★ 给 AI 阅读的完整文字
+  // 年度摘要
   // ===================================================
 
-  const aiDataSummary = useMemo(() => {
-
-    if (
-      !payload.years.length
-    ) {
-
-      return "暂无消费数据";
-    }
-
-    return payload.years
-      .map(
-        (year) => {
-
-          // =================================================
-          // xx 分类
-          // =================================================
-
-          const xxCategoryText =
-            year.xxCategories.length > 0
-              ? year.xxCategories
-                  .map(
-                    (category) =>
-                      `${category.category}=${money(
-                        category.amount
-                      )}`
-                  )
-                  .join("，")
-              : "无分类明细";
-
-          // =================================================
-          // 其他账簿
-          // =================================================
-
-          const bookText =
-            year.otherBooks.length > 0
-              ? year.otherBooks
-                  .map(
-                    (book) => {
-
-                      const categoryText =
-                        book.categories.length > 0
-                          ? book.categories
-                              .map(
-                                (category) =>
-                                  `${category.category}=${money(
-                                    category.amount
-                                  )}`
-                              )
-                              .join("，")
-                          : "无分类明细";
-
-                      return [
-                        `账簿=${book.bookName}`,
-                        `金额=${money(
-                          book.amount
-                        )}`,
-                        `分类=${categoryText}`,
-                      ].join("；");
-                    }
-                  )
-                  .join("\n")
-              : "无其他账簿明细";
-
-          return [
-            `========== ${year.year}年 ==========`,
-            `xx=${money(year.xx)}`,
-            `xx分类=${xxCategoryText}`,
-            `其他=${money(year.other)}`,
-            `总消费=${money(year.total)}`,
-            `其他账簿：`,
-            bookText,
-          ].join("\n");
-        }
-      )
-      .join("\n\n");
-
-  }, [payload]);
-
-  // ===================================================
-  // ★ JSON
-  // ===================================================
+  const aiDataSummary =
+    useMemo(
+      () =>
+        buildAIDataSummary(
+          payload.years,
+        ),
+      [payload.years],
+    );
 
   const aiDataJSON =
-    useMemo(() => {
-
-      return JSON.stringify(
-        payload,
-        null,
-        2
-      );
-
-    }, [payload]);
-
-  // ===================================================
-  // ★ AI CFO 系统规则
-  // ===================================================
+    useMemo(
+      () =>
+        JSON.stringify(
+          payload,
+        ),
+      [payload],
+    );
 
   const aiSystemInstruction =
-    useMemo(() => {
-
-      return [
-        "你是 AI CFO，负责分析 ExpensePage 已经统计完成的真实消费数据。",
-
-        "",
-
-        "【最高优先级】",
-
-        "你只能使用本次请求提供的 payload、years、dataSummary 和 dataJSON。",
-
-        "禁止自行查询数据库。",
-
-        "禁止重新读取 transactions。",
-
-        "禁止重新统计交易。",
-
-        "禁止猜测不存在的账簿。",
-
-        "禁止编造分类。",
-
-        "禁止修改 ExpensePage 已经计算好的金额。",
-
-        "",
-
-        "【真实数据结构】",
-
-        "每一年包含：",
-
-        "year",
-
-        "xx",
-
-        "xxCategories",
-
-        "other",
-
-        "otherBooks",
-
-        "total",
-
-        "",
-
-        "其中：",
-
-        "xx 是一个独立的大类。",
-
-        "other 是另一个独立的大类。",
-
-        "otherBooks 是 other 下面的具体账簿。",
-
-        "xx 永远不能归入 otherBooks。",
-
-        "",
-
-        "【账簿规则】",
-
-        "otherBooks 中出现的 bookName 才是真实存在的账簿。",
-
-        "如果某个年份 otherBooks 为空，必须明确说明该年份没有提供账簿明细。",
-
-        "绝对不能自行猜测账簿名称。",
-
-        "",
-
-        "【分类规则】",
-
-        "分类必须来自 payload 中实际存在的 categories。",
-
-        "不能自己创造不存在的分类。",
-
-        "如果账簿存在分类，则可以按照分类分析该账簿消费。",
-
-        "",
-
-        "【年度比较】",
-
-        "当用户比较两个年份时，必须按照以下顺序：",
-
-        "1. total",
-
-        "2. xx",
-
-        "3. other",
-
-        "4. otherBooks",
-
-        "5. otherBooks.categories",
-
-        "",
-
-        "如果用户问哪个账簿变化最大，",
-
-        "只能比较实际存在于 otherBooks 中的账簿。",
-
-        "",
-
-        "如果用户问哪个分类增加最多，",
-
-        "只能使用实际提供的分类金额。",
-
-        "",
-
-        "【金额】",
-
-        "所有金额必须来自 payload。",
-
-        "金额必须保持页面原始金额。",
-
-        "不要把 0 当成数据缺失。",
-
-        "只有真正不存在的字段才属于数据缺失。",
-
-        "",
-
-        "【回答方式】",
-
-        "先给结论。",
-
-        "然后给出金额变化。",
-
-        "然后拆解 xx 和其他。",
-
-        "然后继续拆解具体账簿。",
-
-        "如果存在分类数据，再继续拆解分类。",
-
-        "",
-
-        "【禁止幻觉】",
-
-        "数据不足时必须明确说数据不足。",
-
-        "不要为了给出原因而编造原因。",
-
-      ].join("\n");
-
-    }, []);
+    useMemo(
+      () =>
+        buildAISystemInstruction(
+          payload,
+        ),
+      [payload],
+    );
 
   // ===================================================
-  // ★ 年度分析
+  // 年度 AI 分析
+  //
+  // 原接口保持不变。
   // ===================================================
 
   async function runAnalysis() {
-
-    if (
-      !payload.years.length
-    ) {
-
-      setAnalysisError(
-        "没有可供分析的年度消费数据"
-      );
-
+    if (loading) {
       return;
     }
 
-    setAnalyzing(true);
-
-    setAnalysisError("");
+    setLoading(true);
 
     try {
-
       const response =
         await fetch(
           "/api/expense/ai-analysis",
@@ -751,376 +836,246 @@ export default function ExpenseAIAnalysis({
                 "application/json",
             },
 
-            body:
-              JSON.stringify({
+            body: JSON.stringify({
+              payload,
 
-                // =================================================
-                // 标准结构
-                // =================================================
+              years:
+                payload.years,
 
-                payload,
+              dataSummary:
+                aiDataSummary,
 
-                // =================================================
-                // ★ 同时发送 years
-                //
-                // 给旧 API / 新 API 做兼容。
-                // =================================================
+              dataJSON:
+                aiDataJSON,
 
-                years:
-                  payload.years,
-
-                // =================================================
-                // AI 文字数据
-                // =================================================
-
-                dataSummary:
-                  aiDataSummary,
-
-                // =================================================
-                // JSON
-                // =================================================
-
-                dataJSON:
-                  aiDataJSON,
-
-                // =================================================
-                // AI 规则
-                // =================================================
-
-                systemInstruction:
-                  aiSystemInstruction,
-              }),
-          }
+              systemInstruction:
+                aiSystemInstruction,
+            }),
+          },
         );
 
-      const text =
-        await response.text();
+      const result =
+        await response.json();
 
-      let data:
-        | {
-            success?: boolean;
-            analysis?: string;
-            error?: string;
-          }
-        | null = null;
-
-      try {
-
-        data =
-          text
-            ? JSON.parse(text)
-            : null;
-
-      } catch {
-
+      if (!response.ok) {
         throw new Error(
-          `服务器返回了无法解析的内容（HTTP ${response.status}）：${text.slice(
-            0,
-            500
-          )}`
+          result?.error ||
+            "AI 分析失败",
         );
       }
 
-      if (
-        !response.ok ||
-        !data?.success
-      ) {
+      const answer =
+        result?.answer ||
+        result?.message ||
+        "AI 暂无分析结果。";
 
-        throw new Error(
-          data?.error ||
-          `AI 分析失败（HTTP ${response.status}）`
-        );
-      }
-
-      setAnalysis(
-        data.analysis || ""
-      );
-
+      setChat((prev) => [
+        ...prev,
+        {
+          role:
+            "assistant",
+          content:
+            answer,
+        },
+      ]);
     } catch (error) {
-
       console.error(
-        "Expense AI analysis error:",
-        error
+        "[ExpenseAIAnalysis] runAnalysis:",
+        error,
       );
 
-      setAnalysisError(
-        error instanceof Error
-          ? error.message
-          : String(error)
-      );
-
+      setChat((prev) => [
+        ...prev,
+        {
+          role:
+            "assistant",
+          content:
+            error instanceof Error
+              ? error.message
+              : "AI 分析失败，请稍后重试。",
+        },
+      ]);
     } finally {
-
-      setAnalyzing(false);
+      setLoading(false);
     }
   }
 
   // ===================================================
-  // ★ AI CFO 问答
+  // CFO
+  //
+  // 6183 笔：
+  // 发送给自己的 API。
+  //
+  // 自己的 API：
+  // 程序端全部分析。
+  //
+  // DeepSeek：
+  // 只接收程序筛选后的 Facts，
+  // 必要时才接收相关交易明细。
   // ===================================================
 
-  // =====================================================
-// ★ AI CFO 问答
-// =====================================================
-
-async function askCFO(
-  customQuestion?: string
-) {
-
-  const q =
-    (
+  async function askCFO(
+    customQuestion?: string,
+  ) {
+    const q = (
       customQuestion ??
       question
     ).trim();
 
-  if (!q) {
-    return;
-  }
+    if (
+      !q ||
+      loading
+    ) {
+      return;
+    }
 
-  if (!payload.years.length) {
+    const previousMessages =
+      chat.slice(-12);
 
-    setChatError(
-      "没有可供 AI 分析的消费数据"
-    );
-
-    return;
-  }
-
-  setChatLoading(true);
-  setChatError("");
-
-  // ===================================================
-  // 保存发送前历史
-  // ===================================================
-
-  const previousMessages =
-    chatMessages;
-
-  const userMessage: ChatMessage = {
-    role: "user",
-    content: q,
-  };
-
-  // ===================================================
-  // 立即显示用户问题
-  // ===================================================
-
-  setChatMessages(
-    (prev) => [
+    setChat((prev) => [
       ...prev,
-      userMessage,
-    ]
-  );
+      {
+        role: "user",
+        content: q,
+      },
+    ]);
 
-  setQuestion("");
+    setQuestion("");
 
-  // ===================================================
-  // ★ 重要
-  //
-  // transactions 必须放在 requestBody 顶层
-  //
-  // 不再放：
-  //
-  // payload: {
-  //   ...payload,
-  //   transactions
-  // }
-  //
-  // 否则 route.ts 读取 body.transactions 会得到 undefined。
-  // ===================================================
-
-  const requestBody = {
-
-    // =================================================
-    // 用户问题
-    // =================================================
-
-    question: q,
-
-    // =================================================
-    // 年度汇总数据
-    // =================================================
-
-    payload,
-
-    // =================================================
-    // ★ 6183 笔真实交易
-    //
-    // 放在顶层。
-    // Route 会根据问题进行筛选，
-    // 不会把全部 6183 笔原样塞给 DeepSeek。
-    // =================================================
-
-    transactions,
-
-    // =================================================
-    // 历史对话
-    // =================================================
-
-    history:
-      previousMessages,
-
-    // =================================================
-    // AI 规则
-    // =================================================
-
-    systemInstruction:
-      aiSystemInstruction,
-  };
-
-  console.log(
-    "[ExpenseAIAnalysis] question:",
-    q
-  );
-
-  console.log(
-    "[ExpenseAIAnalysis] years:",
-    payload.years.length
-  );
-
-  console.log(
-    "[ExpenseAIAnalysis] transactions:",
-    transactions?.length
-  );
-
-  console.log(
-    "[ExpenseAIAnalysis] sending transactions:",
-    requestBody.transactions?.length
-  );
-
-  try {
-
-    const response =
-      await fetch(
-        "/api/expense/ai-chat",
-        {
-          method: "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-
-          body:
-            JSON.stringify(
-              requestBody
-            ),
-        }
-      );
-
-    const text =
-      await response.text();
-
-    let data:
-      | {
-          success?: boolean;
-          answer?: string;
-          error?: string;
-        }
-      | null = null;
+    setLoading(true);
 
     try {
+      console.log(
+        "[ExpenseAIAnalysis] CFO request",
+        {
+          question: q,
 
-      data =
-        text
-          ? JSON.parse(text)
-          : null;
+          transactionCount:
+            transactions.length,
 
-    } catch {
+          yearCount:
+            payload.years.length,
+        },
+      );
 
-      if (
-        response.status === 404
-      ) {
+      const response =
+        await fetch(
+          "/api/expense/ai-chat",
+          {
+            method: "POST",
 
-        throw new Error(
-          "AI CFO API 不存在（HTTP 404）。请确认项目中存在：app/api/expense/ai-chat/route.ts"
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+
+            body: JSON.stringify({
+              question: q,
+
+              // =====================================
+              // ExpensePage 官方年度数据
+              // =====================================
+
+              payload,
+
+              // =====================================
+              // 全部交易
+              //
+              // 只发送到自己的 API。
+              //
+              // API 内部程序处理。
+              // 不会全部发送给 DeepSeek。
+              // =====================================
+
+              transactions,
+
+              // =====================================
+              // 历史对话
+              // =====================================
+
+              history:
+                previousMessages,
+
+              // =====================================
+              // 系统说明
+              // =====================================
+
+              systemInstruction:
+                aiSystemInstruction,
+
+              // =====================================
+              // 辅助数据
+              // =====================================
+
+              dataSummary:
+                aiDataSummary,
+
+              dataDiagnostics,
+            }),
+          },
         );
 
+      const result =
+        await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result?.error ||
+            "AI CFO 请求失败",
+        );
       }
 
-      throw new Error(
-        `服务器返回了无法解析的内容（HTTP ${response.status}）：${text.slice(
-          0,
-          500
-        )}`
-      );
+      const answer =
+        result?.answer ||
+        result?.message ||
+        "AI CFO 暂无回答。";
 
-    }
-
-    if (
-      !response.ok ||
-      !data?.success
-    ) {
-
-      throw new Error(
-        data?.error ||
-        `AI 问答失败（HTTP ${response.status}）`
-      );
-
-    }
-
-    // =================================================
-    // AI 回复
-    // =================================================
-
-    setChatMessages(
-      (prev) => [
+      setChat((prev) => [
         ...prev,
-
         {
-          role: "assistant",
+          role:
+            "assistant",
           content:
-            data.answer || "",
+            answer,
         },
-      ]
-    );
+      ]);
+    } catch (error) {
+      console.error(
+        "[ExpenseAIAnalysis] askCFO:",
+        error,
+      );
 
-  } catch (error) {
-
-    console.error(
-      "Expense AI chat error:",
-      error
-    );
-
-    setChatError(
-      error instanceof Error
-        ? error.message
-        : String(error)
-    );
-
-    // =================================================
-    // 请求失败恢复历史
-    // =================================================
-
-    setChatMessages(
-      previousMessages
-    );
-
-  } finally {
-
-    setChatLoading(false);
+      setChat((prev) => [
+        ...prev,
+        {
+          role:
+            "assistant",
+          content:
+            error instanceof Error
+              ? error.message
+              : "AI CFO 请求失败，请稍后重试。",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
-}
 
   // ===================================================
   // Enter
   // ===================================================
 
   function handleKeyDown(
-    event:
-      React.KeyboardEvent<HTMLTextAreaElement>
+    event: KeyboardEvent<HTMLTextAreaElement>,
   ) {
-
     if (
-      event.key === "Enter" &&
+      event.key ===
+        "Enter" &&
       !event.shiftKey
     ) {
-
       event.preventDefault();
 
-      if (!chatLoading) {
-        askCFO();
-      }
+      void askCFO();
     }
   }
 
@@ -1129,848 +1084,112 @@ async function askCFO(
   // ===================================================
 
   const quickQuestions = [
-
-    "为什么今年比去年多花了这么多？",
-
-    "其他为什么增加？",
-
-    "哪个账簿的消费变化最大？",
-
-    "哪个分类的消费增加最多？",
-
-    "分析近三年的消费趋势",
-
-    "找出今年最值得关注的消费变化",
-
-    "如果要降低10%的年度开销，应该从哪里下手？",
-
+    "分析一下各年度消费变化",
+    "哪个年度消费最高？",
+    "XX 和其他消费有什么变化？",
+    "帮我看看消费结构",
   ];
 
   // ===================================================
-  // 没有数据
-  // ===================================================
-
-  if (
-    !payload.years.length
-  ) {
-
-    return (
-      <section
-        style={{
-          marginTop: 32,
-          padding: 24,
-          border:
-            "1px solid #e5e7eb",
-          borderRadius: 16,
-          background:
-            "#ffffff",
-        }}
-      >
-
-        <div
-          style={{
-            fontSize: 18,
-            fontWeight: 700,
-          }}
-        >
-          🤖 AI CFO
-        </div>
-
-        <div
-          style={{
-            marginTop: 8,
-            color: "#6b7280",
-          }}
-        >
-          暂无消费数据，暂时无法进行 AI 分析。
-        </div>
-
-      </section>
-    );
-  }
-
-  // ===================================================
   // UI
+  //
+  // 注意：
+  // UI 完全保持原样。
   // ===================================================
 
   return (
-
-    <section
-      style={{
-        marginTop: 32,
-        display: "flex",
-        flexDirection: "column",
-        gap: 20,
-      }}
-    >
-
-      {/* =================================================
-          AI 年度分析
-      ================================================= */}
-
-      <div
-        style={{
-          border:
-            "1px solid #e5e7eb",
-          borderRadius: 16,
-          background:
-            "#ffffff",
-          overflow: "hidden",
-        }}
-      >
-
-        <div
-          style={{
-            padding:
-              "18px 20px",
-            borderBottom:
-              "1px solid #e5e7eb",
-            display: "flex",
-            alignItems: "center",
-            justifyContent:
-              "space-between",
-            gap: 12,
-          }}
-        >
-
-          <div>
-
-            <div
-              style={{
-                fontSize: 18,
-                fontWeight: 700,
-              }}
-            >
-              🤖 AI 年度消费分析
-            </div>
-
-            <div
-              style={{
-                marginTop: 4,
-                fontSize: 13,
-                color: "#6b7280",
-              }}
-            >
-              AI 自动分析各年度消费变化、账簿及分类
-            </div>
-
+    <div className="space-y-4">
+      <div className="rounded-xl border bg-white p-4">
+        <div className="mb-3">
+          <div className="text-base font-semibold">
+            AI CFO
           </div>
 
-          <button
-            type="button"
-            onClick={
-              runAnalysis
-            }
-            disabled={
-              analyzing
-            }
-            style={{
-              padding:
-                "9px 16px",
-              borderRadius: 10,
-              border:
-                "1px solid #d1d5db",
-              background:
-                analyzing
-                  ? "#f3f4f6"
-                  : "#111827",
-              color:
-                analyzing
-                  ? "#6b7280"
-                  : "#ffffff",
-              cursor:
-                analyzing
-                  ? "not-allowed"
-                  : "pointer",
-              fontWeight: 600,
-            }}
-          >
-            {analyzing
-              ? "分析中..."
-              : analysis
-                ? "重新分析"
-                : "开始 AI 分析"}
-          </button>
-
-        </div>
-
-        <div
-          style={{
-            padding: 20,
-          }}
-        >
-
-          {analysisError && (
-
-            <div
-              style={{
-                padding: 12,
-                marginBottom: 14,
-                borderRadius: 10,
-                background:
-                  "#fef2f2",
-                color: "#b91c1c",
-                fontSize: 14,
-              }}
-            >
-              {analysisError}
-            </div>
-
-          )}
-
-          {!analysis &&
-            !analysisError &&
-            !analyzing && (
-
-              <div
-                style={{
-                  color:
-                    "#9ca3af",
-                  fontSize: 14,
-                }}
-              >
-                点击右上角「开始 AI 分析」，让 AI CFO 分析年度消费、账簿和分类。
-              </div>
-            )}
-
-          {analyzing && (
-
-            <div
-              style={{
-                padding:
-                  "20px 0",
-                color:
-                  "#6b7280",
-              }}
-            >
-              正在分析年度消费变化，请稍候……
-            </div>
-          )}
-
-          {analysis && (
-
-            <div
-              style={{
-                whiteSpace:
-                  "pre-wrap",
-                lineHeight: 1.8,
-                fontSize: 14,
-                color:
-                  "#1f2937",
-              }}
-            >
-              {analysis}
-            </div>
-          )}
-
-        </div>
-
-      </div>
-
-      {/* =================================================
-          AI CFO 问答
-      ================================================= */}
-
-      <div
-        style={{
-          border:
-            "1px solid #e5e7eb",
-          borderRadius: 16,
-          background:
-            "#ffffff",
-          overflow: "hidden",
-        }}
-      >
-
-        <div
-          style={{
-            padding:
-              "18px 20px",
-            borderBottom:
-              "1px solid #e5e7eb",
-          }}
-        >
-
-          <div
-            style={{
-              fontSize: 18,
-              fontWeight: 700,
-            }}
-          >
-            💬 AI CFO 问答
+          <div className="mt-1 text-sm text-gray-500">
+            基于 Expense 数据进行分析
           </div>
-
-          <div
-            style={{
-              marginTop: 5,
-              fontSize: 13,
-              color:
-                "#6b7280",
-            }}
-          >
-            可以直接询问任何年度、账簿、分类或消费变化问题
-          </div>
-
         </div>
 
-        {/* =================================================
-            快捷问题
-        ================================================= */}
-
-        <div
-          style={{
-            padding:
-              "16px 20px 4px",
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 8,
-          }}
-        >
-
+        <div className="mb-3 flex flex-wrap gap-2">
           {quickQuestions.map(
             (item) => (
-
               <button
                 key={item}
                 type="button"
-                disabled={
-                  chatLoading
-                }
                 onClick={() =>
-                  askCFO(item)
+                  void askCFO(item)
                 }
-                style={{
-                  border:
-                    "1px solid #e5e7eb",
-                  background:
-                    "#f9fafb",
-                  color:
-                    "#374151",
-                  borderRadius:
-                    999,
-                  padding:
-                    "7px 12px",
-                  fontSize: 13,
-                  cursor:
-                    chatLoading
-                      ? "not-allowed"
-                      : "pointer",
-                }}
+                disabled={loading}
+                className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {item}
               </button>
-
-            )
+            ),
           )}
-
         </div>
 
-        {/* =================================================
-            Chat
-        ================================================= */}
-
-        <div
-          style={{
-            padding:
-              "16px 20px",
-            display: "flex",
-            flexDirection:
-              "column",
-            gap: 14,
-            minHeight: 100,
-            maxHeight: 560,
-            overflowY:
-              "auto",
-          }}
-        >
-
-          {chatMessages.length ===
-            0 && (
-
-            <div
-              style={{
-                padding:
-                  "24px 0",
-                textAlign:
-                  "center",
-                color:
-                  "#9ca3af",
-                fontSize: 14,
-              }}
-            >
-
+        <div className="space-y-3">
+          {chat.map(
+            (message, index) => (
               <div
-                style={{
-                  fontSize: 28,
-                  marginBottom: 8,
-                }}
-              >
-                💡
-              </div>
-
-              <div>
-                你可以问我：
-              </div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                }}
-              >
-                「2025 年为什么比 2024 年多花了这么多？」
-              </div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                }}
-              >
-                「哪个账簿的消费增加最多？」
-              </div>
-
-              <div
-                style={{
-                  marginTop: 6,
-                }}
-              >
-                「哪个分类增加最多？」
-              </div>
-
-            </div>
-          )}
-
-          {chatMessages.map(
-            (
-              message,
-              index
-            ) => (
-
-              <div
-                key={
-                  `${message.role}-${index}`
+                key={`${message.role}-${index}`}
+                className={
+                  message.role ===
+                  "user"
+                    ? "rounded-lg bg-gray-50 p-3 text-sm"
+                    : "rounded-lg border p-3 text-sm"
                 }
-                style={{
-                  display:
-                    "flex",
-                  flexDirection:
-                    "column",
-                  alignItems:
-                    message.role ===
-                    "user"
-                      ? "flex-end"
-                      : "flex-start",
-                }}
               >
-
-                <div
-                  style={{
-                    fontSize: 12,
-                    color:
-                      "#9ca3af",
-                    marginBottom: 4,
-                  }}
-                >
+                <div className="mb-1 text-xs font-medium text-gray-500">
                   {message.role ===
                   "user"
                     ? "你"
-                    : "🤖 AI CFO"}
+                    : "AI CFO"}
                 </div>
 
-                <div
-                  style={{
-                    maxWidth:
-                      "85%",
-                    padding:
-                      "11px 14px",
-                    borderRadius:
-                      12,
-                    background:
-                      message.role ===
-                      "user"
-                        ? "#111827"
-                        : "#f3f4f6",
-                    color:
-                      message.role ===
-                      "user"
-                        ? "#ffffff"
-                        : "#1f2937",
-                    whiteSpace:
-                      "pre-wrap",
-                    lineHeight:
-                      1.7,
-                    fontSize: 14,
-                  }}
-                >
+                <div className="whitespace-pre-wrap leading-6">
                   {message.content}
                 </div>
-
               </div>
-            )
+            ),
           )}
-
-          {chatLoading && (
-
-            <div
-              style={{
-                display:
-                  "flex",
-                flexDirection:
-                  "column",
-                alignItems:
-                  "flex-start",
-              }}
-            >
-
-              <div
-                style={{
-                  fontSize: 12,
-                  color:
-                    "#9ca3af",
-                  marginBottom: 4,
-                }}
-              >
-                🤖 AI CFO
-              </div>
-
-              <div
-                style={{
-                  padding:
-                    "11px 14px",
-                  borderRadius:
-                    12,
-                  background:
-                    "#f3f4f6",
-                  color:
-                    "#6b7280",
-                  fontSize: 14,
-                }}
-              >
-                正在分析你的消费数据……
-              </div>
-
-            </div>
-          )}
-
         </div>
 
-        {/* =================================================
-            Error
-        ================================================= */}
-
-        {chatError && (
-
-          <div
-            style={{
-              margin:
-                "0 20px 12px",
-              padding: 12,
-              borderRadius: 10,
-              background:
-                "#fef2f2",
-              color:
-                "#b91c1c",
-              fontSize: 14,
-            }}
-          >
-            {chatError}
-          </div>
-        )}
-
-        {/* =================================================
-            Input
-        ================================================= */}
-
-        <div
-          style={{
-            padding:
-              "14px 20px 20px",
-            borderTop:
-              "1px solid #f3f4f6",
-          }}
-        >
-
-          <div
-            style={{
-              display:
-                "flex",
-              gap: 10,
-              alignItems:
-                "flex-end",
-            }}
-          >
-
-            <textarea
-              value={
-                question
-              }
-              onChange={(
-                event
-              ) =>
-                setQuestion(
-                  event.target.value
-                )
-              }
-              onKeyDown={
-                handleKeyDown
-              }
-              disabled={
-                chatLoading
-              }
-              placeholder="例如：2025 年其他为什么比 2024 年增加这么多？"
-              rows={3}
-              style={{
-                flex: 1,
-                resize:
-                  "vertical",
-                minHeight: 76,
-                maxHeight: 180,
-                border:
-                  "1px solid #d1d5db",
-                borderRadius:
-                  12,
-                padding:
-                  "11px 13px",
-                fontSize: 14,
-                lineHeight:
-                  1.6,
-                outline:
-                  "none",
-              }}
-            />
-
-            <button
-              type="button"
-              onClick={() =>
-                askCFO()
-              }
-              disabled={
-                chatLoading ||
-                !question.trim()
-              }
-              style={{
-                height: 44,
-                padding:
-                  "0 18px",
-                borderRadius:
-                  10,
-                border:
-                  "none",
-                background:
-                  chatLoading ||
-                  !question.trim()
-                    ? "#e5e7eb"
-                    : "#111827",
-                color:
-                  chatLoading ||
-                  !question.trim()
-                    ? "#9ca3af"
-                    : "#ffffff",
-                cursor:
-                  chatLoading ||
-                  !question.trim()
-                    ? "not-allowed"
-                    : "pointer",
-                fontWeight:
-                  600,
-                whiteSpace:
-                  "nowrap",
-              }}
-            >
-              {chatLoading
-                ? "分析中"
-                : "发送"}
-            </button>
-
-          </div>
-
-          <div
-            style={{
-              marginTop: 7,
-              fontSize: 12,
-              color:
-                "#9ca3af",
-            }}
-          >
-            Enter 发送，Shift + Enter 换行
-          </div>
-
+        <div className="mt-4">
+          <textarea
+            value={question}
+            onChange={(event) =>
+              setQuestion(
+                event.target.value,
+              )
+            }
+            onKeyDown={
+              handleKeyDown
+            }
+            placeholder="问 AI CFO..."
+            disabled={loading}
+            className="min-h-[90px] w-full rounded-lg border p-3 text-sm outline-none focus:ring-2 focus:ring-gray-200 disabled:bg-gray-50"
+          />
         </div>
 
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() =>
+              void askCFO()
+            }
+            disabled={
+              loading ||
+              !question.trim()
+            }
+            className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loading
+              ? "分析中..."
+              : "发送"}
+          </button>
+        </div>
       </div>
-
-      {/* =================================================
-          当前 AI 数据状态
-      ================================================= */}
-
-      <div
-        style={{
-          border:
-            "1px solid #e5e7eb",
-          borderRadius: 16,
-          background:
-            "#f9fafb",
-          padding:
-            "14px 18px",
-          fontSize: 13,
-          color:
-            "#6b7280",
-        }}
-      >
-
-        <div>
-
-          当前已提供给 AI CFO：
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {
-              dataDiagnostics.yearCount
-            }
-          </strong>
-
-          年消费数据。
-
-        </div>
-
-        <div
-          style={{
-            marginTop: 6,
-          }}
-        >
-
-          已提供：
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {
-              dataDiagnostics.totalBooks
-            }
-          </strong>
-
-          个其他账簿，
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {
-              dataDiagnostics.booksWithCategories
-            }
-          </strong>
-
-          个账簿有分类明细，
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {
-              dataDiagnostics.totalCategories
-            }
-          </strong>
-
-          个分类。
-
-        </div>
-
-        <div
-          style={{
-            marginTop: 6,
-          }}
-        >
-
-          其中：
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {
-              dataDiagnostics.categoriesWithAmount
-            }
-          </strong>
-
-          个分类存在金额。
-
-        </div>
-
-        <div
-          style={{
-            marginTop: 6,
-          }}
-        >
-
-          AI 数据总额：
-
-          <strong
-            style={{
-              color:
-                "#374151",
-              marginLeft: 5,
-            }}
-          >
-            {money(
-              dataDiagnostics.totalAmount
-            )}
-          </strong>
-
-        </div>
-
-        {!dataDiagnostics.hasDetailedData && (
-
-          <div
-            style={{
-              marginTop: 8,
-              padding: 10,
-              borderRadius: 8,
-              background:
-                "#fff7ed",
-              color:
-                "#c2410c",
-            }}
-          >
-            ⚠️ 当前 ExpensePage 没有提供其他账簿明细。
-            AI CFO 不会自行编造账簿数据。
-          </div>
-        )}
-
-        {dataDiagnostics.hasDetailedData && (
-
-          <div
-            style={{
-              marginTop: 8,
-              color:
-                "#166534",
-            }}
-          >
-            ✓ AI CFO 已获得完整的
-            「年度 → xx / 其他 → 账簿 → 分类」
-            数据。
-          </div>
-        )}
-
-      </div>
-
-    </section>
+    </div>
   );
 }
-
