@@ -7,16 +7,25 @@
 // 1. 判断中国 / 美国 / 香港 / 卢森堡各自交易日
 // 2. 只在对应市场有新交易数据时更新
 // 3. 中国基金 → CNY
-// 4. US / HK / LU → USD × USD/CNY → CNY
-// 5. 更新 holdings
-// 6. 每次运行后写入 holdings_history
-// 7. holdings_history 按 snapshot_date + code 防止重复
-// 8. 更新 asset_history
-// 9. WELAB_GOLD / HK_CASH 跳过
-// 10. shares = 0 的资产允许正常更新
-// 11. 每次 Cron 执行写入 cron_logs
-// 12. 记录 running / success / failed
-// 13. 记录更新数量、失败数量、跳过数量、耗时、错误
+// 4. 非大陆资产：
+//      NAV × shares
+//        ↓
+//      holding_native_currency.native_amount
+//        ↓
+//      native currency → CNY
+//        ↓
+//      holdings
+// 5. native_cost 不随市场价格变化
+// 6. holdings.cost 根据 native_cost × 最新 FX 重新计算
+// 7. 更新 holdings
+// 8. 每次运行后写入 holdings_history
+// 9. holdings_history 按 snapshot_date + code 防止重复
+// 10. 更新 asset_history
+// 11. WELAB_GOLD / HK_CASH 跳过
+// 12. shares = 0 的资产允许正常更新
+// 13. 每次 Cron 执行写入 cron_logs
+// 14. 记录 running / success / failed
+// 15. 记录更新数量、失败数量、跳过数量、耗时、错误
 //
 // 注意：
 // 本文件只能运行在服务器端
@@ -44,6 +53,8 @@ import {
 import {
   getFinancialFreedomLoans,
 } from "@/lib/loan";
+
+
 // =====================================================
 // Runtime
 // =====================================================
@@ -91,6 +102,42 @@ type Holding = {
   updated_at?: string | null;
 
   snapshot_date?: string | null;
+
+};
+
+
+type NativeHolding = {
+
+  id: number;
+
+  holding_id: number;
+
+  native_currency: string;
+
+  native_cost: number | null;
+
+  native_amount: number | null;
+
+  updated_at?: string | null;
+
+};
+
+
+type FxExchange = {
+
+  id?: number;
+
+  from_currency: string;
+
+  to_currency: string;
+
+  from_amount: number;
+
+  to_amount: number;
+
+  exchange_date: string;
+
+  created_at?: string | null;
 
 };
 
@@ -181,8 +228,6 @@ function isWeekend(
 //
 // 专门用于服务器端历史数据写入
 // 以及 Cron 日志写入。
-//
-// 不要放到客户端。
 // =====================================================
 
 function getAdminSupabase() {
@@ -239,9 +284,328 @@ function getAdminSupabase() {
 
 
 // =====================================================
-// Cron Log
+// 获取最新 Native → CNY 汇率
 //
-// 用于确认 Vercel Cron 是否真正执行。
+// 规则：
+// 1. CNY = 1
+// 2. 直接：USD → CNY / HKD → CNY
+// 3. 反向：CNY → USD / CNY → HKD
+//
+// 注意：
+// fx_exchanges 已经按照 exchange_date DESC
+// + created_at DESC 排序。
+//
+// 本函数接收已经查询好的 exchanges，
+// 避免每个 holding 重复查询数据库。
+// =====================================================
+
+function getNativeToCnyRate(
+  nativeCurrency: string,
+  exchanges: FxExchange[]
+): number | null {
+
+  const currency =
+    String(
+      nativeCurrency ?? ""
+    )
+      .trim()
+      .toUpperCase();
+
+
+  if (
+    !currency
+  ) {
+
+    return null;
+
+  }
+
+
+  // ===================================================
+  // CNY → CNY
+  // ===================================================
+
+  if (
+    currency === "CNY"
+  ) {
+
+    return 1;
+
+  }
+
+
+  // ===================================================
+  // 直接：
+  //
+  // native → CNY
+  //
+  // 例如：
+  // USD → CNY
+  // HKD → CNY
+  // ===================================================
+
+  const direct =
+    exchanges.find(
+      (
+        item
+      ) => {
+
+        const from =
+          String(
+            item?.from_currency ?? ""
+          )
+            .trim()
+            .toUpperCase();
+
+        const to =
+          String(
+            item?.to_currency ?? ""
+          )
+            .trim()
+            .toUpperCase();
+
+        const fromAmount =
+          Number(
+            item?.from_amount
+          );
+
+        const toAmount =
+          Number(
+            item?.to_amount
+          );
+
+        return (
+          from === currency &&
+          to === "CNY" &&
+          Number.isFinite(
+            fromAmount
+          ) &&
+          fromAmount > 0 &&
+          Number.isFinite(
+            toAmount
+          ) &&
+          toAmount > 0
+        );
+
+      }
+    );
+
+
+  if (
+    direct
+  ) {
+
+    return (
+      Number(
+        direct.to_amount
+      ) /
+      Number(
+        direct.from_amount
+      )
+    );
+
+  }
+
+
+  // ===================================================
+  // 反向：
+  //
+  // CNY → native
+  //
+  // 例如：
+  // CNY → USD
+  // CNY → HKD
+  // ===================================================
+
+  const reverse =
+    exchanges.find(
+      (
+        item
+      ) => {
+
+        const from =
+          String(
+            item?.from_currency ?? ""
+          )
+            .trim()
+            .toUpperCase();
+
+        const to =
+          String(
+            item?.to_currency ?? ""
+          )
+            .trim()
+            .toUpperCase();
+
+        const fromAmount =
+          Number(
+            item?.from_amount
+          );
+
+        const toAmount =
+          Number(
+            item?.to_amount
+          );
+
+        return (
+          from === "CNY" &&
+          to === currency &&
+          Number.isFinite(
+            fromAmount
+          ) &&
+          fromAmount > 0 &&
+          Number.isFinite(
+            toAmount
+          ) &&
+          toAmount > 0
+        );
+
+      }
+    );
+
+
+  if (
+    reverse
+  ) {
+
+    return (
+      Number(
+        reverse.from_amount
+      ) /
+      Number(
+        reverse.to_amount
+      )
+    );
+
+  }
+
+
+  return null;
+
+}
+
+
+// =====================================================
+// 获取全部 FX
+//
+// 一次查询。
+// 不要在 holding 循环里面重复查询。
+// =====================================================
+
+async function getFxExchanges(): Promise<FxExchange[]> {
+
+  const {
+    data,
+    error,
+  } =
+    await supabase
+
+      .from(
+        "fx_exchanges"
+      )
+
+      .select(
+        "*"
+      )
+
+      .order(
+        "exchange_date",
+        {
+          ascending: false,
+        }
+      )
+
+      .order(
+        "created_at",
+        {
+          ascending: false,
+        }
+      );
+
+
+  if (
+    error
+  ) {
+
+    throw new Error(
+      `获取 fx_exchanges 失败：${error.message}`
+    );
+
+  }
+
+
+  return (
+    Array.isArray(
+      data
+    )
+      ? (
+          data as FxExchange[]
+        )
+      : []
+  );
+
+}
+
+
+// =====================================================
+// 获取 Holding Native Currency
+//
+// 非大陆资产必须存在 native row。
+// =====================================================
+
+async function getNativeHolding(
+  holdingId: number
+): Promise<NativeHolding | null> {
+
+  const {
+    data,
+    error,
+  } =
+    await supabase
+
+      .from(
+        "holding_native_currency"
+      )
+
+      .select(
+        "id, holding_id, native_currency, native_cost, native_amount, updated_at"
+      )
+
+      .eq(
+        "holding_id",
+        holdingId
+      )
+
+      .maybeSingle();
+
+
+  if (
+    error
+  ) {
+
+    throw new Error(
+      `获取 holding_native_currency 失败：${error.message}`
+    );
+
+  }
+
+
+  if (
+    !data
+  ) {
+
+    return null;
+
+  }
+
+
+  return data as NativeHolding;
+
+}
+
+
+// =====================================================
+// Cron Log
 // =====================================================
 
 async function startCronLog() {
@@ -847,25 +1211,14 @@ function getHoldingMarket(
 
 
 // =====================================================
-// USD → CNY
+// 中国资产 CNY 市值
 //
-// 中国资产：
-// shares × nav
-//
-// 海外资产：
-// shares × nav × USD/CNY
-//
-// 特别注意：
-// shares = 0 是合法状态。
-// 此时 amount = 0。
-// 不应该把它当成更新失败。
+// shares × NAV
 // =====================================================
 
-function calculateAmountCny(
+function calculateChinaAmountCny(
   holding: Holding,
-  nav: number,
-  usdCny: number,
-  market: string
+  nav: number
 ): number {
 
   const shares =
@@ -873,13 +1226,6 @@ function calculateAmountCny(
       holding?.shares
     );
 
-
-  // ===================================================
-  // 非法 shares
-  //
-  // shares < 0 才是非法。
-  // shares = 0 是合法的。
-  // ===================================================
 
   if (
     shares < 0
@@ -890,10 +1236,6 @@ function calculateAmountCny(
   }
 
 
-  // ===================================================
-  // NAV 无效
-  // ===================================================
-
   if (
     nav <= 0
   ) {
@@ -902,14 +1244,6 @@ function calculateAmountCny(
 
   }
 
-
-  // ===================================================
-  // 没有持仓
-  //
-  // 这是合法状态。
-  // 返回 0。
-  // 上层不会再因为 amount = 0 判定失败。
-  // ===================================================
 
   if (
     shares === 0
@@ -920,39 +1254,67 @@ function calculateAmountCny(
   }
 
 
-  // ===================================================
-  // 原始市值
-  // ===================================================
-
-  const rawAmount =
+  return (
     shares *
-    nav;
+    nav
+  );
+
+}
 
 
-  // ===================================================
-  // 中国资产
-  //
-  // NAV 本身就是 CNY。
-  // ===================================================
+// =====================================================
+// Native 市值
+//
+// 非大陆资产：
+//
+// shares × native NAV
+//
+// 注意：
+// 这里不乘 USD/CNY。
+// native_amount 必须保持本币。
+// =====================================================
+
+function calculateNativeAmount(
+  holding: Holding,
+  nav: number
+): number {
+
+  const shares =
+    toNumber(
+      holding?.shares
+    );
+
 
   if (
-    market === "china"
+    shares < 0
   ) {
 
-    return rawAmount;
+    return 0;
 
   }
 
 
-  // ===================================================
-  // 海外资产
-  //
-  // USD × USD/CNY
-  // ===================================================
+  if (
+    nav <= 0
+  ) {
+
+    return 0;
+
+  }
+
+
+  if (
+    shares === 0
+  ) {
+
+    return 0;
+
+  }
+
 
   return (
-    rawAmount *
-    usdCny
+    shares *
+    nav
   );
 
 }
@@ -1012,13 +1374,7 @@ function calculateProfitRate(
 //
 // 判断：snapshot_date + code
 //
-// 注意：
 // 保存全部 holdings。
-// 包括：
-// - 正常更新资产
-// - shares = 0 的资产
-// - 特殊资产
-// - 没有当天价格但数据库已有值的资产
 // =====================================================
 
 async function saveHoldingsHistory(
@@ -1032,10 +1388,6 @@ async function saveHoldingsHistory(
 
   let failed = 0;
 
-
-  // ===================================================
-  // 获取后台 Client
-  // ===================================================
 
   let adminSupabase;
 
@@ -1083,10 +1435,6 @@ async function saveHoldingsHistory(
   const errors:
     any[] = [];
 
-
-  // ===================================================
-  // 一个一个处理
-  // ===================================================
 
   for (
     const holding of holdings
@@ -1877,6 +2225,10 @@ export async function GET(
 
     // ===================================================
     // USD/CNY
+    //
+    // 保留原来的逻辑。
+    //
+    // asset_history 继续记录 USD/CNY。
     // ===================================================
 
     const usdCny =
@@ -2021,6 +2373,75 @@ export async function GET(
             holdingsData as Holding[]
           )
         : [];
+
+
+    // ===================================================
+    // 获取全部 FX
+    //
+    // 非大陆资产会使用这里的 FX。
+    //
+    // 一次查询，整个 Cron 共用。
+    // ===================================================
+
+    let fxExchanges:
+      FxExchange[] = [];
+
+
+    try {
+
+      fxExchanges =
+        await getFxExchanges();
+
+    } catch (
+      error: any
+    ) {
+
+      await finishCronLog(
+
+        cronLogId,
+
+        {
+
+          status:
+            "failed",
+
+          startedAt,
+
+          message:
+            "获取 fx_exchanges 失败",
+
+          error:
+            error?.message ??
+            String(error),
+
+        }
+
+      );
+
+
+      return NextResponse.json(
+
+        {
+
+          success:
+            false,
+
+          error:
+            error?.message ??
+            String(error),
+
+        },
+
+        {
+
+          status:
+            500,
+
+        }
+
+      );
+
+    }
 
 
     // ===================================================
@@ -2169,14 +2590,6 @@ export async function GET(
 
         // =================================================
         // 价格无效
-        //
-        // 注意：
-        // 这里判断的是 NAV。
-        // 不能判断 amount。
-        //
-        // shares = 0：
-        // amount = 0
-        // 这是合法的。
         // =================================================
 
         if (
@@ -2232,7 +2645,6 @@ export async function GET(
         // 非法 shares
         //
         // shares = 0 是合法的。
-        // shares < 0 才是非法。
         // =================================================
 
         if (
@@ -2275,58 +2687,523 @@ export async function GET(
 
 
         // =================================================
-        // CNY 市值
+        // 中国资产
         //
-        // shares = 0 时：
-        // amount = 0
-        //
-        // 不再因为 amount = 0 判定失败。
+        // NAV 本身就是 CNY。
         // =================================================
 
-        const amount =
-          calculateAmountCny(
+        if (
+          market === "china"
+        ) {
 
-            holding,
+          const amount =
+            calculateChinaAmountCny(
+              holding,
+              nav
+            );
+
+
+          const cost =
+            toNumber(
+              holding.cost
+            );
+
+
+          const profit =
+            calculateProfit(
+              Math.round(
+                amount
+              ),
+              Math.round(
+                cost
+              )
+            );
+
+
+          const profitRate =
+            calculateProfitRate(
+              profit,
+              Math.round(
+                cost
+              )
+            );
+
+
+          const updateTime =
+            new Date()
+              .toISOString();
+
+
+          const {
+            error:
+              updateError,
+          } =
+            await supabase
+
+              .from(
+                "holdings"
+              )
+
+              .update({
+
+                amount:
+                  Math.round(
+                    amount
+                  ),
+
+                profit:
+                  Math.round(
+                    profit
+                  ),
+
+                profit_rate:
+                  profitRate,
+
+                nav,
+
+                currency:
+                  "CNY",
+
+                updated_at:
+                  updateTime,
+
+              })
+
+              .eq(
+                "id",
+                holding.id
+              );
+
+
+          if (
+            updateError
+          ) {
+
+            failed++;
+
+
+            results.push({
+
+              id:
+                holding.id,
+
+              code,
+
+              name:
+                holding.name,
+
+              source,
+
+              market,
+
+              status:
+                "failed",
+
+              reason:
+                updateError.message,
+
+            });
+
+
+            continue;
+
+          }
+
+
+          updated++;
+
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "updated",
 
             nav,
 
-            usdCny,
+            amount:
+              Math.round(
+                amount
+              ),
 
-            market
+            cost:
+              Math.round(
+                cost
+              ),
 
+            profit:
+              Math.round(
+                profit
+              ),
+
+            profit_rate:
+              profitRate,
+
+            currency:
+              "CNY",
+
+            shares,
+
+            updated_at:
+              updateTime,
+
+          });
+
+
+          continue;
+
+        }
+
+
+        // =================================================
+        // 非大陆资产
+        //
+        // 关键逻辑：
+        //
+        // shares × NAV
+        //        ↓
+        // native_amount
+        //
+        // native_amount × FX
+        //        ↓
+        // CNY amount
+        // =================================================
+
+        const nativeHolding =
+          await getNativeHolding(
+            holding.id
           );
 
 
         // =================================================
-        // 成本
+        // native row 不存在
+        //
+        // 不从 holdings.amount 反推 native。
+        //
+        // 因为 native 是非大陆资产的 source of truth。
         // =================================================
 
-        const cost =
+        if (
+          !nativeHolding
+        ) {
+
+          failed++;
+
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              "非大陆资产缺少 holding_native_currency 记录",
+
+          });
+
+
+          continue;
+
+        }
+
+
+        // =================================================
+        // Native Currency
+        // =================================================
+
+        const nativeCurrency =
+          String(
+            nativeHolding.native_currency ??
+            ""
+          )
+            .trim()
+            .toUpperCase();
+
+
+        if (
+          !nativeCurrency
+        ) {
+
+          failed++;
+
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              "native_currency 为空",
+
+          });
+
+
+          continue;
+
+        }
+
+
+        // =================================================
+        // Native amount
+        //
+        // shares × native NAV
+        //
+        // 例如：
+        //
+        // USD ETF
+        // shares = 100
+        // NAV = 650
+        //
+        // native_amount = 65000 USD
+        // =================================================
+
+        const nativeAmount =
+          calculateNativeAmount(
+            holding,
+            nav
+          );
+
+
+        // =================================================
+        // Native cost
+        //
+        // 每天不重新计算。
+        //
+        // 直接读取 native table。
+        // =================================================
+
+        const nativeCost =
           toNumber(
-            holding.cost
+            nativeHolding.native_cost
           );
 
 
         // =================================================
-        // 收益
+        // Native → CNY FX
+        //
+        // 使用已经一次性获取的 fxExchanges。
+        // =================================================
+
+        const nativeToCnyRate =
+          getNativeToCnyRate(
+            nativeCurrency,
+            fxExchanges
+          );
+
+
+        if (
+          nativeToCnyRate === null ||
+          !Number.isFinite(
+            nativeToCnyRate
+          ) ||
+          nativeToCnyRate <= 0
+        ) {
+
+          failed++;
+
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              `无法获取 ${nativeCurrency} → CNY 汇率`,
+
+            native_currency:
+              nativeCurrency,
+
+          });
+
+
+          continue;
+
+        }
+
+
+        // =================================================
+        // CNY amount
+        //
+        // holdings.amount 必须保持 INT。
+        // =================================================
+
+        const amountCny =
+          Math.round(
+            nativeAmount *
+            nativeToCnyRate
+          );
+
+
+        // =================================================
+        // CNY cost
+        //
+        // native_cost 是 source of truth。
+        //
+        // 每天按照当前 FX 转成 CNY。
+        // =================================================
+
+        const costCny =
+          Math.round(
+            nativeCost *
+            nativeToCnyRate
+          );
+
+
+        // =================================================
+        // Profit
         // =================================================
 
         const profit =
           calculateProfit(
-            amount,
-            cost
+            amountCny,
+            costCny
           );
 
 
         const profitRate =
           calculateProfitRate(
             profit,
-            cost
+            costCny
           );
 
 
+        const updateTime =
+          new Date()
+            .toISOString();
+
+
         // =================================================
-        // 更新 holdings
+        // 1. 更新 native table
+        //
+        // native_currency 不改变
+        // native_cost 不改变
+        // native_amount 更新
+        //
+        // 注意：
+        // shares = 0 时 nativeAmount = 0，
+        // 这里依然正常更新。
+        // =================================================
+
+        const {
+          error:
+            nativeUpdateError,
+        } =
+          await supabase
+
+            .from(
+              "holding_native_currency"
+            )
+
+            .update({
+
+              native_amount:
+                nativeAmount,
+
+              updated_at:
+                updateTime,
+
+            })
+
+            .eq(
+              "holding_id",
+              holding.id
+            );
+
+
+        if (
+          nativeUpdateError
+        ) {
+
+          failed++;
+
+
+          results.push({
+
+            id:
+              holding.id,
+
+            code,
+
+            name:
+              holding.name,
+
+            source,
+
+            market,
+
+            status:
+              "failed",
+
+            reason:
+              `更新 holding_native_currency 失败：${nativeUpdateError.message}`,
+
+            native_currency:
+              nativeCurrency,
+
+            native_amount:
+              nativeAmount,
+
+          });
+
+
+          continue;
+
+        }
+
+
+        // =================================================
+        // 2. 更新 holdings
+        //
+        // amount / cost / profit / profit_rate
+        // 全部保持 CNY。
+        //
+        // amount / cost / profit 是 INT。
         // =================================================
 
         const {
@@ -2342,9 +3219,10 @@ export async function GET(
             .update({
 
               amount:
-                Math.round(
-                  amount
-                ),
+                amountCny,
+
+              cost:
+                costCny,
 
               profit:
                 Math.round(
@@ -2360,8 +3238,7 @@ export async function GET(
                 "CNY",
 
               updated_at:
-                new Date()
-                  .toISOString(),
+                updateTime,
 
             })
 
@@ -2396,7 +3273,19 @@ export async function GET(
               "failed",
 
             reason:
-              updateError.message,
+              `更新 holdings 失败：${updateError.message}`,
+
+            native_currency:
+              nativeCurrency,
+
+            native_amount:
+              nativeAmount,
+
+            native_cost:
+              nativeCost,
+
+            fx:
+              nativeToCnyRate,
 
           });
 
@@ -2432,15 +3321,25 @@ export async function GET(
 
           nav,
 
+          shares,
+
+          native_currency:
+            nativeCurrency,
+
+          native_amount:
+            nativeAmount,
+
+          native_cost:
+            nativeCost,
+
+          native_to_cny:
+            nativeToCnyRate,
+
           amount:
-            Math.round(
-              amount
-            ),
+            amountCny,
 
           cost:
-            Math.round(
-              cost
-            ),
+            costCny,
 
           profit:
             Math.round(
@@ -2453,11 +3352,8 @@ export async function GET(
           currency:
             "CNY",
 
-          shares,
-
           updated_at:
-            new Date()
-              .toISOString(),
+            updateTime,
 
         });
 
@@ -2579,7 +3475,6 @@ export async function GET(
     // holdings_history
     //
     // 保存全部 holdings。
-    // 与原来的 Python 行为保持一致。
     // ===================================================
 
     let holdingsHistoryInserted =
@@ -2645,13 +3540,13 @@ export async function GET(
 
 
     assetHistoryResult =
-    await saveAssetHistory(
+      await saveAssetHistory(
 
-    snapshotDate,
+        snapshotDate,
 
-    usdCny
+        usdCny
 
-    );
+      );
 
 
     // ===================================================
@@ -2659,11 +3554,14 @@ export async function GET(
     // ===================================================
 
     let financialFreedomResult: {
-          success: boolean;
-          error?: string;
-        } = {
-          success: false,
-        };
+      success: boolean;
+      error?: string;
+    } = {
+
+      success:
+        false,
+
+    };
 
 
     // ===================================================
@@ -2694,7 +3592,7 @@ export async function GET(
       totalAsset +=
         amount;
 
-        
+
       const market =
         String(
           item?.market ??
@@ -2722,300 +3620,308 @@ export async function GET(
 
     }
 
+
     // ===================================================
-// Financial Freedom History
-// ===================================================
+    // Financial Freedom History
+    // ===================================================
 
-console.log(
-  "before financial freedom",
-  {
-    updated,
-    totalAsset
-  }
-);
-
-
-if (
-  updated >= 0
-) {
-
-
-  // =================================================
-  // 1. 固收资产
-  // =================================================
-
-  const {
-    data: fixedIncomeData,
-    error: fixedIncomeError,
-  } =
-    await supabase
-      .from(
-        "fixed_income_assets"
-      )
-      .select(
-        "amount"
-      );
-
-
-  if (
-    fixedIncomeError
-  ) {
-
-    console.error(
-      "Financial Freedom fixed income error:",
-      fixedIncomeError
+    console.log(
+      "before financial freedom",
+      {
+        updated,
+        totalAsset,
+      }
     );
 
-  }
 
+    if (
+      updated >= 0
+    ) {
 
-  const fixedIncomeSum =
-    (
-      Array.isArray(
-        fixedIncomeData
-      )
-        ? fixedIncomeData
-        : []
-    )
-    .reduce(
-      (
-        sum:number,
-        item:any
-      ) => {
+      // =================================================
+      // 1. 固收资产
+      // =================================================
 
-        return (
-          sum +
-          Number(
-            item?.amount || 0
+      const {
+        data: fixedIncomeData,
+        error: fixedIncomeError,
+      } =
+        await supabase
+
+          .from(
+            "fixed_income_assets"
           )
+
+          .select(
+            "amount"
+          );
+
+
+      if (
+        fixedIncomeError
+      ) {
+
+        console.error(
+          "Financial Freedom fixed income error:",
+          fixedIncomeError
         );
 
-      },
-      0
-    );
+      }
 
 
+      const fixedIncomeSum =
+        (
+          Array.isArray(
+            fixedIncomeData
+          )
+            ? fixedIncomeData
+            : []
+        )
+        .reduce(
+          (
+            sum: number,
+            item: any
+          ) => {
 
-  // =================================================
-  // 2. Financial Freedom 贷款
-  // =================================================
+            return (
+              sum +
+              Number(
+                item?.amount || 0
+              )
+            );
 
-  // =================================================
-// 2. Financial Freedom 贷款
-// =================================================
-
-const loanData =
-  await getFinancialFreedomLoans();
-
-console.log(
-  "Financial Freedom loan data:",
-  loanData
-);
-
-const financialFreedomLoan =
-  (
-    Array.isArray(
-      loanData
-    )
-      ? loanData
-      : []
-  )
-  .reduce(
-    (
-      sum:number,
-      loan:any
-    ) => {
-
-
-      const remaining =
-        Number(
-          loan?.remaining_amount ??
-          loan?.balance ??
-          loan?.amount ??
+          },
           0
         );
 
 
-      return (
-        sum +
+      // =================================================
+      // 2. Financial Freedom 贷款
+      // =================================================
+
+      const loanData =
+        await getFinancialFreedomLoans();
+
+
+      console.log(
+        "Financial Freedom loan data:",
+        loanData
+      );
+
+
+      const financialFreedomLoan =
         (
-          Number.isFinite(
-            remaining
+          Array.isArray(
+            loanData
           )
-            ? remaining
-            : 0
+            ? loanData
+            : []
         )
-      );
+        .reduce(
+          (
+            sum: number,
+            loan: any
+          ) => {
+
+            const remaining =
+              Number(
+                loan?.remaining_amount ??
+                loan?.balance ??
+                loan?.amount ??
+                0
+              );
 
 
-    },
-    0
-  );
+            return (
+              sum +
+              (
+                Number.isFinite(
+                  remaining
+                )
+                  ? remaining
+                  : 0
+              )
+            );
 
- 
-
-
- 
-
-
-
-  // =================================================
-  // 3. 当前家庭净资产
-  // =================================================
-
-  const familyNetAsset =
-    totalAsset
-    +
-    fixedIncomeSum
-    -
-    financialFreedomLoan;
+          },
+          0
+        );
 
 
+      // =================================================
+      // 3. 当前家庭净资产
+      // =================================================
 
-  // =================================================
-  // 4. 当前财务自由目标
-  //
-  // 2027 - 2041
-  //
-  // 与 FinancialFreedomPage 保持一致
-  // =================================================
-
-  const BASE_EXPENSE_CRON:any = {
-
-    2027:370000,
-    2028:370000,
-    2029:370000,
-    2030:370000,
-    2031:370000,
-
-    2032:320000,
-    2033:320000,
-    2034:320000,
-    2035:320000,
-    2036:320000,
-    2037:320000,
-    2038:320000,
-    2039:320000,
-    2040:320000,
-    2041:320000,
-    2042:320000,
-
-  };
+      const familyNetAsset =
+        totalAsset
+        +
+        fixedIncomeSum
+        -
+        financialFreedomLoan;
 
 
-  const freedomTarget =
-    Object
-      .entries(
-        BASE_EXPENSE_CRON
-      )
-      .filter(
-        ([year]) =>
-          Number(year) >= 2027 &&
-          Number(year) <= 2041
-      )
-      .reduce(
-        (
-          sum,
-          [,value]
-        ) =>
-          sum +
-          Number(value),
-        0
-      );
+      // =================================================
+      // 4. 当前财务自由目标
+      //
+      // 2027 - 2041
+      // =================================================
+
+      const BASE_EXPENSE_CRON: any = {
+
+        2027:
+          370000,
+
+        2028:
+          370000,
+
+        2029:
+          370000,
+
+        2030:
+          370000,
+
+        2031:
+          370000,
+
+        2032:
+          320000,
+
+        2033:
+          320000,
+
+        2034:
+          320000,
+
+        2035:
+          320000,
+
+        2036:
+          320000,
+
+        2037:
+          320000,
+
+        2038:
+          320000,
+
+        2039:
+          320000,
+
+        2040:
+          320000,
+
+        2041:
+          320000,
+
+        2042:
+          320000,
+
+      };
 
 
-
-  // =================================================
-  // 5. 财务自由差额
-  // =================================================
-
-  const freedomGap =
-    Math.max(
-      0,
-      freedomTarget -
-      familyNetAsset
-    );
-
-
-  // =================================================
-  // 6. 财务自由完成率
-  // =================================================
-
-  const freedomRate =
-    freedomTarget > 0
-      ? (
-          familyNetAsset /
-          freedomTarget
-        )
-        *
-        100
-      : 0;
+      const freedomTarget =
+        Object
+          .entries(
+            BASE_EXPENSE_CRON
+          )
+          .filter(
+            ([year]) =>
+              Number(year) >= 2027 &&
+              Number(year) <= 2041
+          )
+          .reduce(
+            (
+              sum,
+              [, value]
+            ) =>
+              sum +
+              Number(value),
+            0
+          );
 
 
+      // =================================================
+      // 5. 财务自由差额
+      // =================================================
 
-  console.log(
-    "Financial Freedom save data:",
-    {
-      snapshotDate,
-
-      totalAsset,
-
-      fixedIncomeSum,
-
-      financialFreedomLoan,
-
-      familyNetAsset,
-
-      freedomTarget,
-
-      freedomGap,
-
-      freedomRate,
-    }
-  );
-
-
-  financialFreedomResult =
-    await saveFinancialFreedomHistory({
-
-      snapshot_date:
-        snapshotDate,
-
-
-      total_asset:
-        Math.round(
+      const freedomGap =
+        Math.max(
+          0,
+          freedomTarget -
           familyNetAsset
-        ),
+        );
 
 
-      freedom_target:
-        Math.round(
-          freedomTarget
-        ),
+      // =================================================
+      // 6. 财务自由完成率
+      // =================================================
+
+      const freedomRate =
+        freedomTarget > 0
+          ? (
+              familyNetAsset /
+              freedomTarget
+            )
+            *
+            100
+          : 0;
 
 
-      freedom_gap:
-        Math.round(
-          freedomGap
-        ),
+      console.log(
+        "Financial Freedom save data:",
+        {
+
+          snapshotDate,
+
+          totalAsset,
+
+          fixedIncomeSum,
+
+          financialFreedomLoan,
+
+          familyNetAsset,
+
+          freedomTarget,
+
+          freedomGap,
+
+          freedomRate,
+
+        }
+      );
 
 
-      freedom_rate:
-        freedomRate,
+      financialFreedomResult =
+        await saveFinancialFreedomHistory({
 
-    });
+          snapshot_date:
+            snapshotDate,
 
+          total_asset:
+            Math.round(
+              familyNetAsset
+            ),
 
-}
+          freedom_target:
+            Math.round(
+              freedomTarget
+            ),
+
+          freedom_gap:
+            Math.round(
+              freedomGap
+            ),
+
+          freedom_rate:
+            freedomRate,
+
+        });
+
+    }
+
 
     // ===================================================
     // 最终 Success
-    //
-    // 注意：
-    // TEST2 失败时 success = false
-    // 这是正确行为。
-    //
-    // GLD shares = 0 不会导致 failed。
     // ===================================================
 
     const success =
@@ -3026,8 +3932,6 @@ const financialFreedomLoan =
 
     // ===================================================
     // Cron Log
-    //
-    // 正常结束后写入最终结果。
     // ===================================================
 
     await finishCronLog(
