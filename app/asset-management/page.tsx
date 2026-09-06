@@ -5036,7 +5036,7 @@ function AssetRegionTable({
                       "
                     >
                       {formatNumber(
-                        item.shares
+                        item.shares,2
                       )}
                     </td>
 
@@ -5050,7 +5050,7 @@ function AssetRegionTable({
                       "
                     >
                       {formatNumber(
-                        item.nav
+                        item.nav,2
                       )}
                     </td>
 
