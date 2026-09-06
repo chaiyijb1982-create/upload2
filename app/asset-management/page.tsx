@@ -8,6 +8,9 @@ import {
 
 import { supabase } from "@/lib/supabase";
 
+import {
+  getFxExchanges,
+} from "@/lib/fx-exchanges";
 
 // =====================================================
 // 类型
@@ -22,6 +25,8 @@ type SortKey =
   | "nav"
   | "amount"
   | "cost"
+  | "native_amount"
+  | "native_cost"
   | "profit"
   | "profit_rate";
 
@@ -33,7 +38,6 @@ type SortState = {
 };
 
 type Holding = {
-
   id: number;
 
   code: string;
@@ -64,97 +68,165 @@ type Holding = {
 
   active: boolean;
 
-  // ===================================================
-  // 是否停止自动更新
-  //
-  // false = 正常每天更新
-  // true  = 每天跳过
-  // ===================================================
-
   skip_update: boolean;
 
-};
+  native_currency?: string | null;
 
+  native_cost?: number | null;
+
+  native_amount?: number | null;
+};
 
 // =====================================================
 // 空表单
 // =====================================================
 
 const emptyForm = {
-
   code: "",
-
   name: "",
-
   market: "",
-
   category: "",
-
   amount: "",
-
   cost: "",
-
   profit: "",
-
   profit_rate: "",
-
   currency: "",
-
   nav: "",
-
   shares: "",
-
   platform: "",
 
+  native_currency: "USD",
+  native_cost: "",
+  native_amount: "",
 };
-
 
 // =====================================================
 // 下拉选项
 // =====================================================
 
 const MARKET_OPTIONS = [
-
   "CN",
-
   "HK",
-
   "US",
-
   "GLOBAL",
-
 ];
-
 
 const CATEGORY_OPTIONS = [
-
   "fixed_income",
-
   "global_stock",
-
   "china_stock",
-
   "gold",
-
 ];
-
 
 const CURRENCY_OPTIONS = [
-
   "CNY",
-
   "USD",
-
   "HKD",
-
   "EUR",
-
   "GBP",
-
   "JPY",
-
 ];
 
+// =====================================================
+// 本币金额格式
+//
+// 始终 2 位小数
+// =====================================================
+
+function formatNativeMoney(value: any) {
+  const n = Number(value);
+
+  if (!Number.isFinite(n)) {
+    return "—";
+  }
+
+  return n.toLocaleString(
+    "zh-CN",
+    {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }
+  );
+}
+
+// =====================================================
+// 获取 本币 → CNY 汇率
+// =====================================================
+
+async function getNativeToCnyRate(
+  nativeCurrency: string
+): Promise<number | null> {
+
+  const currency =
+    nativeCurrency
+      .trim()
+      .toUpperCase();
+
+  // ===================================================
+  // CNY
+  // ===================================================
+
+  if (currency === "CNY") {
+    return 1;
+  }
+
+  const exchanges =
+    await getFxExchanges();
+
+  // ===================================================
+  // Native → CNY
+  // ===================================================
+
+  const direct =
+    exchanges.find(
+      item =>
+        item.from_currency
+          .trim()
+          .toUpperCase() === currency &&
+        item.to_currency
+          .trim()
+          .toUpperCase() === "CNY" &&
+        Number(item.from_amount) > 0 &&
+        Number(item.to_amount) > 0
+    );
+
+  if (direct) {
+
+    return (
+      Number(direct.to_amount) /
+      Number(direct.from_amount)
+    );
+
+  }
+
+  // ===================================================
+  // CNY → Native
+  // ===================================================
+
+  const reverse =
+    exchanges.find(
+      item =>
+        item.from_currency
+          .trim()
+          .toUpperCase() === "CNY" &&
+        item.to_currency
+          .trim()
+          .toUpperCase() === currency &&
+        Number(item.from_amount) > 0 &&
+        Number(item.to_amount) > 0
+    );
+
+  if (reverse) {
+
+    return (
+      Number(reverse.from_amount) /
+      Number(reverse.to_amount)
+    );
+
+  }
+
+  return null;
+}
 
 // =====================================================
 // 工具
@@ -169,9 +241,7 @@ function numberValue(
     value === undefined ||
     value === ""
   ) {
-
     return null;
-
   }
 
   const n =
@@ -180,9 +250,7 @@ function numberValue(
   return Number.isFinite(n)
     ? n
     : null;
-
 }
-
 
 function formatMoney(
   value: any
@@ -192,9 +260,7 @@ function formatMoney(
     Number(value);
 
   if (!Number.isFinite(n)) {
-
     return "—";
-
   }
 
   return n.toLocaleString(
@@ -204,9 +270,7 @@ function formatMoney(
       maximumFractionDigits: 2,
     }
   );
-
 }
-
 
 function formatNumber(
   value: any
@@ -216,9 +280,7 @@ function formatNumber(
     Number(value);
 
   if (!Number.isFinite(n)) {
-
     return "—";
-
   }
 
   return n.toLocaleString(
@@ -228,9 +290,7 @@ function formatNumber(
       maximumFractionDigits: 4,
     }
   );
-
 }
-
 
 function formatPercent(
   value: any
@@ -240,15 +300,11 @@ function formatPercent(
     Number(value);
 
   if (!Number.isFinite(n)) {
-
     return "—";
-
   }
 
   return `${n.toFixed(2)}%`;
-
 }
-
 
 function getProfitClass(
   value: any
@@ -258,28 +314,21 @@ function getProfitClass(
     Number(value);
 
   if (n > 0) {
-
     return "text-emerald-600";
-
   }
 
   if (n < 0) {
-
     return "text-red-500";
-
   }
 
   return "text-gray-500";
-
 }
-
 
 // =====================================================
 // 页面
 // =====================================================
 
 export default function AssetManagementPage() {
-
 
   // ===================================================
   // 数据
@@ -290,7 +339,6 @@ export default function AssetManagementPage() {
     setHoldings,
   ] = useState<Holding[]>([]);
 
-
   // ===================================================
   // 状态
   // ===================================================
@@ -300,38 +348,30 @@ export default function AssetManagementPage() {
     setLoading,
   ] = useState(true);
 
-
   const [
     saving,
     setSaving,
   ] = useState(false);
-
 
   const [
     error,
     setError,
   ] = useState("");
 
-
   const [
     success,
     setSuccess,
   ] = useState("");
-
 
   const [
     modalOpen,
     setModalOpen,
   ] = useState(false);
 
-
   const [
     editingId,
     setEditingId,
-  ] = useState<number | null>(
-    null
-  );
-
+  ] = useState<number | null>(null);
 
   const [
     form,
@@ -340,6 +380,25 @@ export default function AssetManagementPage() {
     emptyForm
   );
 
+  // ===================================================
+  // 编辑非 CN 时使用的当前 FX
+  //
+  // null = 尚未取得汇率
+  // ===================================================
+
+  const [
+    nativeFxRate,
+    setNativeFxRate,
+  ] = useState<number | null>(null);
+
+  // ===================================================
+  // FX 加载状态
+  // ===================================================
+
+  const [
+    nativeFxLoading,
+    setNativeFxLoading,
+  ] = useState(false);
 
   const [
     search,
@@ -347,12 +406,7 @@ export default function AssetManagementPage() {
   ] = useState("");
 
   // ===================================================
-  // 大陆 / 香港分别排序
-  //
-  // Mainland = market === CN
-  // Hong Kong = HK / US / GLOBAL
-  //
-  // 两个区域各自保存排序状态，互不影响
+  // 排序
   // ===================================================
 
   const [
@@ -379,19 +433,29 @@ export default function AssetManagementPage() {
     direction: "desc",
   });
 
-
   // ===================================================
-  // 单独保存停止更新状态时
-  // 防止重复点击
+  // 停止更新状态
   // ===================================================
 
   const [
     updatingSkipId,
     setUpdatingSkipId,
-  ] = useState<number | null>(
-    null
-  );
+  ] = useState<number | null>(null);
 
+  // ===================================================
+  // 当前是否正在编辑非大陆资产
+  //
+  // 注意：
+  //
+  // editingId === null
+  // = 新增
+  //
+  // 所以新增不会触发 disabled
+  // ===================================================
+
+  const isEditingNonMainland =
+    editingId !== null &&
+    form.market?.trim().toUpperCase() !== "CN";
 
   // ===================================================
   // 加载 Holdings
@@ -400,62 +464,119 @@ export default function AssetManagementPage() {
   async function loadHoldings() {
 
     setLoading(true);
-
     setError("");
 
-    const {
-      data,
-      error,
-    } = await supabase
+    const [
+      holdingsResult,
+      nativeResult,
+    ] = await Promise.all([
 
-      .from("holdings")
-
-      .select("*")
-
-      .order(
-        "active",
-        {
+      supabase
+        .from("holdings")
+        .select("*")
+        .order("active", {
           ascending: false,
-        }
-      )
-
-      .order(
-        "amount",
-        {
+        })
+        .order("amount", {
           ascending: false,
           nullsFirst: false,
-        }
-      );
+        }),
 
+      supabase
+        .from("holding_native_currency")
+        .select(
+          "holding_id, native_currency, native_cost, native_amount"
+        ),
+    ]);
 
-    if (error) {
+    if (holdingsResult.error) {
 
       console.error(
         "load holdings error:",
-        error
+        holdingsResult.error
       );
 
       setError(
-        `读取资产失败：${error.message}`
+        `读取资产失败：${holdingsResult.error.message}`
       );
 
       setHoldings([]);
-
       setLoading(false);
 
       return;
+    }
+
+    if (nativeResult.error) {
+
+      console.error(
+        "load holding native currency error:",
+        nativeResult.error
+      );
 
     }
 
+    const nativeMap = new Map<
+      number,
+      {
+        native_currency: string | null;
+        native_cost: number | null;
+        native_amount: number | null;
+      }
+    >();
 
-    setHoldings(
-      (data || []) as Holding[]
-    );
+    for (
+      const row of nativeResult.data ?? []
+    ) {
 
+      nativeMap.set(
+        Number(row.holding_id),
+        {
+          native_currency:
+            row.native_currency ?? null,
+
+          native_cost:
+            row.native_cost == null
+              ? null
+              : Number(row.native_cost),
+
+          native_amount:
+            row.native_amount == null
+              ? null
+              : Number(row.native_amount),
+        }
+      );
+
+    }
+
+    const merged =
+      (holdingsResult.data ?? [])
+        .map(
+          holding => {
+
+            const native =
+              nativeMap.get(
+                Number(holding.id)
+              );
+
+            return {
+              ...holding,
+
+              native_currency:
+                native?.native_currency ?? null,
+
+              native_cost:
+                native?.native_cost ?? null,
+
+              native_amount:
+                native?.native_amount ?? null,
+            };
+
+          }
+        ) as Holding[];
+
+    setHoldings(merged);
     setLoading(false);
-
   }
-
 
   // ===================================================
   // 初始加载
@@ -467,15 +588,259 @@ export default function AssetManagementPage() {
 
   }, []);
 
+  // ===================================================
+  // 编辑非 CN 时：
+  //
+  // 根据 Native Currency 获取当前 FX
+  //
+  // 例如：
+  //
+  // USD → 7.2
+  // HKD → 0.92
+  // CNY → 1
+  // ===================================================
+
+  useEffect(() => {
+
+    let cancelled = false;
+
+    async function loadNativeFx() {
+
+      if (
+        editingId === null ||
+        form.market?.trim().toUpperCase() === "CN"
+      ) {
+
+        setNativeFxRate(null);
+        setNativeFxLoading(false);
+
+        return;
+      }
+
+      const currency =
+        form.native_currency
+          ?.trim()
+          .toUpperCase() || "USD";
+
+      setNativeFxLoading(true);
+      setNativeFxRate(null);
+
+      try {
+
+        const rate =
+          await getNativeToCnyRate(
+            currency
+          );
+
+        if (!cancelled) {
+
+          setNativeFxRate(rate);
+
+        }
+
+      } catch (error) {
+
+        console.error(
+          "load native FX error:",
+          error
+        );
+
+        if (!cancelled) {
+
+          setNativeFxRate(null);
+
+        }
+
+      } finally {
+
+        if (!cancelled) {
+
+          setNativeFxLoading(false);
+
+        }
+
+      }
+
+    }
+
+    loadNativeFx();
+
+    return () => {
+
+      cancelled = true;
+
+    };
+
+  }, [
+    editingId,
+    form.market,
+    form.native_currency,
+  ]);
 
   // ===================================================
-  // 切换停止更新
+  // 编辑非 CN：
   //
-  // false：
-  // 正常每天 UPDATE
+  // Native → CNY 实时计算
   //
-  // true：
-  // 每天 UPDATE 跳过
+  // 这里不修改 form.amount / form.cost，
+  // 而是直接计算显示值。
+  //
+  // 这样可以保证：
+  //
+  // Native 是真正的数据源。
+  // ===================================================
+
+  const calculatedFormValues =
+    useMemo(() => {
+
+      // =================================================
+      // 编辑非 CN
+      // =================================================
+
+      if (isEditingNonMainland) {
+
+        const nativeAmount =
+          numberValue(
+            form.native_amount
+          );
+
+        const nativeCost =
+          numberValue(
+            form.native_cost
+          );
+
+        // -----------------------------------------------
+        // FX 尚未加载
+        // -----------------------------------------------
+
+        if (
+          nativeFxRate == null ||
+          !Number.isFinite(nativeFxRate) ||
+          nativeFxRate <= 0
+        ) {
+
+          return {
+            amount: null,
+            cost: null,
+            profit: null,
+            profitRate: null,
+          };
+
+        }
+
+        // -----------------------------------------------
+        // CNY
+        // -----------------------------------------------
+
+        if (
+          form.native_currency
+            ?.trim()
+            .toUpperCase() === "CNY"
+        ) {
+
+          const amount =
+            nativeAmount == null
+              ? null
+              : Math.round(nativeAmount);
+
+          const cost =
+            nativeCost == null
+              ? null
+              : Math.round(nativeCost);
+
+          const profit =
+            amount != null &&
+            cost != null
+              ? amount - cost
+              : null;
+
+          const profitRate =
+            cost != null &&
+            cost !== 0 &&
+            profit != null
+              ? (profit / cost) * 100
+              : null;
+
+          return {
+            amount,
+            cost,
+            profit,
+            profitRate,
+          };
+
+        }
+
+        // -----------------------------------------------
+        // 其他币种
+        //
+        // Native × FX = CNY
+        // -----------------------------------------------
+
+        const amount =
+          nativeAmount == null
+            ? null
+            : Math.round(
+                nativeAmount *
+                nativeFxRate
+              );
+
+        const cost =
+          nativeCost == null
+            ? null
+            : Math.round(
+                nativeCost *
+                nativeFxRate
+              );
+
+        const profit =
+          amount != null &&
+          cost != null
+            ? amount - cost
+            : null;
+
+        const profitRate =
+          cost != null &&
+          cost !== 0 &&
+          profit != null
+            ? (profit / cost) * 100
+            : null;
+
+        return {
+          amount,
+          cost,
+          profit,
+          profitRate,
+        };
+      }
+
+      // =================================================
+      // CN / 新增
+      //
+      // 完全使用原来的 form
+      // =================================================
+
+      return {
+        amount:
+          numberValue(form.amount),
+
+        cost:
+          numberValue(form.cost),
+
+        profit:
+          numberValue(form.profit),
+
+        profitRate:
+          numberValue(form.profit_rate),
+      };
+
+    }, [
+      form,
+      isEditingNonMainland,
+      nativeFxRate,
+    ]);
+
+  // ===================================================
+  // 停止更新
   // ===================================================
 
   async function toggleSkipUpdate(
@@ -485,29 +850,23 @@ export default function AssetManagementPage() {
     if (
       updatingSkipId !== null
     ) {
-
       return;
-
     }
-
 
     const newValue =
       !Boolean(
         item.skip_update
       );
 
-
     setUpdatingSkipId(
       item.id
     );
 
     setError("");
-
     setSuccess("");
 
-
     // =================================================
-    // 先更新页面状态
+    // 先更新页面
     // =================================================
 
     setHoldings(
@@ -515,50 +874,38 @@ export default function AssetManagementPage() {
         previous.map(
           holding =>
             holding.id === item.id
-
               ? {
                   ...holding,
-
                   skip_update:
                     newValue,
                 }
-
               : holding
         )
     );
 
-
     // =================================================
-    // 保存 Supabase
+    // 保存
     // =================================================
 
     const {
       error,
     } = await supabase
-
       .from("holdings")
-
       .update({
-
         skip_update:
           newValue,
 
         updated_at:
           new Date()
             .toISOString(),
-
       })
-
       .eq(
         "id",
         item.id
       );
 
-
     // =================================================
-    // 保存失败
-    //
-    // 回滚页面状态
+    // 失败回滚
     // =================================================
 
     if (error) {
@@ -568,62 +915,43 @@ export default function AssetManagementPage() {
         error
       );
 
-
       setHoldings(
         previous =>
           previous.map(
             holding =>
               holding.id === item.id
-
                 ? {
                     ...holding,
-
                     skip_update:
                       Boolean(
                         item.skip_update
                       ),
                   }
-
                 : holding
           )
       );
 
-
       setError(
         `停止更新设置失败：${error.message}`
       );
-
 
       setUpdatingSkipId(
         null
       );
 
       return;
-
     }
 
-
-    // =================================================
-    // 成功提示
-    // =================================================
-
     setSuccess(
-
       newValue
-
         ? `${item.name} 已设置为停止自动更新`
-
         : `${item.name} 已恢复自动更新`
-
     );
-
 
     setUpdatingSkipId(
       null
     );
-
   }
-
 
   // ===================================================
   // 当前资产
@@ -638,12 +966,10 @@ export default function AssetManagementPage() {
           .toLowerCase();
 
       return holdings
-
         .filter(
           item =>
             item.active === true
         )
-
         .filter(
           item => {
 
@@ -672,8 +998,7 @@ export default function AssetManagementPage() {
     ]);
 
   // ===================================================
-  // 大陆资产
-  // CN = 中国大陆
+  // 大陆
   // ===================================================
 
   const mainlandHoldings =
@@ -681,20 +1006,19 @@ export default function AssetManagementPage() {
       () =>
         filteredActiveHoldings.filter(
           item =>
-            String(item.market || "")
+            String(
+              item.market || ""
+            )
               .trim()
               .toUpperCase() === "CN"
         ),
-      [filteredActiveHoldings]
+      [
+        filteredActiveHoldings,
+      ]
     );
 
   // ===================================================
-  // 香港资产
-  //
-  // 当前 holdings 没有单独的“账户所在地”字段，
-  // 因此按现有 market 做分组：
-  // CN -> 大陆
-  // HK / US / GLOBAL -> 香港
+  // 香港
   // ===================================================
 
   const hongKongHoldings =
@@ -702,15 +1026,19 @@ export default function AssetManagementPage() {
       () =>
         filteredActiveHoldings.filter(
           item =>
-            String(item.market || "")
+            String(
+              item.market || ""
+            )
               .trim()
               .toUpperCase() !== "CN"
         ),
-      [filteredActiveHoldings]
+      [
+        filteredActiveHoldings,
+      ]
     );
 
   // ===================================================
-  // 排序工具
+  // 排序
   // ===================================================
 
   function compareHolding(
@@ -718,6 +1046,82 @@ export default function AssetManagementPage() {
     b: Holding,
     key: SortKey
   ) {
+
+    // =================================================
+    // Native Amount
+    // =================================================
+
+    if (
+      key === "native_amount"
+    ) {
+
+      const av =
+        numberValue(
+          a.native_amount
+        );
+
+      const bv =
+        numberValue(
+          b.native_amount
+        );
+
+      if (
+        av === null &&
+        bv === null
+      ) {
+        return 0;
+      }
+
+      if (av === null) {
+        return 1;
+      }
+
+      if (bv === null) {
+        return -1;
+      }
+
+      return av - bv;
+    }
+
+    // =================================================
+    // Native Cost
+    // =================================================
+
+    if (
+      key === "native_cost"
+    ) {
+
+      const av =
+        numberValue(
+          a.native_cost
+        );
+
+      const bv =
+        numberValue(
+          b.native_cost
+        );
+
+      if (
+        av === null &&
+        bv === null
+      ) {
+        return 0;
+      }
+
+      if (av === null) {
+        return 1;
+      }
+
+      if (bv === null) {
+        return -1;
+      }
+
+      return av - bv;
+    }
+
+    // =================================================
+    // 数字字段
+    // =================================================
 
     const numericKeys: SortKey[] = [
       "shares",
@@ -728,28 +1132,52 @@ export default function AssetManagementPage() {
       "profit_rate",
     ];
 
-    if (numericKeys.includes(key)) {
+    if (
+      numericKeys.includes(key)
+    ) {
 
       const av =
-        numberValue(a[key]);
+        numberValue(
+          a[key]
+        );
 
       const bv =
-        numberValue(b[key]);
+        numberValue(
+          b[key]
+        );
 
-      // 空值始终排在最后
-      if (av === null && bv === null) return 0;
-      if (av === null) return 1;
-      if (bv === null) return -1;
+      if (
+        av === null &&
+        bv === null
+      ) {
+        return 0;
+      }
+
+      if (av === null) {
+        return 1;
+      }
+
+      if (bv === null) {
+        return -1;
+      }
 
       return av - bv;
     }
 
+    // =================================================
+    // 文本
+    // =================================================
+
     const av =
-      String(a[key] ?? "")
+      String(
+        a[key] ?? ""
+      )
         .toLowerCase();
 
     const bv =
-      String(b[key] ?? "")
+      String(
+        b[key] ?? ""
+      )
         .toLowerCase();
 
     return av.localeCompare(
@@ -816,7 +1244,7 @@ export default function AssetManagementPage() {
     );
 
   // ===================================================
-  // 已停用资产
+  // 已停用
   // ===================================================
 
   const inactiveHoldings =
@@ -829,12 +1257,10 @@ export default function AssetManagementPage() {
 
       const filtered =
         holdings
-
           .filter(
             item =>
               item.active === false
           )
-
           .filter(
             item => {
 
@@ -869,14 +1295,13 @@ export default function AssetManagementPage() {
     ]);
 
   // ===================================================
-  // 当前资产总市值
+  // 总资产
   // ===================================================
 
   const activeTotal =
     useMemo(() => {
 
       return filteredActiveHoldings.reduce(
-
         (
           total,
           item
@@ -885,45 +1310,40 @@ export default function AssetManagementPage() {
           return (
             total +
             Number(
-              item.amount ||
-              0
+              item.amount || 0
             )
           );
 
         },
-
         0
-
       );
 
     }, [
       filteredActiveHoldings,
     ]);
 
-
   // ===================================================
-  // 打开新增
+  // 新增
   // ===================================================
 
   function openAdd() {
 
     setEditingId(null);
 
+    setNativeFxRate(null);
+
     setForm({
       ...emptyForm,
     });
 
     setError("");
-
     setSuccess("");
 
     setModalOpen(true);
-
   }
 
-
   // ===================================================
-  // 打开编辑
+  // 编辑
   // ===================================================
 
   function openEdit(
@@ -934,6 +1354,7 @@ export default function AssetManagementPage() {
       item.id
     );
 
+    setNativeFxRate(null);
 
     setForm({
 
@@ -973,17 +1394,21 @@ export default function AssetManagementPage() {
       platform:
         item.platform ?? "",
 
+      native_currency:
+        item.native_currency ?? "USD",
+
+      native_cost:
+        item.native_cost ?? "",
+
+      native_amount:
+        item.native_amount ?? "",
     });
 
-
     setError("");
-
     setSuccess("");
 
     setModalOpen(true);
-
   }
-
 
   // ===================================================
   // 表单修改
@@ -998,239 +1423,321 @@ export default function AssetManagementPage() {
       (
         previous: any
       ) => ({
-
         ...previous,
-
         [field]:
           value,
-
       })
     );
-
   }
-
 
   // ===================================================
   // 保存
   // ===================================================
 
   async function handleSave(
-    e: React.FormEvent
+    e?: React.FormEvent
   ) {
 
-    e.preventDefault();
-
+    e?.preventDefault();
 
     setError("");
-
     setSuccess("");
-
-
-    // -----------------------------------------------
-    // 基础检查
-    // -----------------------------------------------
-
-    if (
-      !form.code.trim()
-    ) {
-
-      setError(
-        "请输入资产 Code"
-      );
-
-      return;
-
-    }
-
-
-    if (
-      !form.name.trim()
-    ) {
-
-      setError(
-        "请输入资产名称"
-      );
-
-      return;
-
-    }
-
-
-    if (
-      !form.market.trim()
-    ) {
-
-      setError(
-        "请选择 Market"
-      );
-
-      return;
-
-    }
-
-
-    if (
-      !form.category.trim()
-    ) {
-
-      setError(
-        "请选择 Category"
-      );
-
-      return;
-
-    }
-
-
-    if (
-      !form.platform.trim()
-    ) {
-
-      setError(
-        "请输入 Platform"
-      );
-
-      return;
-
-    }
-
-
-    if (
-      !form.currency.trim()
-    ) {
-
-      setError(
-        "请选择 Currency"
-      );
-
-      return;
-
-    }
-
-
     setSaving(true);
-
-
-    // -----------------------------------------------
-    // 数据
-    // -----------------------------------------------
-
-    const payload = {
-
-      code:
-        form.code
-          .trim(),
-
-      name:
-        form.name
-          .trim(),
-
-      market:
-        form.market
-          .trim(),
-
-      category:
-        form.category
-          .trim(),
-
-      amount:
-        numberValue(
-          form.amount
-        ),
-
-      cost:
-        numberValue(
-          form.cost
-        ),
-
-      profit:
-        numberValue(
-          form.profit
-        ),
-
-      profit_rate:
-        numberValue(
-          form.profit_rate
-        ),
-
-      currency:
-        form.currency
-          .trim(),
-
-      nav:
-        numberValue(
-          form.nav
-        ),
-
-      shares:
-        numberValue(
-          form.shares
-        ),
-
-      platform:
-        form.platform
-          .trim(),
-
-    };
-
 
     try {
 
+      const isMainland =
+        form.market
+          ?.trim()
+          .toUpperCase() === "CN";
+
+      const nativeCurrency =
+        form.native_currency
+          ?.trim()
+          .toUpperCase() || "USD";
+
+      // =================================================
+      // 默认使用普通 CNY 字段
+      //
+      // CN / 新增逻辑保持不变
+      // =================================================
+
+      let cnyAmount =
+        numberValue(
+          form.amount
+        );
+
+      let cnyCost =
+        numberValue(
+          form.cost
+        );
+
+      let nativeAmount:
+        number | null = null;
+
+      let nativeCost:
+        number | null = null;
+
+      // =================================================
+      // 非大陆
+      //
+      // Native 是源数据
+      // =================================================
+
+      if (!isMainland) {
+
+        nativeAmount =
+          numberValue(
+            form.native_amount
+          );
+
+        nativeCost =
+          numberValue(
+            form.native_cost
+          );
+
+        if (
+          nativeAmount == null ||
+          nativeCost == null
+        ) {
+
+          setError(
+            "非大陆资产必须填写本币金额和本币成本"
+          );
+
+          return;
+        }
+
+        // =================================================
+        // CNY
+        // =================================================
+
+        if (
+          nativeCurrency === "CNY"
+        ) {
+
+          cnyAmount =
+            Math.round(
+              nativeAmount
+            );
+
+          cnyCost =
+            Math.round(
+              nativeCost
+            );
+
+        }
+
+        // =================================================
+        // 其他币种
+        // =================================================
+
+        else {
+
+          const rate =
+            await getNativeToCnyRate(
+              nativeCurrency
+            );
+
+          if (
+            rate == null ||
+            !Number.isFinite(rate) ||
+            rate <= 0
+          ) {
+
+            setError(
+              `无法获取 ${nativeCurrency}/CNY 汇率`
+            );
+
+            return;
+          }
+
+          cnyAmount =
+            Math.round(
+              nativeAmount *
+              rate
+            );
+
+          cnyCost =
+            Math.round(
+              nativeCost *
+              rate
+            );
+        }
+      }
+
+      // =================================================
+      // Profit
+      //
+      // 永远基于 CNY
+      // =================================================
+
+      const calculatedProfit =
+        cnyAmount != null &&
+        cnyCost != null
+          ? cnyAmount - cnyCost
+          : null;
+
+      const calculatedProfitRate =
+        cnyCost != null &&
+        cnyCost !== 0 &&
+        calculatedProfit != null
+          ? (
+              calculatedProfit /
+              cnyCost
+            ) * 100
+          : null;
+
+      // =================================================
+      // Holdings payload
+      //
+      // amount / cost 最终都是整数 CNY
+      // =================================================
+
+      const payload = {
+
+        code:
+          form.code.trim(),
+
+        name:
+          form.name.trim(),
+
+        market:
+          form.market.trim(),
+
+        category:
+          form.category.trim(),
+
+        amount:
+          cnyAmount,
+
+        cost:
+          cnyCost,
+
+        profit:
+          calculatedProfit,
+
+        profit_rate:
+          calculatedProfitRate,
+
+        currency:
+          form.currency.trim(),
+
+        nav:
+          numberValue(
+            form.nav
+          ),
+
+        shares:
+          numberValue(
+            form.shares
+          ),
+
+        platform:
+          form.platform.trim(),
+      };
 
       // =================================================
       // 编辑
       // =================================================
 
       if (
-        editingId !== null
+        editingId != null
       ) {
 
         const {
-          error,
+          error: holdingError,
         } = await supabase
-
           .from("holdings")
-
           .update({
-
             ...payload,
 
             updated_at:
               new Date()
                 .toISOString(),
-
           })
-
           .eq(
             "id",
             editingId
           );
 
+        if (holdingError) {
+          throw holdingError;
+        }
 
-        if (error) {
+        // =================================================
+        // 非大陆
+        //
+        // 保存 Native 原始值
+        // =================================================
 
-          console.error(
-            "update holding error:",
-            error
-          );
+        if (!isMainland) {
 
-          setError(
-            `保存失败：${error.message}`
-          );
+          const {
+            error: nativeError,
+          } = await supabase
+            .from(
+              "holding_native_currency"
+            )
+            .upsert(
+              {
+                holding_id:
+                  editingId,
 
-          setSaving(false);
+                native_currency:
+                  nativeCurrency,
 
-          return;
+                native_cost:
+                  nativeCost ?? 0,
+
+                native_amount:
+                  nativeAmount ?? 0,
+
+                updated_at:
+                  new Date()
+                    .toISOString(),
+              },
+              {
+                onConflict:
+                  "holding_id",
+              }
+            );
+
+          if (nativeError) {
+            throw nativeError;
+          }
 
         }
 
+        // =================================================
+        // CN
+        //
+        // 删除 Native
+        // =================================================
 
-        setSuccess(
-          "资产修改成功"
-        );
+        else {
+
+          const {
+            error:
+              deleteNativeError,
+          } = await supabase
+            .from(
+              "holding_native_currency"
+            )
+            .delete()
+            .eq(
+              "holding_id",
+              editingId
+            );
+
+          if (
+            deleteNativeError
+          ) {
+            throw deleteNativeError;
+          }
+        }
 
       }
-
 
       // =================================================
       // 新增
@@ -1239,54 +1746,81 @@ export default function AssetManagementPage() {
       else {
 
         const {
-          error,
+          data:
+            insertedHolding,
+          error:
+            holdingError,
         } = await supabase
-
           .from("holdings")
-
           .insert({
-
             ...payload,
 
-            active: true,
+            active:
+              true,
 
-            // =========================================
-            // 新资产默认正常自动更新
-            // =========================================
-
-            skip_update: false,
+            skip_update:
+              false,
 
             updated_at:
               new Date()
                 .toISOString(),
+          })
+          .select("id")
+          .single();
 
-          });
-
-
-        if (error) {
-
-          console.error(
-            "insert holding error:",
-            error
-          );
-
-          setError(
-            `保存失败：${error.message}`
-          );
-
-          setSaving(false);
-
-          return;
-
+        if (holdingError) {
+          throw holdingError;
         }
 
+        if (
+          !insertedHolding
+        ) {
+          throw new Error(
+            "资产创建成功，但没有取得 holding id"
+          );
+        }
 
-        setSuccess(
-          "资产添加成功"
-        );
+        const holdingId =
+          Number(
+            insertedHolding.id
+          );
 
+        // =================================================
+        // 非大陆
+        // =================================================
+
+        if (!isMainland) {
+
+          const {
+            error:
+              nativeError,
+          } = await supabase
+            .from(
+              "holding_native_currency"
+            )
+            .insert({
+              holding_id:
+                holdingId,
+
+              native_currency:
+                nativeCurrency,
+
+              native_cost:
+                nativeCost ?? 0,
+
+              native_amount:
+                nativeAmount ?? 0,
+
+              updated_at:
+                new Date()
+                  .toISOString(),
+            });
+
+          if (nativeError) {
+            throw nativeError;
+          }
+        }
       }
-
 
       // =================================================
       // 重新读取
@@ -1294,41 +1828,42 @@ export default function AssetManagementPage() {
 
       await loadHoldings();
 
-
       setModalOpen(false);
 
       setEditingId(null);
+
+      setNativeFxRate(null);
 
       setForm({
         ...emptyForm,
       });
 
+      setSuccess(
+        editingId != null
+          ? "资产已更新"
+          : "资产已添加"
+      );
 
-    } catch (
-      err: any
-    ) {
+    } catch (error: any) {
 
       console.error(
-        err
+        "save holding error:",
+        error
       );
 
       setError(
-        `保存失败：${
-          err?.message ||
-          "未知错误"
-        }`
+        error?.message ||
+        "保存资产失败"
       );
 
+    } finally {
+
+      setSaving(false);
     }
-
-
-    setSaving(false);
-
   }
 
-
   // ===================================================
-  // 停用资产
+  // 停用
   // ===================================================
 
   async function deactivateAsset(
@@ -1337,51 +1872,37 @@ export default function AssetManagementPage() {
 
     const confirmed =
       window.confirm(
-
         `确定要停用「${item.name}」吗？\n\n` +
-
         `停用后它将从当前持仓中消失，` +
-
         `但历史记录不会删除。`
-
       );
 
-
     if (!confirmed) {
-
       return;
-
     }
 
-
     setError("");
-
     setSuccess("");
-
 
     const {
       error,
     } = await supabase
-
       .from("holdings")
-
       .update({
+        active:
+          false,
 
-        active: false,
-
-        amount: 0,
+        amount:
+          0,
 
         updated_at:
           new Date()
             .toISOString(),
-
       })
-
       .eq(
         "id",
         item.id
       );
-
 
     if (error) {
 
@@ -1395,19 +1916,14 @@ export default function AssetManagementPage() {
       );
 
       return;
-
     }
-
 
     setSuccess(
       `${item.name} 已停用`
     );
 
-
     await loadHoldings();
-
   }
-
 
   // ===================================================
   // 重新买入
@@ -1419,47 +1935,33 @@ export default function AssetManagementPage() {
 
     const confirmed =
       window.confirm(
-
         `确定重新买入「${item.name}」吗？\n\n` +
-
         `该资产会重新出现在当前持仓中。`
-
       );
 
-
     if (!confirmed) {
-
       return;
-
     }
 
-
     setError("");
-
     setSuccess("");
-
 
     const {
       error,
     } = await supabase
-
       .from("holdings")
-
       .update({
-
-        active: true,
+        active:
+          true,
 
         updated_at:
           new Date()
             .toISOString(),
-
       })
-
       .eq(
         "id",
         item.id
       );
-
 
     if (error) {
 
@@ -1473,19 +1975,14 @@ export default function AssetManagementPage() {
       );
 
       return;
-
     }
-
 
     setSuccess(
       `${item.name} 已重新激活`
     );
 
-
     await loadHoldings();
-
   }
-
 
   // ===================================================
   // 删除
@@ -1497,41 +1994,27 @@ export default function AssetManagementPage() {
 
     const confirmed =
       window.confirm(
-
         `⚠️ 确定要永久删除「${item.name}」吗？\n\n` +
-
         `删除后数据库中的这条 holdings 记录将永久消失。\n` +
-
         `如果只是卖出，请使用「停用」，不要删除。`
-
       );
 
-
     if (!confirmed) {
-
       return;
-
     }
 
-
     setError("");
-
     setSuccess("");
-
 
     const {
       error,
     } = await supabase
-
       .from("holdings")
-
       .delete()
-
       .eq(
         "id",
         item.id
       );
-
 
     if (error) {
 
@@ -1545,22 +2028,17 @@ export default function AssetManagementPage() {
       );
 
       return;
-
     }
-
 
     setSuccess(
       `${item.name} 已删除`
     );
 
-
     await loadHoldings();
-
   }
 
-
   // ===================================================
-  // 渲染
+  // 页面
   // ===================================================
 
   return (
@@ -1606,7 +2084,6 @@ export default function AssetManagementPage() {
               Asset Management
             </h1>
 
-
             <p
               className="
                 mt-1
@@ -1618,7 +2095,6 @@ export default function AssetManagementPage() {
             </p>
 
           </div>
-
 
           <button
             onClick={openAdd}
@@ -1639,7 +2115,6 @@ export default function AssetManagementPage() {
           </button>
 
         </div>
-
 
         {/* =================================================
             提示
@@ -1665,7 +2140,6 @@ export default function AssetManagementPage() {
 
         )}
 
-
         {success && (
 
           <div
@@ -1685,7 +2159,6 @@ export default function AssetManagementPage() {
           </div>
 
         )}
-
 
         {/* =================================================
             搜索
@@ -1710,18 +2183,14 @@ export default function AssetManagementPage() {
           >
 
             <input
-
               value={search}
-
               onChange={
                 e =>
                   setSearch(
                     e.target.value
                   )
               }
-
               placeholder="Search code / name / platform..."
-
               className="
                 w-full
                 rounded-lg
@@ -1737,11 +2206,9 @@ export default function AssetManagementPage() {
                 focus:ring-2
                 focus:ring-gray-100
               "
-
             />
 
           </div>
-
 
           <div
             className="
@@ -1786,7 +2253,6 @@ export default function AssetManagementPage() {
           </div>
 
         </div>
-
 
         {/* =================================================
             CURRENT HOLDINGS
@@ -1855,7 +2321,6 @@ export default function AssetManagementPage() {
 
           </div>
 
-
           {loading ? (
 
             <div
@@ -1880,11 +2345,7 @@ export default function AssetManagementPage() {
               "
             >
 
-              <div
-                className="
-                  text-3xl
-                "
-              >
+              <div className="text-3xl">
                 📊
               </div>
 
@@ -1913,43 +2374,73 @@ export default function AssetManagementPage() {
 
           ) : (
 
-            <div className="space-y-6 p-4 md:p-5">
-
-              {/* =================================================
-                  大陆资产
-              ================================================= */}
+            <div
+              className="
+                space-y-6
+                p-4
+                md:p-5
+              "
+            >
 
               <AssetRegionTable
                 title="大陆资产"
                 subtitle="Market = CN"
-                badgeCount={mainlandHoldings.length}
-                items={sortedMainlandHoldings}
-                sort={mainlandSort}
-                setSort={setMainlandSort}
-                openEdit={openEdit}
-                toggleSkipUpdate={toggleSkipUpdate}
-                deactivateAsset={deactivateAsset}
-                updatingSkipId={updatingSkipId}
+                badgeCount={
+                  mainlandHoldings.length
+                }
+                items={
+                  sortedMainlandHoldings
+                }
+                sort={
+                  mainlandSort
+                }
+                setSort={
+                  setMainlandSort
+                }
+                openEdit={
+                  openEdit
+                }
+                toggleSkipUpdate={
+                  toggleSkipUpdate
+                }
+                deactivateAsset={
+                  deactivateAsset
+                }
+                updatingSkipId={
+                  updatingSkipId
+                }
                 emptyText="暂无大陆资产"
               />
-
-
-              {/* =================================================
-                  香港资产
-              ================================================= */}
 
               <AssetRegionTable
                 title="香港资产"
                 subtitle="Market = HK / US / GLOBAL"
-                badgeCount={hongKongHoldings.length}
-                items={sortedHongKongHoldings}
-                sort={hongKongSort}
-                setSort={setHongKongSort}
-                openEdit={openEdit}
-                toggleSkipUpdate={toggleSkipUpdate}
-                deactivateAsset={deactivateAsset}
-                updatingSkipId={updatingSkipId}
+                badgeCount={
+                  hongKongHoldings.length
+                }
+                items={
+                  sortedHongKongHoldings
+                }
+                sort={
+                  hongKongSort
+                }
+                setSort={
+                  setHongKongSort
+                }
+                openEdit={
+                  openEdit
+                }
+                toggleSkipUpdate={
+                  toggleSkipUpdate
+                }
+                deactivateAsset={
+                  deactivateAsset
+                }
+                updatingSkipId={
+                  updatingSkipId
+                }
                 emptyText="暂无香港资产"
+                showNative
               />
 
             </div>
@@ -1958,9 +2449,8 @@ export default function AssetManagementPage() {
 
         </section>
 
-
         {/* =================================================
-            INACTIVE / SOLD ASSETS
+            INACTIVE
         ================================================= */}
 
         <section
@@ -1999,7 +2489,6 @@ export default function AssetManagementPage() {
                 Inactive / Sold Assets
               </h2>
 
-
               <p
                 className="
                   mt-0.5
@@ -2011,7 +2500,6 @@ export default function AssetManagementPage() {
               </p>
 
             </div>
-
 
             <span
               className="
@@ -2028,7 +2516,6 @@ export default function AssetManagementPage() {
             </span>
 
           </div>
-
 
           {inactiveHoldings.length === 0 ? (
 
@@ -2074,60 +2561,97 @@ export default function AssetManagementPage() {
 
                     <SortableHeader
                       label="Asset"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="name"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                     />
 
                     <SortableHeader
                       label="Market"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="market"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                     />
 
                     <SortableHeader
                       label="Category"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="category"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                     />
 
                     <SortableHeader
                       label="Platform"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="platform"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                     />
 
                     <SortableHeader
                       label="Last Amount"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="amount"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                       align="right"
                     />
 
                     <SortableHeader
                       label="Profit"
-                      sort={inactiveSort}
+                      sort={
+                        inactiveSort
+                      }
                       sortKey="profit"
-                      setter={setInactiveSort}
+                      setter={
+                        setInactiveSort
+                      }
                       align="right"
                     />
 
-                    <th className="px-4 py-3 text-center font-medium">
+                    <th
+                      className="
+                        px-4
+                        py-3
+                        text-center
+                        font-medium
+                      "
+                    >
                       停止更新
                     </th>
 
-                    <th className="px-5 py-3 text-right font-medium">
+                    <th
+                      className="
+                        px-5
+                        py-3
+                        text-right
+                        font-medium
+                      "
+                    >
                       Actions
                     </th>
 
                   </tr>
 
                 </thead>
-
 
                 <tbody>
 
@@ -2167,11 +2691,15 @@ export default function AssetManagementPage() {
 
                         </td>
 
-
-                        <td className="px-4 py-4 text-gray-500">
+                        <td
+                          className="
+                            px-4
+                            py-4
+                            text-gray-500
+                          "
+                        >
                           {item.market || "—"}
                         </td>
-
 
                         <td className="px-4 py-4">
 
@@ -2190,11 +2718,15 @@ export default function AssetManagementPage() {
 
                         </td>
 
-
-                        <td className="px-4 py-4 text-gray-500">
+                        <td
+                          className="
+                            px-4
+                            py-4
+                            text-gray-500
+                          "
+                        >
                           {item.platform || "—"}
                         </td>
-
 
                         <td
                           className="
@@ -2207,7 +2739,6 @@ export default function AssetManagementPage() {
                         >
                           ¥{formatMoney(item.amount)}
                         </td>
-
 
                         <td
                           className={`
@@ -2222,11 +2753,6 @@ export default function AssetManagementPage() {
                           ¥{formatMoney(item.profit)}
                         </td>
 
-
-                        {/* =================================================
-                            停止更新
-                        ================================================= */}
-
                         <td
                           className="
                             px-4
@@ -2237,24 +2763,20 @@ export default function AssetManagementPage() {
 
                           <input
                             type="checkbox"
-
                             checked={
                               Boolean(
                                 item.skip_update
                               )
                             }
-
                             disabled={
                               updatingSkipId ===
                               item.id
                             }
-
                             onChange={() =>
                               toggleSkipUpdate(
                                 item
                               )
                             }
-
                             className="
                               h-4
                               w-4
@@ -2271,7 +2793,6 @@ export default function AssetManagementPage() {
 
                         </td>
 
-
                         <td className="px-5 py-4">
 
                           <div
@@ -2284,7 +2805,9 @@ export default function AssetManagementPage() {
 
                             <button
                               onClick={() =>
-                                reactivateAsset(item)
+                                reactivateAsset(
+                                  item
+                                )
                               }
                               className="
                                 rounded-md
@@ -2301,7 +2824,6 @@ export default function AssetManagementPage() {
                             >
                               重新买入
                             </button>
-
 
                             <button
                               onClick={() =>
@@ -2322,7 +2844,6 @@ export default function AssetManagementPage() {
                             >
                               编辑
                             </button>
-
 
                             <button
                               onClick={() =>
@@ -2365,7 +2886,6 @@ export default function AssetManagementPage() {
 
       </div>
 
-
       {/* =================================================
           ADD / EDIT MODAL
       ================================================= */}
@@ -2388,7 +2908,8 @@ export default function AssetManagementPage() {
             e => {
 
               if (
-                e.target === e.currentTarget
+                e.target ===
+                e.currentTarget
               ) {
 
                 setModalOpen(false);
@@ -2443,7 +2964,6 @@ export default function AssetManagementPage() {
                     : "Add Asset"}
                 </h2>
 
-
                 <p
                   className="
                     mt-0.5
@@ -2457,7 +2977,6 @@ export default function AssetManagementPage() {
                 </p>
 
               </div>
-
 
               <button
                 onClick={() =>
@@ -2480,25 +2999,18 @@ export default function AssetManagementPage() {
 
             </div>
 
-
             {/* Form */}
 
             <form
               onSubmit={handleSave}
-              className="
-                p-6
-              "
+              className="p-6"
             >
 
               {/* =================================================
                   Basic Information
               ================================================= */}
 
-              <div
-                className="
-                  mb-6
-                "
-              >
+              <div className="mb-6">
 
                 <h3
                   className="
@@ -2510,7 +3022,6 @@ export default function AssetManagementPage() {
                 >
                   Basic Information
                 </h3>
-
 
                 <div
                   className="
@@ -2536,7 +3047,6 @@ export default function AssetManagementPage() {
                     required
                   />
 
-
                   <FormInput
                     label="Name"
                     value={form.name}
@@ -2551,7 +3061,6 @@ export default function AssetManagementPage() {
                     required
                   />
 
-
                   <FormInput
                     label="Market"
                     value={form.market}
@@ -2562,10 +3071,11 @@ export default function AssetManagementPage() {
                           value
                         )
                     }
-                    options={MARKET_OPTIONS}
+                    options={
+                      MARKET_OPTIONS
+                    }
                     required
                   />
-
 
                   <FormInput
                     label="Category"
@@ -2577,10 +3087,11 @@ export default function AssetManagementPage() {
                           value
                         )
                     }
-                    options={CATEGORY_OPTIONS}
+                    options={
+                      CATEGORY_OPTIONS
+                    }
                     required
                   />
-
 
                   <FormInput
                     label="Currency"
@@ -2592,10 +3103,11 @@ export default function AssetManagementPage() {
                           value
                         )
                     }
-                    options={CURRENCY_OPTIONS}
+                    options={
+                      CURRENCY_OPTIONS
+                    }
                     required
                   />
-
 
                   <FormInput
                     label="Platform"
@@ -2615,16 +3127,11 @@ export default function AssetManagementPage() {
 
               </div>
 
-
               {/* =================================================
                   Position
               ================================================= */}
 
-              <div
-                className="
-                  mb-6
-                "
-              >
+              <div className="mb-6">
 
                 <h3
                   className="
@@ -2637,7 +3144,6 @@ export default function AssetManagementPage() {
                   Position
                 </h3>
 
-
                 <div
                   className="
                     grid
@@ -2647,6 +3153,12 @@ export default function AssetManagementPage() {
                     lg:grid-cols-3
                   "
                 >
+
+                  {/* =================================================
+                      Shares
+                      编辑 CN / 非 CN / 新增
+                      都可以编辑
+                  ================================================= */}
 
                   <FormInput
                     label="Shares"
@@ -2663,6 +3175,9 @@ export default function AssetManagementPage() {
                     placeholder="持有数量"
                   />
 
+                  {/* =================================================
+                      NAV
+                  ================================================= */}
 
                   <FormInput
                     label="NAV / Price"
@@ -2679,10 +3194,27 @@ export default function AssetManagementPage() {
                     placeholder="最新净值 / 价格"
                   />
 
+                  {/* =================================================
+                      Amount
+                      
+                      编辑非 CN：
+                      浅灰 + disabled
+                      value 来自 Native × FX
+
+                      CN：
+                      原来的 form.amount
+
+                      新增：
+                      原来的 form.amount
+                  ================================================= */}
 
                   <FormInput
                     label="Amount"
-                    value={form.amount}
+                    value={
+                      isEditingNonMainland
+                        ? calculatedFormValues.amount ?? ""
+                        : form.amount
+                    }
                     onChange={
                       value =>
                         updateForm(
@@ -2693,12 +3225,22 @@ export default function AssetManagementPage() {
                     type="number"
                     step="0.01"
                     placeholder="当前市值"
+                    disabled={
+                      isEditingNonMainland
+                    }
                   />
 
+                  {/* =================================================
+                      Cost
+                  ================================================= */}
 
                   <FormInput
                     label="Cost"
-                    value={form.cost}
+                    value={
+                      isEditingNonMainland
+                        ? calculatedFormValues.cost ?? ""
+                        : form.cost
+                    }
                     onChange={
                       value =>
                         updateForm(
@@ -2709,12 +3251,22 @@ export default function AssetManagementPage() {
                     type="number"
                     step="0.01"
                     placeholder="持仓成本"
+                    disabled={
+                      isEditingNonMainland
+                    }
                   />
 
+                  {/* =================================================
+                      Profit
+                  ================================================= */}
 
                   <FormInput
                     label="Profit"
-                    value={form.profit}
+                    value={
+                      isEditingNonMainland
+                        ? calculatedFormValues.profit ?? ""
+                        : form.profit
+                    }
                     onChange={
                       value =>
                         updateForm(
@@ -2725,12 +3277,22 @@ export default function AssetManagementPage() {
                     type="number"
                     step="0.01"
                     placeholder="收益"
+                    disabled={
+                      isEditingNonMainland
+                    }
                   />
 
+                  {/* =================================================
+                      Profit Rate
+                  ================================================= */}
 
                   <FormInput
                     label="Profit Rate"
-                    value={form.profit_rate}
+                    value={
+                      isEditingNonMainland
+                        ? calculatedFormValues.profitRate ?? ""
+                        : form.profit_rate
+                    }
                     onChange={
                       value =>
                         updateForm(
@@ -2741,12 +3303,148 @@ export default function AssetManagementPage() {
                     type="number"
                     step="0.0001"
                     placeholder="例如 12.35"
+                    disabled={
+                      isEditingNonMainland
+                    }
                   />
+
+                  {/* =================================================
+                      非 CN Native
+                  ================================================= */}
+
+                  {form.market
+                    ?.trim()
+                    .toUpperCase() !== "CN" && (
+
+                    <>
+
+                      <FormInput
+                        label="本币币种"
+                        value={
+                          form.native_currency
+                        }
+                        onChange={
+                          value =>
+                            updateForm(
+                              "native_currency",
+                              value
+                            )
+                        }
+                        options={
+                          CURRENCY_OPTIONS
+                        }
+                        required
+                      />
+
+                      <FormInput
+                        label={`本币成本（${
+                          form.native_currency ||
+                          "USD"
+                        }）`}
+                        value={
+                          form.native_cost
+                        }
+                        onChange={
+                          value =>
+                            updateForm(
+                              "native_cost",
+                              value
+                            )
+                        }
+                        type="number"
+                        step="0.01"
+                        placeholder="实际本币持仓成本"
+                      />
+
+                      <FormInput
+                        label={`本币金额（${
+                          form.native_currency ||
+                          "USD"
+                        }）`}
+                        value={
+                          form.native_amount
+                        }
+                        onChange={
+                          value =>
+                            updateForm(
+                              "native_amount",
+                              value
+                            )
+                        }
+                        type="number"
+                        step="0.01"
+                        placeholder="当前本币市值"
+                      />
+
+                      {/* =================================================
+                          编辑非 CN 时显示 FX
+                      ================================================= */}
+
+                      {isEditingNonMainland && (
+
+                        <div
+                          className="
+                            flex
+                            items-end
+                          "
+                        >
+
+                          <div
+                            className="
+                              w-full
+                              rounded-lg
+                              border
+                              border-gray-100
+                              bg-gray-50
+                              px-3.5
+                              py-2.5
+                            "
+                          >
+
+                            <div
+                              className="
+                                text-[11px]
+                                text-gray-400
+                              "
+                            >
+                              当前汇率
+                            </div>
+
+                            <div
+                              className="
+                                mt-0.5
+                                text-sm
+                                font-medium
+                                text-gray-500
+                              "
+                            >
+
+                              {nativeFxLoading
+                                ? "读取中..."
+                                : nativeFxRate != null
+                                  ? `1 ${
+                                      form.native_currency ||
+                                      "USD"
+                                    } = ${
+                                      nativeFxRate
+                                    } CNY`
+                                  : "暂无汇率"}
+
+                            </div>
+
+                          </div>
+
+                        </div>
+
+                      )}
+
+                    </>
+
+                  )}
 
                 </div>
 
               </div>
-
 
               {/* =================================================
                   Error
@@ -2771,7 +3469,6 @@ export default function AssetManagementPage() {
                 </div>
 
               )}
-
 
               {/* =================================================
                   Buttons
@@ -2809,7 +3506,6 @@ export default function AssetManagementPage() {
                   Cancel
                 </button>
 
-
                 <button
                   type="submit"
                   disabled={saving}
@@ -2844,19 +3540,12 @@ export default function AssetManagementPage() {
       )}
 
     </div>
-
   );
-
 }
 
-
-// ===================================================
+// =====================================================
 // 排序按钮
-//
-// 第一次点击：升序
-// 第二次点击：降序
-// 第三次点击：恢复默认（Amount ↓）
-// ===================================================
+// =====================================================
 
 function toggleSort(
   setter: React.Dispatch<
@@ -2867,18 +3556,26 @@ function toggleSort(
 
   setter(previous => {
 
-    if (previous.key !== key) {
+    if (
+      previous.key !== key
+    ) {
+
       return {
         key,
         direction: "asc",
       };
+
     }
 
-    if (previous.direction === "asc") {
+    if (
+      previous.direction === "asc"
+    ) {
+
       return {
         key,
         direction: "desc",
       };
+
     }
 
     return {
@@ -2894,7 +3591,9 @@ function sortIcon(
   key: SortKey
 ) {
 
-  if (sort.key !== key) {
+  if (
+    sort.key !== key
+  ) {
     return "↕";
   }
 
@@ -2911,11 +3610,15 @@ function SortableHeader({
   align = "left",
 }: {
   label: string;
+
   sort: SortState;
+
   sortKey: SortKey;
+
   setter: React.Dispatch<
     React.SetStateAction<SortState>
   >;
+
   align?: "left" | "right" | "center";
 }) {
 
@@ -2927,15 +3630,25 @@ function SortableHeader({
         : "justify-start";
 
   return (
+
     <th
       className={`
         px-4
         py-3
-        ${align === "right" ? "text-right" : ""}
-        ${align === "center" ? "text-center" : "text-left"}
+        ${
+          align === "right"
+            ? "text-right"
+            : ""
+        }
+        ${
+          align === "center"
+            ? "text-center"
+            : "text-left"
+        }
         font-medium
       `}
     >
+
       <button
         type="button"
         onClick={() =>
@@ -2959,7 +3672,10 @@ function SortableHeader({
           hover:text-gray-900
         `}
       >
-        <span>{label}</span>
+
+        <span>
+          {label}
+        </span>
 
         <span
           className={`
@@ -2976,16 +3692,15 @@ function SortableHeader({
             sortKey
           )}
         </span>
+
       </button>
+
     </th>
   );
 }
 
 // =====================================================
 // 资产区域表格
-//
-// 大陆 / 香港使用同一套表格组件，
-// 但 sorting state 完全独立。
 // =====================================================
 
 function AssetRegionTable({
@@ -3000,29 +3715,43 @@ function AssetRegionTable({
   deactivateAsset,
   updatingSkipId,
   emptyText,
+  showNative,
 }: {
   title: string;
+
   subtitle: string;
+
   badgeCount: number;
+
   items: Holding[];
+
   sort: SortState;
+
   setSort: React.Dispatch<
     React.SetStateAction<SortState>
   >;
+
   openEdit: (
     item: Holding
   ) => void;
+
   toggleSkipUpdate: (
     item: Holding
   ) => void;
+
   deactivateAsset: (
     item: Holding
   ) => void;
+
   updatingSkipId: number | null;
+
   emptyText: string;
+
+  showNative?: boolean;
 }) {
 
   return (
+
     <div
       className="
         overflow-hidden
@@ -3109,7 +3838,6 @@ function AssetRegionTable({
 
       </div>
 
-
       {items.length === 0 ? (
 
         <div
@@ -3126,11 +3854,14 @@ function AssetRegionTable({
 
       ) : (
 
-        <div className="overflow-x-auto">
+        <div
+          className="
+            overflow-x-auto
+          "
+        >
 
           <table
             className="
-              min-w-[1450px]
               w-full
               text-sm
             "
@@ -3185,7 +3916,7 @@ function AssetRegionTable({
                 />
 
                 <SortableHeader
-                  label="NAV"
+                  label="NAV(本币)"
                   sort={sort}
                   sortKey="nav"
                   setter={setSort}
@@ -3193,7 +3924,7 @@ function AssetRegionTable({
                 />
 
                 <SortableHeader
-                  label="Amount"
+                  label="金额（CNY）"
                   sort={sort}
                   sortKey="amount"
                   setter={setSort}
@@ -3201,15 +3932,49 @@ function AssetRegionTable({
                 />
 
                 <SortableHeader
-                  label="Cost"
+                  label="成本（CNY）"
                   sort={sort}
                   sortKey="cost"
                   setter={setSort}
                   align="right"
                 />
 
+                {/* =================================================
+                    Native Cost
+                    支持排序
+                ================================================= */}
+
+                {showNative && (
+
+                  <SortableHeader
+                    label="本币成本"
+                    sort={sort}
+                    sortKey="native_cost"
+                    setter={setSort}
+                    align="right"
+                  />
+
+                )}
+
+                {/* =================================================
+                    Native Amount
+                    支持排序
+                ================================================= */}
+
+                {showNative && (
+
+                  <SortableHeader
+                    label="本币金额"
+                    sort={sort}
+                    sortKey="native_amount"
+                    setter={setSort}
+                    align="right"
+                  />
+
+                )}
+
                 <SortableHeader
-                  label="Profit"
+                  label="Profit (CNY)"
                   sort={sort}
                   sortKey="profit"
                   setter={setSort}
@@ -3249,7 +4014,6 @@ function AssetRegionTable({
               </tr>
 
             </thead>
-
 
             <tbody>
 
@@ -3299,7 +4063,6 @@ function AssetRegionTable({
 
                     </td>
 
-
                     <td
                       className="
                         px-4
@@ -3309,7 +4072,6 @@ function AssetRegionTable({
                     >
                       {item.market || "—"}
                     </td>
-
 
                     <td className="px-4 py-4">
 
@@ -3328,7 +4090,6 @@ function AssetRegionTable({
 
                     </td>
 
-
                     <td
                       className="
                         px-4
@@ -3339,6 +4100,19 @@ function AssetRegionTable({
                       {item.platform || "—"}
                     </td>
 
+                    <td
+                      className="
+                        px-4
+                        py-4
+                        text-right
+                        tabular-nums
+                        text-gray-700
+                      "
+                    >
+                      {formatNumber(
+                        item.shares
+                      )}
+                    </td>
 
                     <td
                       className="
@@ -3349,22 +4123,10 @@ function AssetRegionTable({
                         text-gray-700
                       "
                     >
-                      {formatNumber(item.shares)}
+                      {formatNumber(
+                        item.nav
+                      )}
                     </td>
-
-
-                    <td
-                      className="
-                        px-4
-                        py-4
-                        text-right
-                        tabular-nums
-                        text-gray-700
-                      "
-                    >
-                      {formatNumber(item.nav)}
-                    </td>
-
 
                     <td
                       className="
@@ -3376,9 +4138,10 @@ function AssetRegionTable({
                         text-gray-900
                       "
                     >
-                      ¥{formatMoney(item.amount)}
+                      ¥{formatMoney(
+                        item.amount
+                      )}
                     </td>
-
 
                     <td
                       className="
@@ -3389,9 +4152,79 @@ function AssetRegionTable({
                         text-gray-600
                       "
                     >
-                      ¥{formatMoney(item.cost)}
+                      ¥{formatMoney(
+                        item.cost
+                      )}
                     </td>
 
+                    {/* =================================================
+                        Native Cost
+                        始终 2 位小数
+                    ================================================= */}
+
+                    {showNative && (
+
+                      <td
+                        className="
+                          px-4
+                          py-4
+                          text-right
+                          tabular-nums
+                          text-gray-600
+                        "
+                      >
+
+                        {item.native_cost != null
+
+                          ? `${
+                              item.native_currency ??
+                              "USD"
+                            } ${
+                              formatNativeMoney(
+                                item.native_cost
+                              )
+                            }`
+
+                          : "—"}
+
+                      </td>
+
+                    )}
+
+                    {/* =================================================
+                        Native Amount
+                        始终 2 位小数
+                    ================================================= */}
+
+                    {showNative && (
+
+                      <td
+                        className="
+                          px-4
+                          py-4
+                          text-right
+                          font-medium
+                          tabular-nums
+                          text-gray-900
+                        "
+                      >
+
+                        {item.native_amount != null
+
+                          ? `${
+                              item.native_currency ??
+                              "USD"
+                            } ${
+                              formatNativeMoney(
+                                item.native_amount
+                              )
+                            }`
+
+                          : "—"}
+
+                      </td>
+
+                    )}
 
                     <td
                       className={`
@@ -3400,12 +4233,15 @@ function AssetRegionTable({
                         text-right
                         font-medium
                         tabular-nums
-                        ${getProfitClass(item.profit)}
+                        ${getProfitClass(
+                          item.profit
+                        )}
                       `}
                     >
-                      ¥{formatMoney(item.profit)}
+                      ¥{formatMoney(
+                        item.profit
+                      )}
                     </td>
-
 
                     <td
                       className={`
@@ -3414,12 +4250,15 @@ function AssetRegionTable({
                         text-right
                         font-medium
                         tabular-nums
-                        ${getProfitClass(item.profit_rate)}
+                        ${getProfitClass(
+                          item.profit_rate
+                        )}
                       `}
                     >
-                      {formatPercent(item.profit_rate)}
+                      {formatPercent(
+                        item.profit_rate
+                      )}
                     </td>
-
 
                     <td
                       className="
@@ -3477,7 +4316,6 @@ function AssetRegionTable({
 
                     </td>
 
-
                     <td className="px-5 py-4">
 
                       <div
@@ -3490,7 +4328,9 @@ function AssetRegionTable({
 
                         <button
                           onClick={() =>
-                            openEdit(item)
+                            openEdit(
+                              item
+                            )
                           }
                           className="
                             rounded-md
@@ -3508,10 +4348,11 @@ function AssetRegionTable({
                           编辑
                         </button>
 
-
                         <button
                           onClick={() =>
-                            deactivateAsset(item)
+                            deactivateAsset(
+                              item
+                            )
                           }
                           className="
                             rounded-md
@@ -3550,10 +4391,9 @@ function AssetRegionTable({
   );
 }
 
-
 // =====================================================
 // Form Input
-// 支持普通 Input + Select 下拉菜单
+// 支持 Input + Select
 // =====================================================
 
 function FormInput({
@@ -3573,6 +4413,8 @@ function FormInput({
   required = false,
 
   options,
+
+  disabled = false,
 
 }: {
 
@@ -3594,6 +4436,8 @@ function FormInput({
 
   options?: string[];
 
+  disabled?: boolean;
+
 }) {
 
   return (
@@ -3601,13 +4445,17 @@ function FormInput({
     <div>
 
       <label
-        className="
+        className={`
           mb-1.5
           block
           text-xs
           font-medium
-          text-gray-600
-        "
+          ${
+            disabled
+              ? "text-gray-400"
+              : "text-gray-600"
+          }
+        `}
       >
 
         {label}
@@ -3627,7 +4475,6 @@ function FormInput({
 
       </label>
 
-
       {options ? (
 
         <select
@@ -3643,7 +4490,13 @@ function FormInput({
               )
           }
 
-          required={required}
+          required={
+            required
+          }
+
+          disabled={
+            disabled
+          }
 
           className="
             w-full
@@ -3660,6 +4513,11 @@ function FormInput({
             focus:border-gray-400
             focus:ring-2
             focus:ring-gray-100
+            disabled:cursor-not-allowed
+            disabled:border-gray-200
+            disabled:bg-gray-100
+            disabled:text-gray-400
+            disabled:opacity-100
           "
         >
 
@@ -3697,13 +4555,25 @@ function FormInput({
               )
           }
 
-          type={type}
+          type={
+            type
+          }
 
-          step={step}
+          step={
+            step
+          }
 
-          required={required}
+          required={
+            required
+          }
 
-          placeholder={placeholder}
+          placeholder={
+            placeholder
+          }
+
+          disabled={
+            disabled
+          }
 
           className="
             w-full
@@ -3721,8 +4591,13 @@ function FormInput({
             focus:border-gray-400
             focus:ring-2
             focus:ring-gray-100
+            disabled:cursor-not-allowed
+            disabled:border-gray-200
+            disabled:bg-gray-100
+            disabled:text-gray-400
+            disabled:placeholder:text-gray-300
+            disabled:opacity-100
           "
-
         />
 
       )}
@@ -3730,5 +4605,4 @@ function FormInput({
     </div>
 
   );
-
 }

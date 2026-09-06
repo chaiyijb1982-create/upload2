@@ -77,6 +77,12 @@ export type Holding = {
   active?: boolean;
 
   updated_at?: string;
+    // ===================================
+  // 香港 / 非 CNY Holding 本币数据
+  // ===================================
+ native_currency?: string | null;
+  native_cost?: number | null;
+  native_amount?: number | null;
 
   [key: string]: any;
 
@@ -330,43 +336,82 @@ export async function getLatestHoldingsHistoryUpdatedAt(): Promise<string | null
 // =====================================================
 
 export async function getHoldings(): Promise<Holding[]> {
+  const [
+    holdingsResult,
+    nativeResult,
+  ] = await Promise.all([
+    supabase
+      .from("holdings")
+      .select("*")
+      .eq(
+        "active",
+        true
+      )
+      .order(
+        "amount",
+        {
+          ascending: false,
+        }
+      ),
 
-  const {
-    data,
-    error,
-  } = await supabase
+    supabase
+      .from("holding_native_currency")
+      .select(
+        "holding_id, native_currency, native_cost, native_amount"
+      ),
+  ]);
 
-    .from("holdings")
-
-    .select("*")
-
-    .eq(
-      "active",
-      true
-    )
-
-    .order(
-      "amount",
-      {
-        ascending: false,
-      }
-    );
-
-
-  if (error) {
-
+  if (holdingsResult.error) {
     console.error(
       "getHoldings error:",
-      error
+      holdingsResult.error
     );
-
     return [];
-
   }
 
+  if (nativeResult.error) {
+    console.error(
+      "getHoldingNativeCurrencies error:",
+      nativeResult.error
+    );
+  }
 
-  return data ?? [];
+  const nativeMap = new Map<
+    number,
+    {
+      native_currency: string;
+      native_cost: number;
+      native_amount: number;
+    }
+  >();
 
+  for (const item of nativeResult.data ?? []) {
+    nativeMap.set(Number(item.holding_id), {
+      native_currency:
+        item.native_currency,
+      native_cost:
+        Number(item.native_cost) || 0,
+      native_amount:
+        Number(item.native_amount) || 0,
+    });
+  }
+
+  return (holdingsResult.data ?? []).map(
+    holding => {
+      const native =
+        nativeMap.get(Number(holding.id));
+
+      return {
+        ...holding,
+        native_currency:
+          native?.native_currency ?? null,
+        native_cost:
+          native?.native_cost ?? null,
+        native_amount:
+          native?.native_amount ?? null,
+      };
+    }
+  );
 }
 
 

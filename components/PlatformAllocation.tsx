@@ -61,93 +61,309 @@ export default function PlatformAllocation({
     let cancelled = false;
 
 
-    const loadExchangeRate =
-      async () => {
+    const loadExchangeRate = async () => {
 
-        try {
+      try {
 
-          setRateLoading(true);
-
-          setRateError(false);
+        setRateLoading(true);
+        setRateError(false);
 
 
-          const response =
-            await fetch(
-              "/api/exchange-rate",
-              {
-                cache: "no-store",
-              }
-            );
+        // =================================================
+        // 分别获取：
+        //
+        // USD/CNY
+        // HKD/CNY
+        //
+        // API 返回：
+        //
+        // {
+        //   success: true,
+        //   currency: "USD",
+        //   rate: 7.18,
+        //   date: "2026-09-03"
+        // }
+        // =================================================
+
+        const [
+          usdResponse,
+          hkdResponse,
+        ] = await Promise.all([
+
+          fetch(
+            "/api/exchange-rate?currency=USD",
+            {
+              cache: "no-store",
+            }
+          ),
+
+          fetch(
+            "/api/exchange-rate?currency=HKD",
+            {
+              cache: "no-store",
+            }
+          ),
+
+        ]);
 
 
-          if (!response.ok) {
+        // =================================================
+        // HTTP 检查
+        // =================================================
 
-            throw new Error(
-              "Exchange rate request failed"
-            );
+        if (!usdResponse.ok) {
 
-          }
-
-
-          const result =
-            await response.json();
-
-
-          if (
-            !result?.success ||
-            !Number.isFinite(
-              Number(result.usdCny)
-            ) ||
-            !Number.isFinite(
-              Number(result.usdHkd)
-            )
-          ) {
-
-            throw new Error(
-              "Invalid exchange rate"
-            );
-
-          }
-
-
-          if (!cancelled) {
-
-            setExchangeRate(
-              Number(result.usdCny)
-            );
-
-
-            setUsdHkdRate(
-              Number(result.usdHkd)
-            );
-
-          }
-
-        } catch (error) {
-
-          console.error(
-            "Failed to load exchange rate:",
-            error
+          throw new Error(
+            `USD exchange rate request failed: ${usdResponse.status}`
           );
-
-
-          if (!cancelled) {
-
-            setRateError(true);
-
-          }
-
-        } finally {
-
-          if (!cancelled) {
-
-            setRateLoading(false);
-
-          }
 
         }
 
-      };
+
+        if (!hkdResponse.ok) {
+
+          throw new Error(
+            `HKD exchange rate request failed: ${hkdResponse.status}`
+          );
+
+        }
+
+
+        // =================================================
+        // JSON
+        // =================================================
+
+        const usdResult =
+          await usdResponse.json();
+
+
+        const hkdResult =
+          await hkdResponse.json();
+
+
+        // =================================================
+        // 调试信息
+        //
+        // 如果以后汇率 API 又发生变化，
+        // 浏览器 Console 可以直接看到真实返回值。
+        // =================================================
+
+        console.log(
+          "[PlatformAllocation] USD exchange rate:",
+          usdResult
+        );
+
+
+        console.log(
+          "[PlatformAllocation] HKD exchange rate:",
+          hkdResult
+        );
+
+
+        // =================================================
+        // API success 检查
+        // =================================================
+
+        if (
+          usdResult?.success !== true
+        ) {
+
+          throw new Error(
+            usdResult?.error ||
+            usdResult?.message ||
+            "USD exchange rate API returned success=false"
+          );
+
+        }
+
+
+        if (
+          hkdResult?.success !== true
+        ) {
+
+          throw new Error(
+            hkdResult?.error ||
+            hkdResult?.message ||
+            "HKD exchange rate API returned success=false"
+          );
+
+        }
+
+
+        // =================================================
+        // 提取汇率
+        //
+        // USD:
+        // 1 USD = X CNY
+        //
+        // HKD:
+        // 1 HKD = X CNY
+        // =================================================
+
+        const usdCny =
+          Number(
+            usdResult?.rate
+          );
+
+
+        const hkdCny =
+          Number(
+            hkdResult?.rate
+          );
+
+
+        // =================================================
+        // 数据校验
+        // =================================================
+
+        if (
+          !Number.isFinite(usdCny)
+        ) {
+
+          throw new Error(
+            `Invalid USD/CNY rate: ${String(
+              usdResult?.rate
+            )}`
+          );
+
+        }
+
+
+        if (
+          usdCny <= 0
+        ) {
+
+          throw new Error(
+            `USD/CNY rate must be greater than 0: ${usdCny}`
+          );
+
+        }
+
+
+        if (
+          !Number.isFinite(hkdCny)
+        ) {
+
+          throw new Error(
+            `Invalid HKD/CNY rate: ${String(
+              hkdResult?.rate
+            )}`
+          );
+
+        }
+
+
+        if (
+          hkdCny <= 0
+        ) {
+
+          throw new Error(
+            `HKD/CNY rate must be greater than 0: ${hkdCny}`
+          );
+
+        }
+
+
+        // =================================================
+        // USD/HKD
+        //
+        // 1 USD = usdCny CNY
+        // 1 HKD = hkdCny CNY
+        //
+        // 所以：
+        //
+        // 1 USD
+        // = usdCny / hkdCny HKD
+        // =================================================
+
+        const usdHkd =
+          usdCny /
+          hkdCny;
+
+
+        // =================================================
+        // USD/HKD 校验
+        // =================================================
+
+        if (
+          !Number.isFinite(usdHkd)
+        ) {
+
+          throw new Error(
+            `Invalid USD/HKD rate: ${usdHkd}`
+          );
+
+        }
+
+
+        if (
+          usdHkd <= 0
+        ) {
+
+          throw new Error(
+            `USD/HKD rate must be greater than 0: ${usdHkd}`
+          );
+
+        }
+
+
+        // =================================================
+        // 最终写入 State
+        // =================================================
+
+        if (
+          !cancelled
+        ) {
+
+          setExchangeRate(
+            usdCny
+          );
+
+
+          setUsdHkdRate(
+            usdHkd
+          );
+
+
+          setRateError(
+            false
+          );
+
+        }
+
+      } catch (error) {
+
+        console.error(
+          "[PlatformAllocation] Failed to load exchange rate:",
+          error
+        );
+
+
+        if (
+          !cancelled
+        ) {
+
+          setExchangeRate(0);
+
+          setUsdHkdRate(0);
+
+          setRateError(true);
+
+        }
+
+      } finally {
+
+        if (
+          !cancelled
+        ) {
+
+          setRateLoading(false);
+
+        }
+
+      }
+
+    };
 
 
     loadExchangeRate();
@@ -369,7 +585,7 @@ export default function PlatformAllocation({
     value: number
   ) => {
 
-    return `$${Math.round(
+    return `HK$${Math.round(
       value
     ).toLocaleString(
       "en-HK"
@@ -683,7 +899,7 @@ export default function PlatformAllocation({
                           text-xs
                           font-semibold
                           text-blue-400
-                      "
+                        "
                       >
                         HK
                       </span>
@@ -1650,3 +1866,4 @@ export default function PlatformAllocation({
   );
 
 }
+

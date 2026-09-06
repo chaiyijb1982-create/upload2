@@ -185,16 +185,42 @@ const menus = [
     icon: "🎯",
   },
 
-  // =====================================================
+   {
+  id: 19,
+  name: "换汇记录",
+  href: "/fx-exchange",
+  icon: "💱",
+},
+
+{
+  id: 20,
+  name: "AI CFO决策中心",
+  href: "/ai-cfo",
+  icon: "🧠",
+},
+
+
+
+// =====================================================
   // FRAIS 发票上传
   // =====================================================
 
   {
-    id: 19,
+  id: 21,
+  name: "投资交易",
+  href: "/investment-transactions",
+  icon: "📈",
+},
+
+  {
+    id: 22,
     name: "FRAIS发票上传",
     href: "/frais-upload",
     icon: "🧾",
   },
+
+  
+ 
 ];
 
 export default function Sidebar() {

@@ -1,173 +1,263 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
+type Currency = "CNY" | "USD" | "HKD";
 
-// =====================================================
-// Exchange Rate API
-//
-// 返回：
-// USD/CNY
-// USD/HKD
-//
-// 数据来源：Frankfurter
-// 无需 API Key
-// =====================================================
+function isValidCurrency(
+  value: string
+): value is Currency {
+  return (
+    value === "CNY" ||
+    value === "USD" ||
+    value === "HKD"
+  );
+}
 
-export async function GET() {
+function isValidDate(
+  value: string
+): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(
+    value
+  );
+}
 
+export async function GET(
+  request: NextRequest
+) {
   try {
+    const { searchParams } =
+      new URL(request.url);
 
-    // ===================================================
-    // 获取 USD → CNY
-    // ===================================================
+    const currencyParam =
+      (
+        searchParams.get(
+          "currency"
+        ) || "CNY"
+      ).toUpperCase();
 
-    const usdCnyResponse =
-      await fetch(
-        "https://api.frankfurter.dev/v2/rate/USD/CNY",
-        {
-          cache: "no-store",
-        }
-      );
+    const date =
+      searchParams
+        .get("date")
+        ?.trim() || "";
 
-
-    if (!usdCnyResponse.ok) {
-
-      throw new Error(
-        "USD/CNY exchange rate request failed"
-      );
-
-    }
-
-
-    const usdCnyData =
-      await usdCnyResponse.json();
-
-
-    // ===================================================
-    // 获取 USD → HKD
-    // ===================================================
-
-    const usdHkdResponse =
-      await fetch(
-        "https://api.frankfurter.dev/v2/rate/USD/HKD",
-        {
-          cache: "no-store",
-        }
-      );
-
-
-    if (!usdHkdResponse.ok) {
-
-      throw new Error(
-        "USD/HKD exchange rate request failed"
-      );
-
-    }
-
-
-    const usdHkdData =
-      await usdHkdResponse.json();
-
-
-    // ===================================================
-    // 汇率
-    // ===================================================
-
-    const usdCny =
-      Number(
-        usdCnyData?.rate
-      );
-
-
-    const usdHkd =
-      Number(
-        usdHkdData?.rate
-      );
-
-
-    // ===================================================
-    // 数据检查
-    // ===================================================
+    // =================================================
+    // Currency validation
+    // =================================================
 
     if (
-      !Number.isFinite(usdCny) ||
-      usdCny <= 0 ||
-      !Number.isFinite(usdHkd) ||
-      usdHkd <= 0
+      !isValidCurrency(
+        currencyParam
+      )
     ) {
-
-      throw new Error(
-        "Invalid exchange rate data"
+      return NextResponse.json(
+        {
+          success: false,
+          error: `不支持的币种：${currencyParam}`,
+        },
+        {
+          status: 400,
+        }
       );
-
     }
 
+    const currency =
+      currencyParam;
 
-    // ===================================================
-    // CNY → HKD
+    // =================================================
+    // CNY
     //
-    // 例如：
-    //
-    // USD/CNY = 7.20
-    // USD/HKD = 7.80
-    //
-    // 1 CNY =
-    // 7.80 / 7.20 HKD
-    //
-    // 所以：
-    //
-    // HKD = CNY × hkdPerCny
-    // ===================================================
+    // CNY → CNY 永远是 1
+    // 不调用外部 API
+    // =================================================
 
-    const hkdPerCny =
-      usdHkd /
-      usdCny;
+    if (
+      currency === "CNY"
+    ) {
+      return NextResponse.json({
+        success: true,
 
+        currency: "CNY",
 
-    // ===================================================
-    // 返回
-    // ===================================================
+        base: "CNY",
+
+        quote: "CNY",
+
+        rate: 1,
+
+        date:
+          isValidDate(date)
+            ? date
+            : null,
+      });
+    }
+
+    // =================================================
+    // USD / HKD
+    //
+    // 直接获取：
+    //
+    // USD → CNY
+    // HKD → CNY
+    //
+    // 不再通过 USD → HKD → CNY
+    // =================================================
+
+    const apiUrl =
+      new URL(
+        "https://api.frankfurter.dev/v2/rates"
+      );
+
+    apiUrl.searchParams.set(
+      "base",
+      currency
+    );
+
+    apiUrl.searchParams.set(
+      "quotes",
+      "CNY"
+    );
+
+    if (
+      date &&
+      isValidDate(date)
+    ) {
+      apiUrl.searchParams.set(
+        "date",
+        date
+      );
+    }
+
+    const response =
+      await fetch(
+        apiUrl.toString(),
+        {
+          cache: "no-store",
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (!response.ok) {
+      console.error(
+        "Frankfurter error:",
+        data
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${currency} 汇率获取失败`,
+          detail: data,
+        },
+        {
+          status:
+            response.status || 500,
+        }
+      );
+    }
+
+    // =================================================
+    // Frankfurter v2 返回：
+    //
+    // [
+    //   {
+    //     date: "...",
+    //     base: "USD",
+    //     quote: "CNY",
+    //     rate: 7.xxxx
+    //   }
+    // ]
+    // =================================================
+
+    const rows =
+      Array.isArray(data)
+        ? data
+        : [];
+
+    const row =
+      rows.find(
+        (item) =>
+          item?.base === currency &&
+          item?.quote === "CNY"
+      ) || null;
+
+    const rate =
+      Number(row?.rate);
+
+    if (
+      !Number.isFinite(rate) ||
+      rate <= 0
+    ) {
+      console.error(
+        "Invalid Frankfurter rate:",
+        {
+          currency,
+          date,
+          data,
+        }
+      );
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${currency} → CNY 汇率无效`,
+        },
+        {
+          status: 502,
+        }
+      );
+    }
+
+    // =================================================
+    // 防止外币错误变成 1
+    // =================================================
+
+    if (rate === 1) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `${currency} → CNY 汇率异常：返回 1`,
+        },
+        {
+          status: 502,
+        }
+      );
+    }
 
     return NextResponse.json({
-
       success: true,
 
-      usdCny,
+      currency,
 
-      usdHkd,
+      base: currency,
 
-      hkdPerCny,
+      quote: "CNY",
+
+      rate,
 
       date:
-        usdCnyData?.date ||
-        usdHkdData?.date ||
-        null,
-
+        row?.date ||
+        (isValidDate(date)
+          ? date
+          : null),
     });
-
   } catch (error) {
-
     console.error(
-      "Exchange rate API error:",
+      "exchange-rate error:",
       error
     );
 
-
     return NextResponse.json(
-
       {
         success: false,
-
-        message:
-          "无法获取实时汇率",
-
+        error:
+          error instanceof Error
+            ? error.message
+            : "汇率服务异常",
       },
-
       {
         status: 500,
       }
-
     );
-
   }
-
 }
