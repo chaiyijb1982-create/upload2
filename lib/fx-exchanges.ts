@@ -25,10 +25,22 @@ export type FxExchange = {
 };
 
 // =====================================================
+// 工具
+// =====================================================
+
+function normalizeCurrency(
+  currency: string
+): string {
+  return currency.trim().toUpperCase();
+}
+
+// =====================================================
 // 获取换汇记录
 // =====================================================
 
-export async function getFxExchanges(): Promise<FxExchange[]> {
+export async function getFxExchanges(): Promise<
+  FxExchange[]
+> {
   const { data, error } = await supabase
     .from("fx_exchanges")
     .select("*")
@@ -90,7 +102,6 @@ export async function createFxExchange(
     remark?: string;
   }
 ): Promise<FxExchange> {
-
   if (
     !payload.exchange_date ||
     !payload.from_currency ||
@@ -100,6 +111,16 @@ export async function createFxExchange(
       "换汇日期和币种不能为空"
     );
   }
+
+  const fromCurrency =
+    normalizeCurrency(
+      payload.from_currency
+    );
+
+  const toCurrency =
+    normalizeCurrency(
+      payload.to_currency
+    );
 
   if (
     !Number.isFinite(
@@ -127,11 +148,14 @@ export async function createFxExchange(
   // 实际汇率
   //
   // 例如：
+  //
   // CNY 100000
   // USD 13900
   //
-  // = 100000 / 13900
-  // = 7.194245
+  // 1 USD =
+  // 100000 / 13900
+  //
+  // = 7.194245 CNY
   // ===================================================
 
   const actualRate =
@@ -146,13 +170,13 @@ export async function createFxExchange(
           payload.exchange_date,
 
         from_currency:
-          payload.from_currency,
+          fromCurrency,
 
         from_amount:
           payload.from_amount,
 
         to_currency:
-          payload.to_currency,
+          toCurrency,
 
         to_amount:
           payload.to_amount,
@@ -182,18 +206,27 @@ export async function createFxExchange(
     ...data,
 
     from_amount:
-      Number(data.from_amount),
+      Number(
+        data.from_amount
+      ),
 
     to_amount:
-      Number(data.to_amount),
+      Number(
+        data.to_amount
+      ),
 
     actual_rate:
-      data.actual_rate === null
+      data.actual_rate === null ||
+      data.actual_rate === undefined
         ? null
-        : Number(data.actual_rate),
+        : Number(
+            data.actual_rate
+          ),
 
     fee:
-      Number(data.fee ?? 0),
+      Number(
+        data.fee ?? 0
+      ),
   };
 }
 
@@ -204,7 +237,6 @@ export async function createFxExchange(
 export async function deleteFxExchange(
   id: string
 ): Promise<void> {
-
   const { error } =
     await supabase
       .from("fx_exchanges")
@@ -222,152 +254,483 @@ export async function deleteFxExchange(
 }
 
 // =====================================================
-// 获取某个本币 → CNY 的实际换汇汇率
+// 从实际换汇记录计算 Native → CNY
 // =====================================================
 //
 // 返回：
-// 1 USD = ? CNY
+// 1 Native = ? CNY
 //
-// 例如：
-// CNY 100000 → USD 13900
-// 返回：7.194245
+// 支持：
 //
-// 优先使用最近一笔实际换汇记录
+// CNY → USD
+// USD → CNY
+//
+// CNY → HKD
+// HKD → CNY
+//
+// 等。
 // =====================================================
 
-export async function getNativeToCnyRate(
-  nativeCurrency: string
+async function getRateFromFxExchanges(
+  currency: string
 ): Promise<number | null> {
+  const nativeCurrency =
+    normalizeCurrency(currency);
 
-  const currency =
-    nativeCurrency
-      .trim()
-      .toUpperCase();
-
-  if (!currency) {
+  if (!nativeCurrency) {
     return null;
   }
 
-  // CNY 本身不需要换算
-  if (currency === "CNY") {
+  if (
+    nativeCurrency === "CNY"
+  ) {
     return 1;
   }
 
-  // ---------------------------------------------------
-  // 找最近一笔：
-  //
-  // CNY → USD
-  // 或
-  // USD → CNY
-  //
-  // 两种方向都支持
-  // ---------------------------------------------------
+  // ===================================================
+  // 先查询 Native → CNY
+  // ===================================================
 
-  const { data, error } =
-    await supabase
-      .from("fx_exchanges")
-      .select(
-        `
-        exchange_date,
-        from_currency,
-        from_amount,
-        to_currency,
-        to_amount,
-        actual_rate
-        `
-      )
-      .or(
-        `and(from_currency.eq.CNY,to_currency.eq.${currency}),and(from_currency.eq.${currency},to_currency.eq.CNY)`
-      )
-      .order(
-        "exchange_date",
-        {
-          ascending: false,
-        }
-      )
-      .limit(1);
+  const {
+    data: nativeToCnyData,
+    error: nativeToCnyError,
+  } = await supabase
+    .from("fx_exchanges")
+    .select(
+      `
+      exchange_date,
+      from_currency,
+      from_amount,
+      to_currency,
+      to_amount,
+      actual_rate,
+      created_at
+      `
+    )
+    .eq(
+      "from_currency",
+      nativeCurrency
+    )
+    .eq(
+      "to_currency",
+      "CNY"
+    )
+    .order(
+      "exchange_date",
+      {
+        ascending: false,
+      }
+    )
+    .order(
+      "created_at",
+      {
+        ascending: false,
+      }
+    )
+    .limit(1);
 
-  if (error) {
+  if (nativeToCnyError) {
     console.error(
-      "getNativeToCnyRate error:",
-      error
+      "getRateFromFxExchanges Native → CNY error:",
+      nativeToCnyError
     );
 
-    throw error;
+    throw nativeToCnyError;
   }
 
-  const row =
-    data?.[0];
+  const nativeToCnyRow =
+    nativeToCnyData?.[0];
 
-  if (!row) {
+  if (nativeToCnyRow) {
+    const fromAmount =
+      Number(
+        nativeToCnyRow.from_amount ??
+          0
+      );
+
+    const toAmount =
+      Number(
+        nativeToCnyRow.to_amount ??
+          0
+      );
+
+    if (
+      fromAmount > 0 &&
+      toAmount > 0
+    ) {
+      return (
+        toAmount /
+        fromAmount
+      );
+    }
+  }
+
+  // ===================================================
+  // 再查询 CNY → Native
+  // ===================================================
+
+  const {
+    data: cnyToNativeData,
+    error: cnyToNativeError,
+  } = await supabase
+    .from("fx_exchanges")
+    .select(
+      `
+      exchange_date,
+      from_currency,
+      from_amount,
+      to_currency,
+      to_amount,
+      actual_rate,
+      created_at
+      `
+    )
+    .eq(
+      "from_currency",
+      "CNY"
+    )
+    .eq(
+      "to_currency",
+      nativeCurrency
+    )
+    .order(
+      "exchange_date",
+      {
+        ascending: false,
+      }
+    )
+    .order(
+      "created_at",
+      {
+        ascending: false,
+      }
+    )
+    .limit(1);
+
+  if (cnyToNativeError) {
+    console.error(
+      "getRateFromFxExchanges CNY → Native error:",
+      cnyToNativeError
+    );
+
+    throw cnyToNativeError;
+  }
+
+  const cnyToNativeRow =
+    cnyToNativeData?.[0];
+
+  if (cnyToNativeRow) {
+    const fromAmount =
+      Number(
+        cnyToNativeRow.from_amount ??
+          0
+      );
+
+    const toAmount =
+      Number(
+        cnyToNativeRow.to_amount ??
+          0
+      );
+
+    if (
+      fromAmount > 0 &&
+      toAmount > 0
+    ) {
+      // CNY → Native
+      //
+      // 例如：
+      //
+      // CNY 100000
+      // → HKD 109000
+      //
+      // 1 HKD =
+      // 100000 / 109000 CNY
+
+      return (
+        fromAmount /
+        toAmount
+      );
+    }
+  }
+
+  return null;
+}
+
+// =====================================================
+// 从市场汇率 API 获取 Native → CNY
+// =====================================================
+//
+// 使用 Frankfurter v2 API：
+//
+// https://api.frankfurter.dev/v2/rate/HKD/CNY
+//
+// 例如：
+//
+// HKD → CNY
+// USD → CNY
+// EUR → CNY
+// GBP → CNY
+// JPY → CNY
+//
+// 无需 API Key。
+// =====================================================
+
+async function getRateFromMarketApi(
+  currency: string
+): Promise<number | null> {
+  const nativeCurrency =
+    normalizeCurrency(currency);
+
+  if (!nativeCurrency) {
     return null;
   }
 
-  // ---------------------------------------------------
-  // CNY → Native
-  //
-  // 例如：
-  // CNY 100000 → USD 13900
-  //
-  // Native → CNY：
-  // 100000 / 13900
-  // = 7.194245
-  // ---------------------------------------------------
-
   if (
-    row.from_currency === "CNY" &&
-    row.to_currency === currency
+    nativeCurrency === "CNY"
   ) {
-    const fromAmount =
-      Number(row.from_amount ?? 0);
-
-    const toAmount =
-      Number(row.to_amount ?? 0);
-
-    if (
-      fromAmount <= 0 ||
-      toAmount <= 0
-    ) {
-      return null;
-    }
-
-    return (
-      fromAmount /
-      toAmount
-    );
+    return 1;
   }
 
-  // ---------------------------------------------------
+  // ===================================================
+  // 第一种方式
+  //
   // Native → CNY
   //
   // 例如：
-  // USD 13900 → CNY 100000
   //
-  // 1 USD = 100000 / 13900 CNY
-  // ---------------------------------------------------
+  // /rate/HKD/CNY
+  // ===================================================
 
-  if (
-    row.from_currency === currency &&
-    row.to_currency === "CNY"
-  ) {
-    const fromAmount =
-      Number(row.from_amount ?? 0);
+  try {
+    const directUrl =
+      `https://api.frankfurter.dev/v2/rate/${encodeURIComponent(
+        nativeCurrency
+      )}/CNY`;
 
-    const toAmount =
-      Number(row.to_amount ?? 0);
+    const response =
+      await fetch(
+        directUrl,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
 
-    if (
-      fromAmount <= 0 ||
-      toAmount <= 0
-    ) {
-      return null;
+    if (response.ok) {
+      const result =
+        await response.json();
+
+      const rate =
+        Number(
+          result?.rate
+        );
+
+      if (
+        Number.isFinite(rate) &&
+        rate > 0
+      ) {
+        console.log(
+          `[FX] Market rate ${nativeCurrency}/CNY = ${rate}`
+        );
+
+        return rate;
+      }
     }
+  } catch (error) {
+    console.warn(
+      `[FX] Direct market rate failed: ${nativeCurrency}/CNY`,
+      error
+    );
+  }
 
-    return (
-      toAmount /
-      fromAmount
+  // ===================================================
+  // 第二种方式
+  //
+  // CNY → Native
+  //
+  // 如果直接方向没有数据：
+  //
+  // /rate/CNY/HKD
+  //
+  // 再反算。
+  // ===================================================
+
+  try {
+    const reverseUrl =
+      `https://api.frankfurter.dev/v2/rate/CNY/${encodeURIComponent(
+        nativeCurrency
+      )}`;
+
+    const response =
+      await fetch(
+        reverseUrl,
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
+
+    if (response.ok) {
+      const result =
+        await response.json();
+
+      const reverseRate =
+        Number(
+          result?.rate
+        );
+
+      if (
+        Number.isFinite(
+          reverseRate
+        ) &&
+        reverseRate > 0
+      ) {
+        const rate =
+          1 /
+          reverseRate;
+
+        console.log(
+          `[FX] Market reverse rate ${nativeCurrency}/CNY = ${rate}`
+        );
+
+        return rate;
+      }
+    }
+  } catch (error) {
+    console.warn(
+      `[FX] Reverse market rate failed: CNY/${nativeCurrency}`,
+      error
     );
   }
 
   return null;
 }
+
+// =====================================================
+// 获取某个本币 → CNY 的汇率
+// =====================================================
+//
+// 优先级：
+//
+// 1. CNY
+//    ↓
+//    1
+//
+// 2. fx_exchanges
+//    ↓
+//    最近一笔真实换汇记录
+//
+// 3. 市场汇率 API
+//    ↓
+//    Frankfurter
+//
+// 4. 都失败
+//    ↓
+//    null
+//
+// =====================================================
+
+export async function getNativeToCnyRate(
+  nativeCurrency: string
+): Promise<number | null> {
+  const currency =
+    normalizeCurrency(
+      nativeCurrency
+    );
+
+  if (!currency) {
+    return null;
+  }
+
+  // ===================================================
+  // CNY 本身
+  // ===================================================
+
+  if (
+    currency === "CNY"
+  ) {
+    return 1;
+  }
+
+  // ===================================================
+  // 第一优先级：
+  // 用户自己的实际换汇记录
+  // ===================================================
+
+  try {
+    const exchangeRate =
+      await getRateFromFxExchanges(
+        currency
+      );
+
+    if (
+      Number.isFinite(
+        exchangeRate
+      ) &&
+      exchangeRate !== null &&
+      exchangeRate > 0
+    ) {
+      console.log(
+        `[FX] Using personal exchange rate ${currency}/CNY = ${exchangeRate}`
+      );
+
+      return exchangeRate;
+    }
+  } catch (error) {
+    console.warn(
+      `[FX] Failed to read personal exchange rate for ${currency}`,
+      error
+    );
+
+    // =================================================
+    // 注意：
+    //
+    // 即使 fx_exchanges 查询失败，
+    // 也不要直接终止。
+    //
+    // 继续尝试市场汇率。
+    // =================================================
+  }
+
+  // ===================================================
+  // 第二优先级：
+  // 市场汇率
+  // ===================================================
+
+  try {
+    const marketRate =
+      await getRateFromMarketApi(
+        currency
+      );
+
+    if (
+      Number.isFinite(
+        marketRate
+      ) &&
+      marketRate !== null &&
+      marketRate > 0
+    ) {
+      console.log(
+        `[FX] Using market rate ${currency}/CNY = ${marketRate}`
+      );
+
+      return marketRate;
+    }
+  } catch (error) {
+    console.error(
+      `[FX] Market exchange rate failed for ${currency}`,
+      error
+    );
+  }
+
+  // ===================================================
+  // 都失败
+  // ===================================================
+
+  console.error(
+    `[FX] Unable to obtain ${currency}/CNY exchange rate`
+  );
+
+  return null;
+}
+
