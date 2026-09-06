@@ -196,7 +196,8 @@ function formatMoney(
 }
 
 function formatNumber(
-  value: any
+  value: number,
+  decimals = 2
 ) {
 
   const n =
@@ -209,8 +210,8 @@ function formatNumber(
   return n.toLocaleString(
     "zh-CN",
     {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 4,
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
     }
   );
 }
