@@ -102,15 +102,12 @@ function toNumber(value: unknown): number {
   return n;
 }
 
-function formatNumber(
-  value: number,
-  digits = 2
-): string {
-  if (!Number.isFinite(value)) {
-    return "0";
-  }
+function formatNumber(value: any, digits = 2) {
+  const n = Number(value);
 
-  return value.toLocaleString("zh-CN", {
+  if (!Number.isFinite(n)) return "—";
+
+  return n.toLocaleString("zh-CN", {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
@@ -1022,7 +1019,7 @@ export default function InvestmentTransactionsPage() {
         String(
           Number(
             calculatedAmount.toFixed(
-              8
+              2
             )
           )
         )
@@ -1087,7 +1084,7 @@ export default function InvestmentTransactionsPage() {
           String(
             Number(
               calculatedShares.toFixed(
-                8
+                2
               )
             )
           )
@@ -2991,7 +2988,7 @@ export default function InvestmentTransactionsPage() {
         throw new Error(
           `卖出 Shares 不能超过当前持有数量 ${formatNumber(
             currentShares,
-            8
+            2
           )}`
         );
       }
@@ -4441,7 +4438,7 @@ export default function InvestmentTransactionsPage() {
                           toNumber(
                             shares
                           ),
-                          8
+                          2
                         )}
                       </div>
 
@@ -4449,7 +4446,7 @@ export default function InvestmentTransactionsPage() {
                         Holding.shares：
                         {formatNumber(
                           currentShares,
-                          8
+                          2
                         )}
                         {" → "}
                         {formatNumber(
@@ -4457,7 +4454,7 @@ export default function InvestmentTransactionsPage() {
                             toNumber(
                               shares
                             ),
-                          8
+                          2
                         )}
                       </div>
                     </div>
@@ -4519,7 +4516,7 @@ export default function InvestmentTransactionsPage() {
                           toNumber(
                             shares
                           ),
-                          8
+                          2
                         )}
                       </div>
                     </div>
@@ -4574,7 +4571,7 @@ export default function InvestmentTransactionsPage() {
                         toNumber(
                           shares
                         ),
-                        8
+                        2
                       )}
                     </div>
 
@@ -4623,19 +4620,19 @@ export default function InvestmentTransactionsPage() {
                             toNumber(
                               shares
                             ),
-                            8
+                            2
                           )}
                         </div>
 
                         <div className="text-xs text-slate-500">
                           {formatNumber(
                             currentShares,
-                            8
+                            2
                           )}
                           {" → "}
                           {formatNumber(
                             remainingShares,
-                            8
+                            2
                           )}
                         </div>
                       </div>
@@ -5357,7 +5354,7 @@ export default function InvestmentTransactionsPage() {
                                 toNumber(
                                   transaction.shares
                                 ),
-                                8
+                                2
                               )}
                             </td>
 
