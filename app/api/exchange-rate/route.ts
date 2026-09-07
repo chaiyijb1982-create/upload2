@@ -1,6 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
-type Currency = "CNY" | "USD" | "HKD";
+type Currency =
+  | "CNY"
+  | "USD"
+  | "HKD";
 
 function isValidCurrency(
   value: string
@@ -20,6 +26,288 @@ function isValidDate(
   );
 }
 
+function isFutureDate(
+  value: string
+): boolean {
+  if (!isValidDate(value)) {
+    return false;
+  }
+
+  const requested =
+    new Date(
+      `${value}T00:00:00Z`
+    );
+
+  const today = new Date();
+
+  const todayUtc =
+    new Date(
+      Date.UTC(
+        today.getUTCFullYear(),
+        today.getUTCMonth(),
+        today.getUTCDate()
+      )
+    );
+
+  return requested > todayUtc;
+}
+
+// =====================================================
+// 从 Frankfurter 获取汇率
+//
+// 最新：
+// /latest?from=USD&to=CNY
+//
+// 历史：
+// /2026-09-04?from=USD&to=CNY
+// =====================================================
+
+async function fetchFrankfurterRate(
+  currency: "USD" | "HKD",
+  date?: string
+): Promise<{
+  rate: number;
+  date: string | null;
+  source: string;
+}> {
+  const errors: string[] = [];
+
+  // ---------------------------------------------------
+  // 1. 如果没有日期
+  //    直接使用 latest
+  // ---------------------------------------------------
+
+  if (!date) {
+    try {
+      const url =
+        new URL(
+          "https://api.frankfurter.app/latest"
+        );
+
+      url.searchParams.set(
+        "from",
+        currency
+      );
+
+      url.searchParams.set(
+        "to",
+        "CNY"
+      );
+
+      const response =
+        await fetch(
+          url.toString(),
+          {
+            cache: "no-store",
+            headers: {
+              Accept:
+                "application/json",
+            },
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (response.ok) {
+        const rate =
+          Number(
+            data?.rates?.CNY
+          );
+
+        if (
+          Number.isFinite(rate) &&
+          rate > 0
+        ) {
+          return {
+            rate,
+            date:
+              typeof data?.date ===
+              "string"
+                ? data.date
+                : null,
+            source:
+              "Frankfurter latest",
+          };
+        }
+      }
+
+      errors.push(
+        `Frankfurter latest HTTP ${response.status}`
+      );
+    } catch (error) {
+      errors.push(
+        `Frankfurter latest：${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`
+      );
+    }
+  }
+
+  // ---------------------------------------------------
+  // 2. 指定日期
+  // ---------------------------------------------------
+
+  if (date) {
+    try {
+      const url =
+        new URL(
+          `https://api.frankfurter.app/${encodeURIComponent(
+            date
+          )}`
+        );
+
+      url.searchParams.set(
+        "from",
+        currency
+      );
+
+      url.searchParams.set(
+        "to",
+        "CNY"
+      );
+
+      const response =
+        await fetch(
+          url.toString(),
+          {
+            cache: "no-store",
+            headers: {
+              Accept:
+                "application/json",
+            },
+          }
+        );
+
+      const data =
+        await response.json();
+
+      if (response.ok) {
+        const rate =
+          Number(
+            data?.rates?.CNY
+          );
+
+        if (
+          Number.isFinite(rate) &&
+          rate > 0
+        ) {
+          return {
+            rate,
+            date:
+              typeof data?.date ===
+              "string"
+                ? data.date
+                : date,
+            source:
+              "Frankfurter historical",
+          };
+        }
+      }
+
+      errors.push(
+        `Frankfurter ${date} HTTP ${response.status}`
+      );
+    } catch (error) {
+      errors.push(
+        `Frankfurter ${date}：${
+          error instanceof Error
+            ? error.message
+            : String(error)
+        }`
+      );
+    }
+  }
+
+  // ---------------------------------------------------
+  // 3. 如果历史日期失败
+  //    自动回退到 latest
+  //
+  //    这是解决周末/节假日问题的关键。
+  // ---------------------------------------------------
+
+  try {
+    const url =
+      new URL(
+        "https://api.frankfurter.app/latest"
+      );
+
+    url.searchParams.set(
+      "from",
+      currency
+    );
+
+    url.searchParams.set(
+      "to",
+      "CNY"
+    );
+
+    const response =
+      await fetch(
+        url.toString(),
+        {
+          cache: "no-store",
+          headers: {
+            Accept:
+              "application/json",
+          },
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (response.ok) {
+      const rate =
+        Number(
+          data?.rates?.CNY
+        );
+
+      if (
+        Number.isFinite(rate) &&
+        rate > 0
+      ) {
+        return {
+          rate,
+          date:
+            typeof data?.date ===
+            "string"
+              ? data.date
+              : null,
+          source:
+            "Frankfurter latest fallback",
+        };
+      }
+    }
+
+    errors.push(
+      `Frankfurter latest fallback HTTP ${response.status}`
+    );
+  } catch (error) {
+    errors.push(
+      `Frankfurter latest fallback：${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`
+    );
+  }
+
+  // ---------------------------------------------------
+  // 全部失败
+  // ---------------------------------------------------
+
+  throw new Error(
+    errors.join("；")
+  );
+}
+
+// =====================================================
+// GET
+// =====================================================
+
 export async function GET(
   request: NextRequest
 ) {
@@ -27,21 +315,31 @@ export async function GET(
     const { searchParams } =
       new URL(request.url);
 
+    // -------------------------------------------------
+    // Currency
+    // -------------------------------------------------
+
     const currencyParam =
       (
         searchParams.get(
           "currency"
         ) || "CNY"
-      ).toUpperCase();
+      )
+        .trim()
+        .toUpperCase();
+
+    // -------------------------------------------------
+    // Date
+    // -------------------------------------------------
 
     const date =
       searchParams
         .get("date")
         ?.trim() || "";
 
-    // =================================================
+    // -------------------------------------------------
     // Currency validation
-    // =================================================
+    // -------------------------------------------------
 
     if (
       !isValidCurrency(
@@ -62,11 +360,48 @@ export async function GET(
     const currency =
       currencyParam;
 
+    // -------------------------------------------------
+    // Date validation
+    // -------------------------------------------------
+
+    if (
+      date &&
+      !isValidDate(date)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `日期格式错误：${date}`,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    // -------------------------------------------------
+    // 不允许查询未来日期
+    // -------------------------------------------------
+
+    if (
+      date &&
+      isFutureDate(date)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `不能查询未来日期：${date}`,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
     // =================================================
     // CNY
     //
-    // CNY → CNY 永远是 1
-    // 不调用外部 API
+    // CNY → CNY = 1
     // =================================================
 
     if (
@@ -84,119 +419,33 @@ export async function GET(
         rate: 1,
 
         date:
-          isValidDate(date)
-            ? date
-            : null,
+          date || null,
+
+        source:
+          "fixed",
       });
     }
 
     // =================================================
     // USD / HKD
-    //
-    // 直接获取：
-    //
-    // USD → CNY
-    // HKD → CNY
-    //
-    // 不再通过 USD → HKD → CNY
     // =================================================
 
-    const apiUrl =
-      new URL(
-        "https://api.frankfurter.dev/v2/rates"
+    const result =
+      await fetchFrankfurterRate(
+        currency,
+        date || undefined
       );
 
-    apiUrl.searchParams.set(
-      "base",
-      currency
-    );
-
-    apiUrl.searchParams.set(
-      "quotes",
-      "CNY"
-    );
+    // =================================================
+    // 防止异常汇率
+    // =================================================
 
     if (
-      date &&
-      isValidDate(date)
+      !Number.isFinite(
+        result.rate
+      ) ||
+      result.rate <= 0
     ) {
-      apiUrl.searchParams.set(
-        "date",
-        date
-      );
-    }
-
-    const response =
-      await fetch(
-        apiUrl.toString(),
-        {
-          cache: "no-store",
-        }
-      );
-
-    const data =
-      await response.json();
-
-    if (!response.ok) {
-      console.error(
-        "Frankfurter error:",
-        data
-      );
-
-      return NextResponse.json(
-        {
-          success: false,
-          error: `${currency} 汇率获取失败`,
-          detail: data,
-        },
-        {
-          status:
-            response.status || 500,
-        }
-      );
-    }
-
-    // =================================================
-    // Frankfurter v2 返回：
-    //
-    // [
-    //   {
-    //     date: "...",
-    //     base: "USD",
-    //     quote: "CNY",
-    //     rate: 7.xxxx
-    //   }
-    // ]
-    // =================================================
-
-    const rows =
-      Array.isArray(data)
-        ? data
-        : [];
-
-    const row =
-      rows.find(
-        (item) =>
-          item?.base === currency &&
-          item?.quote === "CNY"
-      ) || null;
-
-    const rate =
-      Number(row?.rate);
-
-    if (
-      !Number.isFinite(rate) ||
-      rate <= 0
-    ) {
-      console.error(
-        "Invalid Frankfurter rate:",
-        {
-          currency,
-          date,
-          data,
-        }
-      );
-
       return NextResponse.json(
         {
           success: false,
@@ -208,11 +457,13 @@ export async function GET(
       );
     }
 
-    // =================================================
-    // 防止外币错误变成 1
-    // =================================================
+    // -------------------------------------------------
+    // 防止外币错误返回 1
+    // -------------------------------------------------
 
-    if (rate === 1) {
+    if (
+      result.rate === 1
+    ) {
       return NextResponse.json(
         {
           success: false,
@@ -224,6 +475,10 @@ export async function GET(
       );
     }
 
+    // =================================================
+    // 返回
+    // =================================================
+
     return NextResponse.json({
       success: true,
 
@@ -233,13 +488,15 @@ export async function GET(
 
       quote: "CNY",
 
-      rate,
+      rate: result.rate,
 
       date:
-        row?.date ||
-        (isValidDate(date)
-          ? date
-          : null),
+        result.date ||
+        date ||
+        null,
+
+      source:
+        result.source,
     });
   } catch (error) {
     console.error(
@@ -250,13 +507,14 @@ export async function GET(
     return NextResponse.json(
       {
         success: false,
+
         error:
           error instanceof Error
             ? error.message
             : "汇率服务异常",
       },
       {
-        status: 500,
+        status: 502,
       }
     );
   }

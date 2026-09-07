@@ -47,6 +47,7 @@ type MarketItem = {
   fiftyTwoWeekLow: number | null;
   drawdownFromHighPct: number | null;
   updatedAt: string | null;
+  source?: string;
   error?: string;
 };
 
@@ -190,7 +191,8 @@ function returnFromDays(
 
 function buildMarketItem(
   symbol: string,
-  result: YahooChartResult
+  result: YahooChartResult,
+  source = "Yahoo Finance"
 ): MarketItem {
   const meta = result.meta ?? {};
 
@@ -277,11 +279,12 @@ function buildMarketItem(
     fiftyTwoWeekLow,
     drawdownFromHighPct,
     updatedAt,
+    source,
   };
 }
 
 // =====================================================
-// 安全获取
+// 安全获取普通市场数据
 // =====================================================
 
 async function safeFetchMarketItem(
@@ -293,7 +296,8 @@ async function safeFetchMarketItem(
 
     return buildMarketItem(
       symbol,
-      result
+      result,
+      "Yahoo Finance"
     );
   } catch (error) {
     return {
@@ -309,12 +313,240 @@ async function safeFetchMarketItem(
       fiftyTwoWeekLow: null,
       drawdownFromHighPct: null,
       updatedAt: null,
+      source: undefined,
       error:
         error instanceof Error
           ? error.message
           : String(error),
     };
   }
+}
+
+// =====================================================
+// USD/CNY 专用
+//
+// 第一优先：Yahoo CNY=X
+// 第二优先：Yahoo CNYUSD=X 取倒数
+// 第三优先：Frankfurter 免费汇率 API
+//
+// 不在这里写死 7.10。
+// =====================================================
+
+async function fetchUsdCny(): Promise<MarketItem> {
+  const errors: string[] = [];
+
+  // ---------------------------------------------------
+  // 方案 1：Yahoo Finance CNY=X
+  // ---------------------------------------------------
+
+  try {
+    const result =
+      await fetchYahooChart("CNY=X", "5d");
+
+    const item = buildMarketItem(
+      "CNY=X",
+      result,
+      "Yahoo Finance"
+    );
+
+    if (
+      item.price != null &&
+      Number.isFinite(item.price) &&
+      item.price > 0
+    ) {
+      return item;
+    }
+
+    errors.push(
+      "Yahoo CNY=X 返回价格为空"
+    );
+  } catch (error) {
+    errors.push(
+      `Yahoo CNY=X：${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`
+    );
+  }
+
+  // ---------------------------------------------------
+  // 方案 2：Yahoo Finance CNYUSD=X
+  //
+  // CNYUSD = 1 CNY 兑换多少 USD
+  // USD/CNY = 1 / CNYUSD
+  // ---------------------------------------------------
+
+  try {
+    const result =
+      await fetchYahooChart(
+        "CNYUSD=X",
+        "5d"
+      );
+
+    const item = buildMarketItem(
+      "CNYUSD=X",
+      result,
+      "Yahoo Finance inverse"
+    );
+
+    if (
+      item.price != null &&
+      Number.isFinite(item.price) &&
+      item.price > 0
+    ) {
+      const usdCny =
+        1 / item.price;
+
+      if (
+        Number.isFinite(usdCny) &&
+        usdCny > 0
+      ) {
+        const previousClose =
+          item.previousClose != null &&
+          item.previousClose > 0
+            ? 1 / item.previousClose
+            : null;
+
+        const dailyChangePct =
+          previousClose != null &&
+          previousClose > 0
+            ? ((usdCny - previousClose) /
+                previousClose) *
+              100
+            : null;
+
+        return {
+          symbol: "CNY=X",
+          price: usdCny,
+          previousClose,
+          dailyChangePct,
+          return1M: null,
+          return3M: null,
+          return6M: null,
+          return1Y: null,
+          fiftyTwoWeekHigh: null,
+          fiftyTwoWeekLow: null,
+          drawdownFromHighPct: null,
+          updatedAt:
+            item.updatedAt,
+          source:
+            "Yahoo Finance inverse",
+        };
+      }
+    }
+
+    errors.push(
+      "Yahoo CNYUSD=X 返回价格无效"
+    );
+  } catch (error) {
+    errors.push(
+      `Yahoo CNYUSD=X：${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`
+    );
+  }
+
+  // ---------------------------------------------------
+  // 方案 3：Frankfurter
+  //
+  // 免费公开汇率 API
+  // USD -> CNY
+  // ---------------------------------------------------
+
+  try {
+    const response = await fetch(
+      "https://api.frankfurter.app/latest?from=USD&to=CNY",
+      {
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(
+        `HTTP ${response.status}`
+      );
+    }
+
+    const json = (await response.json()) as {
+      amount?: number;
+      base?: string;
+      date?: string;
+      rates?: {
+        CNY?: number;
+      };
+    };
+
+    const price =
+      typeof json.rates?.CNY === "number" &&
+      Number.isFinite(json.rates.CNY) &&
+      json.rates.CNY > 0
+        ? json.rates.CNY
+        : null;
+
+    if (price != null) {
+      const updatedAt =
+        json.date
+          ? `${json.date}T00:00:00.000Z`
+          : new Date().toISOString();
+
+      return {
+        symbol: "CNY=X",
+        price,
+        previousClose: null,
+        dailyChangePct: null,
+        return1M: null,
+        return3M: null,
+        return6M: null,
+        return1Y: null,
+        fiftyTwoWeekHigh: null,
+        fiftyTwoWeekLow: null,
+        drawdownFromHighPct: null,
+        updatedAt,
+        source: "Frankfurter",
+      };
+    }
+
+    errors.push(
+      "Frankfurter 返回 CNY 汇率为空"
+    );
+  } catch (error) {
+    errors.push(
+      `Frankfurter：${
+        error instanceof Error
+          ? error.message
+          : String(error)
+      }`
+    );
+  }
+
+  // ---------------------------------------------------
+  // 三个数据源全部失败
+  // ---------------------------------------------------
+
+  return {
+    symbol: "CNY=X",
+    price: null,
+    previousClose: null,
+    dailyChangePct: null,
+    return1M: null,
+    return3M: null,
+    return6M: null,
+    return1Y: null,
+    fiftyTwoWeekHigh: null,
+    fiftyTwoWeekLow: null,
+    drawdownFromHighPct: null,
+    updatedAt: null,
+    source: undefined,
+    error:
+      "USD/CNY 所有数据源均失败：" +
+      errors.join("；"),
+  };
 }
 
 // =====================================================
@@ -409,7 +641,9 @@ function buildAssessment(
           voo.drawdownFromHighPct
         ).toFixed(1)}%`
       );
-    } else if (voo.drawdownFromHighPct <= -10) {
+    } else if (
+      voo.drawdownFromHighPct <= -10
+    ) {
       score += 1;
       reasons.push(
         `VOO 较52周高点回撤 ${Math.abs(
@@ -489,7 +723,6 @@ function buildAssessment(
   }
 
   let summary = "";
-
   let direction = "";
 
   if (status === "risk") {
@@ -537,14 +770,12 @@ function buildAssessment(
 // =====================================================
 
 export async function GET() {
-  const symbols = [
-    "VOO",
-    "GLDM",
-    "^GSPC",
-    "^VIX",
-    "^TNX",
-    "CNY=X",
-  ];
+  // ---------------------------------------------------
+  // 普通市场数据
+  //
+  // USD/CNY 不再通过这里直接 safeFetchMarketItem，
+  // 而是使用专门的三层汇率获取逻辑。
+  // ---------------------------------------------------
 
   const [
     voo,
@@ -553,12 +784,18 @@ export async function GET() {
     vix,
     treasury10Y,
     usdCny,
-  ] = await Promise.all(
-    symbols.map(
-      (symbol) =>
-        safeFetchMarketItem(symbol)
-    )
-  );
+  ] = await Promise.all([
+    safeFetchMarketItem("VOO"),
+    safeFetchMarketItem("GLDM"),
+    safeFetchMarketItem("^GSPC"),
+    safeFetchMarketItem("^VIX"),
+    safeFetchMarketItem("^TNX"),
+    fetchUsdCny(),
+  ]);
+
+  // ---------------------------------------------------
+  // 市场环境判断
+  // ---------------------------------------------------
 
   const assessment =
     buildAssessment(
@@ -568,6 +805,10 @@ export async function GET() {
       vix,
       treasury10Y
     );
+
+  // ---------------------------------------------------
+  // 更新时间
+  // ---------------------------------------------------
 
   const updatedTimes = [
     voo.updatedAt,
@@ -583,47 +824,63 @@ export async function GET() {
       ? updatedTimes.sort().at(-1) ?? null
       : null;
 
-  const validCount = [
+  // ---------------------------------------------------
+  // 数据完整度
+  // ---------------------------------------------------
+
+  const allItems = [
     voo,
     gldm,
     sp500,
     vix,
     treasury10Y,
     usdCny,
-  ].filter(
-    (item) =>
-      typeof item.price === "number" &&
-      Number.isFinite(item.price)
-  ).length;
+  ];
+
+  const validCount =
+    allItems.filter(
+      (item) =>
+        typeof item.price === "number" &&
+        Number.isFinite(item.price)
+    ).length;
+
+  const dataStatus =
+    validCount === 0
+      ? "unavailable"
+      : validCount < allItems.length
+      ? "partial"
+      : "complete";
+
+  // ---------------------------------------------------
+  // 返回
+  // ---------------------------------------------------
 
   return NextResponse.json({
     success: true,
 
     updatedAt,
 
-    dataStatus:
-      validCount === 0
-        ? "unavailable"
-        : validCount < symbols.length
-        ? "partial"
-        : "complete",
+    dataStatus,
 
     market: {
       voo,
       gldm,
       sp500,
       vix,
-      treasury10Y,
-      usdCny,
+     treasury10y: treasury10Y,
+     usdcny: usdCny,
     },
 
     assessment,
 
     notes: [
       "市场数据来自 Yahoo Finance Chart API。",
+      "USD/CNY 优先使用 Yahoo Finance CNY=X。",
+      "USD/CNY 如果 CNY=X 失败，则尝试 Yahoo Finance CNYUSD=X 反向计算。",
+      "USD/CNY 如果 Yahoo 两个数据源均失败，则使用 Frankfurter 免费汇率 API。",
+      "USD/CNY 不使用固定 7.10 作为正常数据源。",
       "市场环境仅用于调整投资节奏，不改变家庭长期资产配置目标。",
       "市场数据缺失时不会自动判断为正常。",
     ],
   });
 }
-

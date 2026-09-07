@@ -748,412 +748,416 @@ export default function FxExchangePage() {
     );
 
   // ===================================================
-  // 当前投资建议
-  //
-  // 已删除：
-  // 系统最佳整数股组合
-  //
-  // 本页面不再自动计算：
-  // VOO 买多少股
-  // GLDM 买多少股
-  //
-  // 由 AI CFO 根据完整信息最终判断
-  // ===================================================
+// 当前投资建议
+//
+// 已删除：
+// 系统最佳整数股组合
+//
+// 本页面不自动计算：
+// VOO 买多少股
+// GLDM 买多少股
+//
+// 由 AI CFO 根据完整信息最终判断
+// ===================================================
 
-  const investmentDirection =
-    useMemo(() => {
-      const status =
-        market?.assessment.status ??
-        "unavailable";
+const investmentDirection =
+  useMemo(() => {
+    const status =
+      market?.assessment.status ??
+      "unavailable";
 
-      if (status === "risk") {
-        return "市场风险偏高：优先考虑分批执行，不建议一次性提高风险资产仓位。";
-      }
+    if (status === "risk") {
+      return "市场风险偏高：优先考虑分批执行，不建议一次性提高风险资产仓位。";
+    }
 
-      if (status === "caution") {
-        return "市场进入谨慎区间：可以执行配置，但建议控制节奏，优先考虑当前家庭配置中更需要补足的资产。";
-      }
+    if (status === "caution") {
+      return "市场进入谨慎区间：可以执行配置，但建议控制节奏，优先考虑当前家庭配置中更需要补足的资产。";
+    }
 
-      if (status === "unavailable") {
-        return "市场数据暂不可用：按照家庭资产配置执行，不使用未经验证的市场判断。";
-      }
+    if (status === "unavailable") {
+      return "市场数据暂不可用：按照家庭资产配置执行，不使用未经验证的市场判断。";
+    }
 
-      return "市场环境正常：按照家庭资产配置执行，结合大陆 + 香港家庭总资产判断本次投资节奏。";
-    }, [market]);
+    return "市场环境正常：按照家庭资产配置执行，结合大陆 + 香港家庭总资产判断本次投资节奏。";
+  }, [market]);
 
-  // ===================================================
-  // AI CFO 信息
-  //
-  // 注意：
-  // 这里不包含任何整数股候选组合信息
-  // ===================================================
 
-  const aiDecisionText =
-    useMemo(() => {
-      const lines: string[] = [];
+// ===================================================
+// AI CFO 信息
+//
+// 注意：
+// 这里不包含任何系统预先计算的整数股候选组合。
+// AI CFO 根据：
+// 1. 家庭整体资产配置
+// 2. 香港现有 VOO / GLDM 持仓
+// 3. 当前 VOO / GLDM 价格
+// 4. 本次投资金额
+// 5. 香港账户不能购买碎股
+// 6. 固定收益当前比例
+// 7. 市场环境
+//
+// 最终决定实际整数股买入方案。
+// ===================================================
 
+const aiDecisionText =
+  useMemo(() => {
+    const lines: string[] = [];
+
+    lines.push(
+      "AI Wealth OS 家庭投资决策信息"
+    );
+
+    lines.push(
+      `数据日期：${todayString()}`
+    );
+
+    lines.push("");
+
+    // =================================================
+    // 一、家庭资产配置
+    // =================================================
+
+    lines.push(
+      "一、家庭资产配置"
+    );
+
+    lines.push(
+      `总资产（仅 holdings）：¥${formatMoney(
+        totalAssets
+      )}`
+    );
+
+    for (const key of [
+      "fixed_income",
+      "global_stock",
+      "china_stock",
+      "gold",
+    ] as CategoryKey[]) {
       lines.push(
-        "AI Wealth OS 家庭投资决策信息"
-      );
-
-      lines.push(
-        `数据日期：${todayString()}`
-      );
-
-      lines.push("");
-
-      // =================================================
-      // 一、家庭资产配置
-      // =================================================
-
-      lines.push(
-        "一、家庭资产配置"
-      );
-
-      lines.push(
-        `总资产（仅 holdings）：¥${formatMoney(totalAssets)}`
-      );
-
-      for (const key of [
-        "fixed_income",
-        "global_stock",
-        "china_stock",
-        "gold",
-      ] as CategoryKey[]) {
-        lines.push(
-          `${CATEGORY_LABELS[key]}：¥${formatMoney(
-            categoryAmounts[key]
-          )}，当前 ${formatPct(
-            currentAllocation[key]
-          )}，目标 ${formatPct(
-            TARGETS[key]
-          )}，允许 ${formatPct(
-            RANGES[key].min
-          )}-${formatPct(
-            RANGES[key].max
-          )}`
-        );
-      }
-
-      lines.push("");
-
-      // =================================================
-      // 二、本次香港投资
-      // =================================================
-
-      lines.push(
-        "二、本次香港投资"
-      );
-
-      lines.push(
-        `本次投资金额：$${formatUsd(
-          investmentAmountUsd
+        `${CATEGORY_LABELS[key]}：¥${formatMoney(
+          categoryAmounts[key]
+        )}，当前 ${formatPct(
+          currentAllocation[key]
+        )}，目标 ${formatPct(
+          TARGETS[key]
+        )}，允许 ${formatPct(
+          RANGES[key].min
+        )}-${formatPct(
+          RANGES[key].max
         )}`
       );
+    }
 
+    lines.push("");
+
+    // =================================================
+    // 二、本次香港投资
+    // =================================================
+
+    lines.push(
+      "二、本次香港投资"
+    );
+
+    lines.push(
+      `本次投资金额：$${formatUsd(
+        investmentAmountUsd
+      )}`
+    );
+
+    lines.push(
+      `VOO 当前价格：$${formatUsd(
+        vooPrice
+      )}`
+    );
+
+    lines.push(
+      `GLDM 当前价格：$${formatUsd(
+        gldmPrice
+      )}`
+    );
+
+    lines.push(
+      `USD/CNY 当前汇率：${usdCny}`
+    );
+
+    lines.push("");
+
+    // =================================================
+    // 三、市场环境
+    // =================================================
+
+    lines.push(
+      "三、当前市场环境"
+    );
+
+    lines.push(
+      investmentDirection
+    );
+
+    if (market?.assessment) {
       lines.push(
-        `VOO参考价格：$${vooPrice.toFixed(2)}`
+        `市场判断：${market.assessment.status ?? "unavailable"}`
+      );
+
+      if (market.assessment.summary) {
+        lines.push(
+          `市场摘要：${market.assessment.summary}`
+        );
+      }
+    }
+
+    lines.push("");
+
+    // =================================================
+    // 四、固定收益计划
+    // =================================================
+
+    lines.push(
+      "四、固定收益计划"
+    );
+
+    lines.push(
+      `固定收益当前比例：${formatPct(
+        currentAllocation.fixed_income
+      )}`
+    );
+
+    lines.push(
+      `固定收益每个工作日投入：¥${formatMoney(
+        FIXED_INCOME_DAILY
+      )}`
+    );
+
+    if (fixedIncomePlan.reached) {
+      lines.push(
+        "固定收益已经达到约45%，原则上停止继续增加固定收益。"
       );
 
       lines.push(
-        `GLDM参考价格：$${gldmPrice.toFixed(2)}`
+        "停止增加固定收益不代表停止家庭整体投资，新增资金应根据家庭整体配置转向其他低配资产。"
       );
-
+    } else {
       lines.push(
-        `USD/CNY：${usdCny.toFixed(4)}`
-      );
-
-      lines.push("");
-
-      // =================================================
-      // 三、固定收益未来资金
-      // =================================================
-
-      lines.push(
-        "三、固定收益未来资金"
-      );
-
-      lines.push(
-        `每个工作日投入固定收益：¥${formatMoney(
+        `按照当前计划继续每个工作日投入 ¥${formatMoney(
           FIXED_INCOME_DAILY
-        )}`
+        )}，预计约 ${fixedIncomePlan.workdays} 个工作日达到45%左右。`
       );
 
-      if (fixedIncomePlan.reached) {
+      lines.push(
+        "达到约45%后停止增加固定收益，不把系统计算的日期作为硬性停止条件。"
+      );
+    }
+
+    lines.push("");
+
+    // =================================================
+    // 五、香港 / USD 现有持仓
+    // =================================================
+
+    lines.push(
+      "五、当前香港 / USD 相关持仓"
+    );
+
+    lines.push(
+      `当前 VOO：${currentVoo?.shares ?? 0} 股`
+    );
+
+    lines.push(
+      `当前 GLDM：${currentGldm?.shares ?? 0} 股`
+    );
+
+
+
+    lines.push("");
+
+    // =================================================
+    // 六、投资规则
+    // =================================================
+
+    lines.push(
+      "六、投资规则"
+    );
+
+       lines.push(
+      "002849 暂停新增购买。当前中国股票已经超过允许上限，等待其他资产增长后自然稀释。"
+    );
+
+    lines.push(
+      "SCHD 暂停新增购买。"
+    );
+
+    lines.push(
+      "QQQ 暂停新增购买。"
+    );
+
+    lines.push(
+      "香港新增资金的长期基准配置为：VOO 60%、GLDM 40%。"
+    );
+
+    lines.push(
+      "VOO 60% / GLDM 40% 是香港新增资金的默认长期基准，不允许 AI CFO 每次根据短期市场波动随意改变。"
+    );
+
+    lines.push(
+      "AI CFO 首先按照 VOO 60% / GLDM 40% 计算理论资金配置，然后再结合大陆 + 香港家庭整体资产配置进行必要修正。"
+    );
+
+    lines.push(
+      "如果全球股票已经超过允许上限40%，应明显降低或暂停 VOO 新增；如果只是高于30%目标但仍在25%-40%允许区间内，不应仅因为高于目标就自动停止 VOO。"
+    );
+
+    lines.push(
+      "如果黄金低于允许下限10%，应明显提高 GLDM 优先级；如果黄金仅低于15%目标但仍在10%-20%允许区间内，可以适度提高 GLDM，但不应自动变成100% GLDM。"
+    );
+
+    lines.push(
+      "如果中国股票超过允许上限15%，禁止继续增加中国股票，002849保持暂停。"
+    );
+
+    lines.push(
+      "固定收益当前目标45%，允许区间40%-55%；当前低于45%时，大陆继续每个工作日投入¥2,000，达到约45%后停止增加固定收益。"
+    );
+
+    lines.push(
+      "停止增加固定收益不代表停止投资，后续新增资金仍应根据家庭整体资产配置重新分配。"
+    );
+
+    lines.push(
+      "家庭最终决策必须同时考虑大陆 + 香港家庭总资产，而不是只看香港账户。"
+    );
+
+    lines.push(
+      "市场环境只用于调整投资节奏和是否分批，不改变香港长期VOO 60% / GLDM 40%的基准配置。"
+    );
+
+    lines.push(
+      "市场环境normal时，原则上一次性执行；caution时可以考虑分批；risk时优先考虑分批执行，但不得因此改变长期资产配置逻辑。"
+    );
+
+    lines.push(
+      "香港账户不支持碎股，VOO 和 GLDM 均只能购买完整整数股。"
+    );
+
+    lines.push(
+      "AI CFO 必须先计算理论配置，再在整数股约束下寻找实际可执行方案。"
+    );
+
+    lines.push(
+      "整数股方案应尽可能使用本次投资资金，同时保持与60% VOO / 40% GLDM基准方向一致，并结合家庭整体资产配置进行自然再平衡。"
+    );
+
+    lines.push(
+      "AI CFO 不能只给 VOO / GLDM 投资比例，必须进一步给出具体买入股数、实际使用资金和剩余现金。"
+    );
+
+    lines.push(
+      "本页面不自动计算最佳整数股组合，最终整数股方案由 AI CFO 根据以上完整规则计算。"
+    );
+    lines.push("");
+
+    // =================================================
+    // 七、最终 AI CFO 决策问题
+    // =================================================
+
+    lines.push(
+      "七、最终 AI CFO 决策"
+    );
+
         lines.push(
-          "当前固定收益已经达到约45%，继续投入前需要重新判断。"
-        );
-      } else {
-        lines.push(
-          `距离45%约还需要：¥${formatMoney(
-            fixedIncomePlan.needed
-          )}`
-        );
+      "请基于以上完整家庭资产、当前配置、香港现有持仓、当前市场环境、本次投资金额以及 VOO / GLDM 当前价格，按照固定的 AI CFO 决策规则，给出本次香港投资的最终可执行方案。"
+    );
 
-        lines.push(
-          `按¥2,000/工作日约需要：${fixedIncomePlan.workdays}个工作日`
-        );
+    lines.push(
+      `1. 本次为既定的定投资金 $${formatUsd(
+        investmentAmountUsd
+      )}，不要判断“是否投资”，而是直接决定这笔资金如何配置。`
+    );
 
-        lines.push(
-          `预计达到45%的日期：${fixedIncomePlan.stopDate}`
-        );
-      }
+    lines.push(
+      "2. 香港新增资金长期基准为 VOO 60% / GLDM 40%，先以此作为本次投资的默认配置起点。"
+    );
 
-      lines.push("");
+    lines.push(
+      "3. 然后检查大陆 + 香港家庭整体资产配置：固定收益、全球股票、中国股票、黄金分别距离目标和允许区间还有多少。"
+    );
 
-      // =================================================
-      // 四、市场环境
-      // =================================================
+    lines.push(
+      "4. 如果某一资产已经超过允许上限，应优先停止增加该资产，并利用新增资金向其他低配资产自然再平衡。"
+    );
 
-      lines.push(
-        "四、市场环境"
-      );
+    lines.push(
+      "5. 全球股票只有在超过40%允许上限时，才应明显降低或暂停VOO；如果只是高于30%目标但仍在25%-40%允许区间内，不应仅因为高于目标就完全停止VOO。"
+    );
 
-      if (market) {
-        lines.push(
-          `市场状态：${marketStatusLabel(
-            market.assessment.status
-          )}`
-        );
+    lines.push(
+      "6. 黄金只有在低于10%允许下限时，才需要明显提高GLDM优先级；如果黄金处于10%-20%允许区间内，则仍以60% VOO / 40% GLDM作为主要基准，并根据整体配置适度调整。"
+    );
 
-        lines.push(
-          `市场评分：${market.assessment.score}`
-        );
+    lines.push(
+      "7. 中国股票目前已经超过15%允许上限，因此002849不得新增购买。"
+    );
 
-        lines.push(
-          `市场判断：${market.assessment.summary}`
-        );
+    lines.push(
+      "8. 固定收益继续按照每个工作日¥2,000投入，达到约45%后停止增加固定收益；香港本次投资不需要为了补固定收益而改变VOO / GLDM的长期投资框架。"
+    );
 
-        lines.push(
-          `投资方向：${market.assessment.direction}`
-        );
+    lines.push(
+      "9. 市场环境只用于判断投资节奏：normal原则上一次性投资；caution可以考虑分批；risk优先考虑分批。市场环境不能直接改变长期60% VOO / 40% GLDM基准。"
+    );
 
-        const voo =
-          market.market.voo;
+    lines.push(
+      "10. 必须考虑香港账户不支持碎股，VOO和GLDM只能购买完整整数股。"
+    );
 
-        const gldm =
-          market.market.gldm;
+    lines.push(
+      "11. 必须根据当前VOO价格、GLDM价格和本次实际投资金额，计算实际可以买入的整数股组合。"
+    );
 
-        const sp500 =
-          market.market.sp500;
+    lines.push(
+      "12. 在整数股约束下，应尽可能提高资金使用效率，同时让实际组合尽可能接近经过家庭资产配置修正后的目标比例。"
+    );
 
-        const vix =
-          market.market.vix;
+    lines.push(
+      "13. 必须明确给出VOO买入股数、GLDM买入股数、实际使用美元金额以及剩余美元现金。"
+    );
 
-        const treasury =
-          market.market.treasury10y;
+    lines.push(
+      "14. 如果剩余现金较多，必须判断是保留现金、增加另一只ETF的整数股，还是留到下一次定投；不能为了消耗现金而破坏家庭资产配置。"
+    );
 
-        const fx =
-          market.market.usdcny;
+    lines.push(
+      "15. 必须明确判断是否需要分批；如果分批，必须明确第一批VOO股数、第一批GLDM股数以及第一批预计使用金额。"
+    );
 
-        if (voo) {
-          lines.push(
-            `VOO：${formatPrice(
-              voo.price
-            )}，日变动 ${formatMarketPct(
-              voo.changePct
-            )}，1M ${formatMarketPct(
-              voo.return1M
-            )}`
-          );
-        }
+    lines.push(
+      "16. 必须判断本次投资完成后，大陆 + 香港合计家庭资产配置是否更加接近长期目标。"
+    );
 
-        if (gldm) {
-          lines.push(
-            `GLDM：${formatPrice(
-              gldm.price
-            )}，日变动 ${formatMarketPct(
-              gldm.changePct
-            )}，1M ${formatMarketPct(
-              gldm.return1M
-            )}`
-          );
-        }
+    lines.push(
+      "17. 最终输出必须给出唯一的推荐执行方案，而不是同时给出多个互相冲突的方案。"
+    );
 
-        if (sp500) {
-          lines.push(
-            `S&P 500：${formatPrice(
-              sp500.price
-            )}，日变动 ${formatMarketPct(
-              sp500.changePct
-            )}，1M ${formatMarketPct(
-              sp500.return1M
-            )}`
-          );
-        }
+    lines.push(
+      "18. 请说明最终方案最核心的2-4个理由，重点解释为什么当前家庭资产配置决定了本次VOO和GLDM的具体比例及整数股数量。"
+    );
 
-        if (vix) {
-          lines.push(
-            `VIX：${
-              vix.price === null
-                ? "--"
-                : vix.price.toFixed(2)
-            }`
-          );
-        }
+    return lines.join("\n");
 
-        if (treasury) {
-          lines.push(
-            `10Y Treasury：${
-              treasury.price === null
-                ? "--"
-                : treasury.price.toFixed(2)
-            }`
-          );
-        }
-
-        if (fx) {
-          lines.push(
-            `USD/CNY：${
-              fx.price === null
-                ? "--"
-                : fx.price.toFixed(4)
-            }`
-          );
-        }
-      } else {
-        lines.push(
-          "市场数据暂不可用。"
-        );
-      }
-
-      lines.push("");
-
-      // =================================================
-      // 五、香港 / 美元相关现有持仓
-      // =================================================
-
-      lines.push(
-        "五、香港 / 美元相关现有持仓"
-      );
-
-      if (hkUsdHoldings.length === 0) {
-        lines.push(
-          "暂无相关持仓。"
-        );
-      } else {
-        for (const item of hkUsdHoldings) {
-          lines.push(
-            `${item.code} ${item.name}：市场=${item.market ?? "--"}，类别=${
-              CATEGORY_LABELS[
-                item.category as CategoryKey
-              ] ?? item.category ?? "--"
-            }，金额=¥${formatMoney(
-              getHoldingAmount(item)
-            )}，股数=${
-              item.shares ?? "--"
-            }`
-          );
-        }
-      }
-
-      lines.push("");
-
-      // =================================================
-      // 六、当前 VOO / GLDM 持仓
-      // =================================================
-
-      lines.push(
-        "六、当前 VOO / GLDM 持仓"
-      );
-
-      lines.push(
-        `VOO当前持仓：${currentVoo?.shares ?? 0} 股`
-      );
-
-      lines.push(
-        `GLDM当前持仓：${currentGldm?.shares ?? 0} 股`
-      );
-
-      lines.push("");
-
-      // =================================================
-      // 七、投资规则
-      // =================================================
-
-      lines.push(
-        "七、投资规则"
-      );
-
-      lines.push(
-        "002849 暂停新增购买。"
-      );
-
-      lines.push(
-        "SCHD 暂停新增购买。"
-      );
-
-      lines.push(
-        "QQQ 暂停新增购买。"
-      );
-
-      lines.push(
-        "香港新增资金主要考虑 VOO + GLDM。"
-      );
-
-      lines.push(
-        "家庭最终决策必须同时考虑大陆 + 香港资产。"
-      );
-
-      lines.push(
-        "市场环境用于调整投资节奏，不改变家庭长期目标比例。"
-      );
-
-      lines.push(
-        "本页面不自动计算最佳整数股组合，由 AI CFO 根据完整信息进行最终判断。"
-      );
-
-      lines.push("");
-
-      // =================================================
-      // 最终 AI CFO 决策问题
-      //
-      // 不包含任何整数股候选组合信息
-      // =================================================
-
-      lines.push(
-        "请基于以上完整家庭资产、当前配置、香港现有持仓、当前市场环境和本次投资金额，给出本次香港投资的最终建议："
-      );
-
-      lines.push(
-        "1. 是否现在投资；"
-      );
-
-      lines.push(
-        "2. 如果投资，建议主要投资 VOO 还是 GLDM，或者两者都投资；"
-      );
-
-      lines.push(
-        "3. 如果投资，建议大约投入多少比例到 VOO / GLDM；"
-      );
-
-      lines.push(
-        "4. 是否需要分批；"
-      );
-
-      lines.push(
-        "5. 如果建议分批，请说明第一批建议投入多少；"
-      );
-
-      lines.push(
-        "6. 为什么；"
-      );
-
-      return lines.join("\n");
-    }, [
-      totalAssets,
-      categoryAmounts,
-      currentAllocation,
-      investmentAmountUsd,
-      vooPrice,
-      gldmPrice,
-      usdCny,
-      fixedIncomePlan,
-      market,
-      hkUsdHoldings,
-      currentVoo,
-      currentGldm,
-    ]);
+  }, [
+    totalAssets,
+    categoryAmounts,
+    currentAllocation,
+    investmentAmountUsd,
+    vooPrice,
+    gldmPrice,
+    usdCny,
+    fixedIncomePlan,
+    market,
+    hkUsdHoldings,
+    currentVoo,
+    currentGldm,
+    investmentDirection,
+  ]);
 
   // ===================================================
   // JSX
@@ -2112,49 +2116,60 @@ export default function FxExchangePage() {
 
           <section className="mt-5 rounded-2xl bg-white p-5 shadow-sm">
 
-            <h3 className="text-lg font-semibold">
-              六、AI 投资规则
-            </h3>
+  <h3 className="text-lg font-semibold">
+    六、AI 投资规则
+  </h3>
 
-            <div className="mt-4 space-y-2 text-sm text-slate-700">
+  <div className="mt-4 space-y-2 text-sm text-slate-700">
 
-              <div>
-                • 002849：暂停新增购买
-              </div>
+    <div>
+      • 香港新增资金长期基准：VOO 60% / GLDM 40%
+    </div>
 
-              <div>
-                • SCHD：暂停新增购买
-              </div>
+    <div>
+      • 002849：暂停新增购买
+    </div>
 
-              <div>
-                • QQQ：暂停新增购买
-              </div>
+    <div>
+      • SCHD：暂停新增购买
+    </div>
 
-              <div>
-                • 香港新增资金：主要考虑 VOO + GLDM
-              </div>
+    <div>
+      • QQQ：暂停新增购买
+    </div>
 
-              <div>
-                • 固定收益：每个工作日 ¥2,000，
-                达到约45%后停止
-              </div>
+    <div>
+      • 家庭资产配置：必须同时考虑大陆 + 香港
+    </div>
 
-              <div>
-                • 最终决策：必须看大陆 + 香港家庭总资产
-              </div>
+    <div>
+      • 全球股票超过40%允许上限时，降低或暂停VOO
+    </div>
 
-              <div>
-                • 市场环境：用于调整投资节奏，
-                不改变长期目标配置
-              </div>
+    <div>
+      • 黄金低于10%允许下限时，提高GLDM优先级
+    </div>
 
-              <div>
-                • VOO / GLDM 的具体买入数量由 AI CFO 根据完整信息最终判断
-              </div>
+    <div>
+      • 固定收益：每个工作日 ¥2,000，
+      达到约45%后停止
+    </div>
 
-            </div>
+    <div>
+      • 市场环境：只调整投资节奏，不改变长期60% VOO / 40% GLDM基准
+    </div>
 
-          </section>
+    <div>
+      • 香港账户不支持碎股，VOO / GLDM只能购买整数股
+    </div>
+
+    <div>
+      • 最终由 AI CFO 根据家庭配置、价格、资金和整数股约束决定具体股数
+    </div>
+
+  </div>
+
+</section>
 
           {/* =================================================
               七、当前市场环境
