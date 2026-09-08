@@ -18,6 +18,11 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // AI CFO API 使用独立 API Key 鉴权
+if (pathname === "/api/ai-cfo") {
+  return NextResponse.next();
+}
+
   // Cron 自动更新接口必须放行
   if (pathname === "/api/cron/update-market") {
     return NextResponse.next();
