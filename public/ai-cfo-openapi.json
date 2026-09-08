@@ -1,0 +1,418 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI Wealth OS - AI CFO API",
+    "description": "Secure read-only API for AI Wealth OS financial data. The API provides structured household financial data for AI analysis, including assets, liabilities, portfolio, cash flow, and financial freedom status.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://ai-wealth-os-gamma.vercel.app",
+      "description": "AI Wealth OS production server"
+    }
+  ],
+  "paths": {
+    "/api/ai-cfo": {
+      "get": {
+        "operationId": "getAiCfoData",
+        "summary": "Get current AI Wealth OS financial data",
+        "description": "Returns the latest structured financial data from AI Wealth OS. This endpoint is read-only and is intended for AI analysis. It includes financial overview, portfolio, debt, cash flow, financial freedom, AI context, table status, and datasets.",
+        "responses": {
+          "200": {
+            "description": "Successfully retrieved AI Wealth OS financial data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiCfoResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or missing API key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server configuration or database error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "AiCfoApiKey": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Use the format: Bearer YOUR_AI_CFO_API_KEY"
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "AiCfoResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/Summary"
+          },
+          "financial_overview": {
+            "$ref": "#/components/schemas/FinancialOverview"
+          },
+          "portfolio": {
+            "$ref": "#/components/schemas/Portfolio"
+          },
+          "debt": {
+            "$ref": "#/components/schemas/Debt"
+          },
+          "cash_flow": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "financial_freedom": {
+            "$ref": "#/components/schemas/FinancialFreedom"
+          },
+          "investment_analysis": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "ai_context": {
+            "$ref": "#/components/schemas/AiContext"
+          },
+          "table_status": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "datasets": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "success",
+          "generated_at",
+          "summary",
+          "financial_overview",
+          "portfolio",
+          "debt",
+          "financial_freedom",
+          "ai_context"
+        ]
+      },
+      "Summary": {
+        "type": "object",
+        "properties": {
+          "raw_financial_assets": {
+            "type": "number"
+          },
+          "fixed_income": {
+            "type": "number"
+          },
+          "total_wealth": {
+            "type": "number"
+          },
+          "total_debt": {
+            "type": "number"
+          },
+          "mortgage_debt": {
+            "type": "number"
+          },
+          "non_mortgage_debt": {
+            "type": "number"
+          },
+          "net_worth": {
+            "type": "number"
+          },
+          "financial_freedom_debt": {
+            "type": "number"
+          },
+          "financial_freedom_net_wealth": {
+            "type": "number"
+          },
+          "financial_freedom_target": {
+            "type": "number"
+          },
+          "financial_freedom_gap": {
+            "type": "number"
+          },
+          "financial_freedom_rate": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FinancialOverview": {
+        "type": "object",
+        "properties": {
+          "raw_financial_assets": {
+            "type": "number"
+          },
+          "fixed_income": {
+            "type": "number"
+          },
+          "total_financial_assets": {
+            "type": "number"
+          },
+          "total_debt": {
+            "type": "number"
+          },
+          "mortgage_debt": {
+            "type": "number"
+          },
+          "non_mortgage_debt": {
+            "type": "number"
+          },
+          "financial_freedom_debt": {
+            "type": "number"
+          },
+          "net_worth": {
+            "type": "number"
+          },
+          "total_monthly_debt_payment": {
+            "type": "number"
+          },
+          "mortgage_monthly_payment": {
+            "type": "number"
+          },
+          "financial_freedom_monthly_debt_payment": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "raw_financial_assets",
+          "fixed_income",
+          "total_financial_assets",
+          "total_debt",
+          "mortgage_debt",
+          "non_mortgage_debt",
+          "financial_freedom_debt",
+          "net_worth"
+        ],
+        "additionalProperties": true
+      },
+      "Portfolio": {
+        "type": "object",
+        "properties": {
+          "holdings_count": {
+            "type": "integer"
+          },
+          "holdings_amount": {
+            "type": "number"
+          },
+          "holdings_cost": {
+            "type": "number"
+          },
+          "holdings_profit": {
+            "type": "number"
+          },
+          "by_category": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortfolioCategory"
+            }
+          },
+          "fixed_income": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "PortfolioCategory": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "cost": {
+            "type": "number"
+          },
+          "profit": {
+            "type": "number"
+          },
+          "allocation": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "amount",
+          "cost",
+          "profit",
+          "allocation"
+        ]
+      },
+      "Debt": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "mortgage": {
+            "type": "number"
+          },
+          "non_mortgage": {
+            "type": "number"
+          },
+          "financial_freedom": {
+            "type": "number"
+          },
+          "monthly_payment": {
+            "type": "number"
+          },
+          "mortgage_monthly_payment": {
+            "type": "number"
+          },
+          "financial_freedom_monthly_payment": {
+            "type": "number"
+          },
+          "loans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Loan"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "Loan": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "remaining_amount": {
+            "type": "number"
+          },
+          "monthly_payment": {
+            "type": "number"
+          },
+          "include_financial_freedom": {
+            "type": "boolean"
+          },
+          "is_mortgage": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "FinancialFreedom": {
+        "type": "object",
+        "properties": {
+          "total_wealth": {
+            "type": "number"
+          },
+          "ff_debt": {
+            "type": "number"
+          },
+          "ff_net_wealth": {
+            "type": "number"
+          },
+          "freedom_target": {
+            "type": "number"
+          },
+          "freedom_gap": {
+            "type": "number"
+          },
+          "freedom_rate": {
+            "type": "number"
+          },
+          "database_record": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "reconciliation": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "rules": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "total_wealth",
+          "ff_debt",
+          "ff_net_wealth",
+          "freedom_target",
+          "freedom_gap",
+          "freedom_rate"
+        ],
+        "additionalProperties": true
+      },
+      "AiContext": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string"
+          },
+          "important_rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "current_position": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "interpretation": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "security": [
+    {
+      "AiCfoApiKey": []
+    }
+  ]
+}
