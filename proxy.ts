@@ -19,7 +19,8 @@ export function proxy(request: NextRequest) {
   }
 
   // AI CFO API 使用独立 API Key 鉴权
-if (pathname === "/api/ai-cfo") {
+if (pathname === "/api/ai-cfo"
+) {
   return NextResponse.next();
 }
 
