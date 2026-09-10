@@ -853,7 +853,7 @@ AI WEALTH OS — AI 决策规则
     async () => {
       try {
         await navigator.clipboard.writeText(
-          cfoContext
+          cfoContext +
           "\n\n" +
         aiDecisionInstruction
         );
