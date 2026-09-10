@@ -1141,6 +1141,122 @@ const aiDecisionText =
       "18. 请说明最终方案最核心的2-4个理由，重点解释为什么当前家庭资产配置决定了本次VOO和GLDM的具体比例及整数股数量。"
     );
 
+
+    lines.push("");
+
+    lines.push(
+      "============================================================"
+    );
+
+    lines.push(
+      "AI CFO 最终输出格式"
+    );
+
+    lines.push(
+      "============================================================"
+    );
+
+    lines.push(
+      "最终必须严格按照以下结构回答："
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【问题】"
+    );
+
+    lines.push(
+      "本次香港投资需要解决的问题。"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【数据】"
+    );
+
+    lines.push(
+      "列出最终决策使用的关键数据，包括本次投资金额、VOO价格、GLDM价格、USD/CNY、当前家庭资产配置等。"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【判断】"
+    );
+
+    lines.push(
+      "说明为什么当前家庭整体资产配置决定本次投资比例。"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【监控条件】"
+    );
+
+    lines.push(
+      "如果存在明确的价格、汇率或配置阈值，必须明确写出。"
+    );
+
+    lines.push(
+      "如果没有明确阈值，写：无明确数值条件"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【Holding】"
+    );
+
+    lines.push(
+      "涉及具体持仓时必须使用：资产名称 · Code。"
+    );
+
+    lines.push(
+      "例如：VOO · VOO"
+    );
+
+    lines.push(
+      "如果没有：无"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【建议动作】"
+    );
+
+    lines.push(
+      "必须给出唯一的最终执行方案。"
+    );
+
+    lines.push(
+      "必须明确 VOO 买入股数、GLDM 买入股数、实际使用美元金额以及剩余美元现金。"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "【状态】"
+    );
+
+    lines.push(
+      "只能使用：🟢 已达到条件 / 🟡 尚未达到条件 / ⚪ 无法判断"
+    );
+
+    lines.push("");
+
+    lines.push(
+      "不要提供多个互相冲突的最终方案。"
+    );
+
+    lines.push(
+      "如果条件不足，必须明确说明无法判断，不得自行创造条件。"
+    );
+
+    lines.push("");
     return lines.join("\n");
 
   }, [

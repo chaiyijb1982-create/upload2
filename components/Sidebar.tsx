@@ -4,6 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
+// =====================================================
+// 菜单
+// =====================================================
+
 const menus = [
   {
     id: 1,
@@ -57,7 +61,7 @@ const menus = [
   },
 
   // =====================================================
-  // 信用卡（手动预估）
+  // 信用卡
   // =====================================================
 
   {
@@ -67,20 +71,12 @@ const menus = [
     icon: "💳",
   },
 
-  // =====================================================
-  // 信用卡（有鱼预估）
-  // =====================================================
-
   {
     id: 8,
     name: "信用卡(有鱼预估)",
     href: "/credit-card-from-yu",
     icon: "💳",
   },
-
-  // =====================================================
-  // 信用卡实际账单导入
-  // =====================================================
 
   {
     id: 9,
@@ -90,7 +86,7 @@ const menus = [
   },
 
   // =====================================================
-  // 每月储蓄金（预估）
+  // 每月储蓄
   // =====================================================
 
   {
@@ -100,10 +96,6 @@ const menus = [
     icon: "💰",
   },
 
-  // =====================================================
-  // 每月储蓄金（实际）
-  // =====================================================
-
   {
     id: 11,
     name: "每月储蓄金(实际)",
@@ -112,11 +104,22 @@ const menus = [
   },
 
   // =====================================================
-  // 消费明细
+  // 家庭资金计划
   // =====================================================
 
   {
     id: 12,
+    name: "家庭资金计划",
+    href: "/cashflow-planning",
+    icon: "💰",
+  },
+
+  // =====================================================
+  // 消费
+  // =====================================================
+
+  {
+    id: 13,
     name: "消费明细",
     href: "/expense",
     icon: "🧾",
@@ -127,29 +130,25 @@ const menus = [
   // =====================================================
 
   {
-    id: 13,
+    id: 14,
     name: "保险",
     href: "/insurance",
     icon: "🛡️",
   },
 
   // =====================================================
-  // 财务自由规划
+  // 财务自由
   // =====================================================
 
   {
-    id: 14,
+    id: 15,
     name: "财务自由规划",
     href: "/financial-freedom",
     icon: "💎",
   },
 
-  // =====================================================
-  // 财务自由历史
-  // =====================================================
-
   {
-    id: 15,
+    id: 16,
     name: "财务自由历史",
     href: "/financial-freedom-history",
     icon: "💎",
@@ -161,14 +160,14 @@ const menus = [
   // =====================================================
 
   {
-    id: 16,
+    id: 17,
     name: "天天向上当前",
     href: "/tiantian-up",
     icon: "🚀",
   },
 
   {
-    id: 17,
+    id: 18,
     name: "天天向上年度详细",
     href: "/tiantian-up-detail",
     icon: "🚀",
@@ -179,62 +178,84 @@ const menus = [
   // =====================================================
 
   {
-    id: 18,
+    id: 19,
     name: "退休规划",
     href: "/retirement",
     icon: "🎯",
   },
 
-   {
-  id: 19,
-  name: "换汇记录",
-  href: "/fx-exchange",
-  icon: "💱",
-},
-
-{
-  id: 20,
-  name: "AI CFO决策中心",
-  href: "/ai-cfo",
-  icon: "🧠",
-},
-
-
-
-// =====================================================
-  // FRAIS 发票上传
+  // =====================================================
+  // 换汇
   // =====================================================
 
   {
-  id: 21,
-  name: "投资交易",
-  href: "/investment-transactions",
-  icon: "📈",
-},
+    id: 20,
+    name: "换汇记录",
+    href: "/fx-exchange",
+    icon: "💱",
+  },
+
+  // =====================================================
+  // AI CFO
+  // =====================================================
+
+  {
+    id: 21,
+    name: "AI CFO决策中心",
+    href: "/ai-cfo",
+    icon: "🧠",
+  },
+
+  // =====================================================
+  // 记录
+  // =====================================================
 
   {
     id: 22,
+    name: "记录版",
+    href: "/record",
+    icon: "📝",
+  },
+
+  // =====================================================
+  // 投资交易
+  // =====================================================
+
+  {
+    id: 23,
+    name: "投资交易",
+    href: "/investment-transactions",
+    icon: "📈",
+  },
+
+  // =====================================================
+  // FRAIS
+  // =====================================================
+
+  {
+    id: 24,
     name: "FRAIS发票上传",
     href: "/frais-upload",
     icon: "🧾",
   },
-
-  
- 
 ];
+
+// =====================================================
+// Sidebar
+// =====================================================
 
 export default function Sidebar() {
   const pathname = usePathname();
 
   // =====================================================
-  // 手机端 Sidebar 开关
+  // 手机端 Sidebar
   // =====================================================
 
   const [mobileOpen, setMobileOpen] =
     useState(false);
 
   // =====================================================
-  // 手动更新状态
+  // 手动更新
   // =====================================================
 
   const [updating, setUpdating] =
@@ -247,7 +268,7 @@ export default function Sidebar() {
     useState<boolean | null>(null);
 
   // =====================================================
-  // 页面切换后自动关闭手机 Sidebar
+  // 页面切换后关闭手机菜单
   // =====================================================
 
   useEffect(() => {
@@ -255,7 +276,7 @@ export default function Sidebar() {
   }, [pathname]);
 
   // =====================================================
-  // 手机端打开 Sidebar 时禁止背景滚动
+  // 手机打开时禁止背景滚动
   // =====================================================
 
   useEffect(() => {
@@ -271,16 +292,14 @@ export default function Sidebar() {
   }, [mobileOpen]);
 
   // =====================================================
-  // ESC 关闭
+  // ESC关闭
   // =====================================================
 
   useEffect(() => {
     function handleKeyDown(
       event: KeyboardEvent
     ) {
-      if (
-        event.key === "Escape"
-      ) {
+      if (event.key === "Escape") {
         setMobileOpen(false);
       }
     }
@@ -312,14 +331,13 @@ export default function Sidebar() {
     setUpdateSuccess(null);
 
     try {
-      const response =
-        await fetch(
-          "/api/cron/update-market",
-          {
-            method: "GET",
-            cache: "no-store",
-          }
-        );
+      const response = await fetch(
+        "/api/cron/update-market",
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
 
       const data =
         await response.json();
@@ -373,56 +391,26 @@ export default function Sidebar() {
   // =====================================================
 
   const sidebarContent = (
-    <div
-      className="
-        h-full
-        flex
-        flex-col
-      "
-    >
+    <div className="h-full flex flex-col">
+
       {/* =================================================
           Logo
       ================================================= */}
 
-      <div
-        className="
-          mb-8
-          shrink-0
-        "
-      >
-        <div
-          className="
-            flex
-            items-center
-            justify-between
-          "
-        >
+      <div className="mb-6 shrink-0">
+        <div className="flex items-center justify-between">
+
           <div>
-            <h1
-              className="
-                text-2xl
-                font-bold
-                text-gray-900
-              "
-            >
+            <h1 className="text-2xl font-bold text-gray-900">
               AI Wealth OS
             </h1>
 
-            <p
-              className="
-                text-gray-500
-                text-sm
-                mt-2
-              "
-            >
+            <p className="mt-1 text-sm text-gray-500">
               Personal Wealth System
             </p>
           </div>
 
-          {/* =================================================
-              手机端关闭按钮
-          ================================================= */}
-
+          {/* 手机关闭 */}
           <button
             type="button"
             onClick={() =>
@@ -430,8 +418,8 @@ export default function Sidebar() {
             }
             className="
               md:hidden
-              w-10
-              h-10
+              w-9
+              h-9
               flex
               items-center
               justify-center
@@ -439,7 +427,7 @@ export default function Sidebar() {
               text-gray-500
               hover:bg-gray-100
               active:bg-gray-200
-              text-xl
+              text-lg
             "
             aria-label="关闭菜单"
           >
@@ -449,7 +437,7 @@ export default function Sidebar() {
       </div>
 
       {/* =================================================
-          Menu Scroll Area
+          Menu
       ================================================= */}
 
       <nav
@@ -457,19 +445,15 @@ export default function Sidebar() {
           flex-1
           min-h-0
           overflow-y-auto
-          space-y-3
+          space-y-1.5
           pr-1
-
           scrollbar-thin
           scrollbar-thumb-gray-300
           scrollbar-track-transparent
         "
       >
-        {menus.map((menu) => {
-          // =================================================
-          // 当前页面
-          // =================================================
 
+        {menus.map((menu) => {
           const isActive =
             pathname === menu.href;
 
@@ -489,9 +473,9 @@ export default function Sidebar() {
                   flex
                   items-center
                   gap-3
-                  ml-6
-                  px-4
-                  py-2.5
+                  ml-5
+                  px-3.5
+                  py-2
                   rounded-xl
                   transition
 
@@ -502,22 +486,11 @@ export default function Sidebar() {
                   }
                 `}
               >
-                <span
-                  className="
-                    text-lg
-                    shrink-0
-                  "
-                >
+                <span className="text-base shrink-0">
                   {menu.icon}
                 </span>
 
-                <span
-                  className="
-                    text-sm
-                    font-medium
-                    whitespace-nowrap
-                  "
-                >
+                <span className="text-sm font-medium whitespace-nowrap">
                   {menu.name}
                 </span>
               </Link>
@@ -538,9 +511,9 @@ export default function Sidebar() {
               className={`
                 flex
                 items-center
-                gap-4
-                px-4
-                py-3
+                gap-3
+                px-3.5
+                py-2.5
                 rounded-xl
                 transition
 
@@ -551,21 +524,11 @@ export default function Sidebar() {
                 }
               `}
             >
-              <span
-                className="
-                  text-xl
-                  shrink-0
-                "
-              >
+              <span className="text-lg shrink-0">
                 {menu.icon}
               </span>
 
-              <span
-                className="
-                  font-medium
-                  whitespace-nowrap
-                "
-              >
+              <span className="text-sm font-medium whitespace-nowrap">
                 {menu.name}
               </span>
             </Link>
@@ -578,19 +541,15 @@ export default function Sidebar() {
 
         <button
           type="button"
-          onClick={
-            handleManualUpdate
-          }
-          disabled={
-            updating
-          }
+          onClick={handleManualUpdate}
+          disabled={updating}
           className={`
             w-full
             flex
             items-center
-            gap-4
-            px-4
-            py-3
+            gap-3
+            px-3.5
+            py-2.5
             rounded-xl
             transition
             text-left
@@ -602,23 +561,11 @@ export default function Sidebar() {
             }
           `}
         >
-          <span
-            className="
-              text-xl
-              shrink-0
-            "
-          >
-            {updating
-              ? "⏳"
-              : "🔄"}
+          <span className="text-lg shrink-0">
+            {updating ? "⏳" : "🔄"}
           </span>
 
-          <span
-            className="
-              font-medium
-              whitespace-nowrap
-            "
-          >
+          <span className="text-sm font-medium whitespace-nowrap">
             {updating
               ? "正在更新..."
               : "手动更新"}
@@ -632,7 +579,7 @@ export default function Sidebar() {
         {updateMessage && (
           <div
             className={`
-              px-4
+              px-3.5
               text-xs
               leading-5
               pb-2
@@ -658,11 +605,11 @@ export default function Sidebar() {
       <div
         className="
           shrink-0
-          pt-4
-          mt-4
+          pt-3
+          mt-3
           border-t
           border-gray-100
-          text-sm
+          text-xs
           text-gray-400
         "
       >
@@ -671,13 +618,14 @@ export default function Sidebar() {
     </div>
   );
 
+  // =====================================================
+  // Render
+  // =====================================================
+
   return (
     <>
       {/* ===================================================
           PC Sidebar
-
-          md 以上显示
-          手机完全隐藏
       =================================================== */}
 
       <aside
@@ -693,16 +641,14 @@ export default function Sidebar() {
           bg-white
           border-r
           border-gray-200
-          p-6
+          p-5
         "
       >
         {sidebarContent}
       </aside>
 
       {/* ===================================================
-          手机顶部 Header
-
-          手机才显示
+          手机 Header
       =================================================== */}
 
       <header
@@ -745,19 +691,8 @@ export default function Sidebar() {
           ☰
         </button>
 
-        <div
-          className="
-            flex-1
-            ml-3
-          "
-        >
-          <div
-            className="
-              text-lg
-              font-bold
-              text-gray-900
-            "
-          >
+        <div className="flex-1 ml-3">
+          <div className="text-lg font-bold text-gray-900">
             AI Wealth OS
           </div>
         </div>
@@ -765,8 +700,6 @@ export default function Sidebar() {
 
       {/* ===================================================
           手机遮罩
-
-          Sidebar 打开后显示
       =================================================== */}
 
       {mobileOpen && (
@@ -785,7 +718,7 @@ export default function Sidebar() {
       )}
 
       {/* ===================================================
-          手机 Sidebar Drawer
+          手机 Sidebar
       =================================================== */}
 
       <aside
@@ -795,13 +728,15 @@ export default function Sidebar() {
           left-0
           top-0
           z-[70]
-          w-[82vw]
-          max-w-[320px]
+
+          w-[78vw]
+          max-w-[300px]
+
           h-screen
           bg-white
           border-r
           border-gray-200
-          p-5
+          p-4
 
           transform
           transition-transform
@@ -820,3 +755,4 @@ export default function Sidebar() {
     </>
   );
 }
+
