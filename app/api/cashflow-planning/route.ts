@@ -1,43 +1,122 @@
 import { NextResponse } from "next/server";
-
 import { createSupabaseServerClient } from "@/lib/supabase-server";
 
-// =====================================================
-// CASHFLOW-PLANNING API
-//
-// 浏览器
-//   ↓
-// /api/cashflow-planning
-//   ↓
-// Supabase Service Role
-//   ↓
-// cashflow_planning
-//
-// 个人单用户系统
-// =====================================================
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-export const dynamic =
-  "force-dynamic";
+type CashflowPlanningRow = {
+  id?: string;
 
-export const runtime =
-  "nodejs";
+  year: number;
+  month: number;
+  role: "income" | "expense";
 
-// =====================================================
-// GET
-// =====================================================
+  project_id: string | null;
+  name: string | null;
+  value: number | null;
+
+  independent: boolean | null;
+  from_excel: boolean | null;
+
+  source_row: number | null;
+  source_col: number | null;
+  source_offset: number | null;
+
+  is_annuity_contribution: boolean | null;
+  is_pension_payment: boolean | null;
+
+  sort_order: number | null;
+  deleted: boolean | null;
+
+  manual_remaining: number | null;
+  manual_total_cash: number | null;
+  manual_annuity: number | null;
+
+  original_opening_cash: number | null;
+  original_opening_annuity: number | null;
+};
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : null;
+}
+
+function optionalBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * 用“业务字段”寻找数据库中的对应记录。
+ *
+ * 注意：
+ * value / manual_* 等字段不能参与匹配，
+ * 因为这些字段本来就是用户可能修改的内容。
+ */
+function buildMatchKey(row: {
+  year: number;
+  month: number;
+  role: "income" | "expense";
+  project_id: string | null;
+  name: string | null;
+  source_row: number | null;
+  source_col: number | null;
+  source_offset: number | null;
+  is_annuity_contribution: boolean | null;
+  is_pension_payment: boolean | null;
+}) {
+  return JSON.stringify([
+    row.year,
+    row.month,
+    row.role,
+    row.project_id,
+    row.name,
+    row.source_row,
+    row.source_col,
+    row.source_offset,
+    row.is_annuity_contribution,
+    row.is_pension_payment,
+  ]);
+}
+
+/* =========================================================
+ * GET
+ *
+ * 重点：
+ * Supabase 默认最多返回 1000 条，
+ * 所以这里必须分页。
+ * ========================================================= */
 
 export async function GET() {
   try {
-    const supabase =
-      createSupabaseServerClient();
+    const supabase = createSupabaseServerClient();
 
-    const { data, error } =
-      await supabase
-        .from(
-          "cashflow_planning"
-        )
+    const PAGE_SIZE = 1000;
+
+    const allData: CashflowPlanningRow[] = [];
+
+    let from = 0;
+
+    while (true) {
+      const to = from + PAGE_SIZE - 1;
+
+      console.log(
+        "[CASHFLOW-PLANNING GET] loading rows:",
+        {
+          from,
+          to,
+        }
+      );
+
+      const { data, error } = await supabase
+        .from("cashflow_planning")
         .select(
           [
+            "id",
             "year",
             "month",
             "role",
@@ -49,98 +128,88 @@ export async function GET() {
             "source_row",
             "source_col",
             "source_offset",
-
-            // 养老保险
             "is_annuity_contribution",
             "is_pension_payment",
-
-            // 拖拽排序
             "sort_order",
-
             "deleted",
-
             "manual_remaining",
             "manual_total_cash",
             "manual_annuity",
-
             "original_opening_cash",
             "original_opening_annuity",
           ].join(",")
         )
-        .order(
-          "year",
-          {
-            ascending: true,
-          }
-        )
-        .order(
-          "month",
-          {
-            ascending: true,
-          }
-        )
-        .order(
-          "role",
-          {
-            ascending: true,
-          }
-        )
-        .order(
-          "sort_order",
-          {
-            ascending: true,
-            nullsFirst: false,
-          }
+        .order("year", {
+          ascending: true,
+        })
+        .order("month", {
+          ascending: true,
+        })
+        .order("role", {
+          ascending: true,
+        })
+        .order("sort_order", {
+          ascending: true,
+          nullsFirst: false,
+        })
+        .range(from, to);
+
+      if (error) {
+        console.error(
+          "[CASHFLOW-PLANNING GET] Supabase error:",
+          error
         );
 
-    if (error) {
-      console.error(
-        "CASHFLOW-PLANNING GET Supabase error:",
-        error
+        return NextResponse.json(
+          {
+            ok: false,
+            error: error.message,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      const pageData =
+        (data ?? []) as unknown as CashflowPlanningRow[];
+
+      allData.push(...pageData);
+
+      console.log(
+        "[CASHFLOW-PLANNING GET] page loaded:",
+        pageData.length
       );
 
-      return NextResponse.json(
-        {
-          ok: false,
+      if (pageData.length < PAGE_SIZE) {
+        break;
+      }
 
-          error:
-            error.message,
-
-          code:
-            error.code,
-
-          details:
-            error.details,
-
-          hint:
-            error.hint,
-        },
-        {
-          status: 500,
-        }
-      );
+      from += PAGE_SIZE;
     }
+
+    console.log(
+      "[CASHFLOW-PLANNING GET] total rows:",
+      allData.length
+    );
 
     return NextResponse.json({
       ok: true,
-
-      data:
-        data ?? [],
+      data: allData,
     });
   } catch (error) {
     console.error(
-      "CASHFLOW-PLANNING GET exception:",
+      "[CASHFLOW-PLANNING GET] unexpected error:",
       error
     );
 
     return NextResponse.json(
       {
         ok: false,
-
         error:
           error instanceof Error
             ? error.message
-            : "读取 CASHFLOW-PLANNING 失败",
+            : "Unknown error",
       },
       {
         status: 500,
@@ -149,45 +218,44 @@ export async function GET() {
   }
 }
 
-// =====================================================
-// POST
-//
-// 接收完整 CASHFLOW_STATE
-//
-// 每次保存：
-// 1. 删除旧快照
-// 2. 插入完整新快照
-//
-// 支持：
-// - 修改金额
-// - 新增收入
-// - 新增支出
-// - 删除项目
-// - 下月定投联动
-// - 复制年份
-// - 手工修改本月剩下
-// - 手工修改总现金剩下
-// - 手工修改积累年金
-// - 拖拽排序
-// - 养老保险属性
-// =====================================================
+/* =========================================================
+ * POST
+ *
+ * 非常重要：
+ *
+ * 这里 NEVER DELETE。
+ *
+ * 当前页面传过来的数据：
+ *   已存在 -> UPDATE
+ *   不存在 -> INSERT
+ *
+ * 数据库中存在、但当前页面没有传来的数据：
+ *   保留不动
+ *
+ * 所以：
+ * 页面只有 2033/01~03
+ * 不会导致 2033/04~12 被删除。
+ * ========================================================= */
 
-export async function POST(
-  request: Request
-) {
+export async function POST(request: Request) {
   try {
-    const body =
-      await request.json();
 
-    if (
-      !body ||
-      typeof body !== "object"
-    ) {
+    const supabase = createSupabaseServerClient();
+    const body = await request.json();
+
+    const years = Array.isArray(body?.years)
+      ? body.years
+      : [];
+
+    const projects = Array.isArray(body?.projects)
+      ? body.projects
+      : [];
+
+    if (years.length === 0) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "请求数据格式错误",
+          error: "No years provided",
         },
         {
           status: 400,
@@ -195,504 +263,948 @@ export async function POST(
       );
     }
 
-    const years =
-      Array.isArray(body.years)
-        ? body.years
-        : [];
+    const rows: CashflowPlanningRow[] = [];
 
-    const projects =
-      Array.isArray(body.projects)
-        ? body.projects
-        : [];
+    const incomingYearSet = new Set<number>();
 
-    const supabase =
-      createSupabaseServerClient();
+    /**
+     * =====================================================
+     * 构建 incoming rows
+     * =====================================================
+     */
 
-    // =================================================
-    // 先删除旧数据
-    // =================================================
-
-    const {
-      error: deleteError,
-    } = await supabase
-      .from(
-        "cashflow_planning"
-      )
-      .delete()
-      .not(
-        "id",
-        "is",
-        null
-      );
-
-    if (deleteError) {
-      console.error(
-        "CASHFLOW-PLANNING DELETE before save error:",
-        deleteError
-      );
-
-      return NextResponse.json(
-        {
-          ok: false,
-
-          error:
-            deleteError.message,
-
-          code:
-            deleteError.code,
-
-          details:
-            deleteError.details,
-
-          hint:
-            deleteError.hint,
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    // =================================================
-    // 转换成数据库 rows
-    // =================================================
-
-    const rows:
-      Record<string, unknown>[] =
-      [];
-
-    for (const year of years) {
-      if (
-        !year ||
-        typeof year !== "object"
-      ) {
+    for (const yearData of years) {
+      if (!yearData) {
         continue;
       }
 
-      const yearValue =
-        Number(year.year);
+      const yearValue = Number(
+        yearData.year ??
+          yearData.value ??
+          yearData.yearValue
+      );
 
-      if (
-        !Number.isFinite(
-          yearValue
-        )
-      ) {
+      if (!Number.isFinite(yearValue)) {
         continue;
       }
 
-      const months =
-        Array.isArray(
-          year.months
-        )
-          ? year.months
-          : [];
+      incomingYearSet.add(yearValue);
 
-      for (const month of months) {
-        if (
-          !month ||
-          typeof month !== "object"
-        ) {
+      const months = Array.isArray(yearData.months)
+        ? yearData.months
+        : [];
+
+      for (const monthData of months) {
+        if (!monthData) {
           continue;
         }
 
-        const monthValue =
-          Number(month.month);
+        const monthValue = Number(
+          monthData.month ??
+            monthData.monthValue ??
+            monthData.value
+        );
 
         if (
-          !Number.isFinite(
-            monthValue
-          ) ||
+          !Number.isFinite(monthValue) ||
           monthValue < 1 ||
           monthValue > 12
         ) {
           continue;
         }
 
-        const income =
-          Array.isArray(
-            month.income
-          )
-            ? month.income
-            : [];
+        /**
+         * =================================================
+         * month meta
+         *
+         * 有些月份没有 income / expense 项目，
+         * 但是仍然需要保存月份的手工数据。
+         * =================================================
+         */
 
-        const expense =
-          Array.isArray(
-            month.expense
-          )
-            ? month.expense
-            : [];
+        const monthMetaProjectId =
+          `__month_meta__${yearValue}_${monthValue}`;
 
-        // =================================================
-        // 注意：
-        //
-        // 收入和支出各自从 0 开始排序。
-        //
-        // 不会因为把 income + expense 合并，
-        // 导致 expense 的 sort_order 从 income 后面继续。
-        // =================================================
+        const incomeItems = Array.isArray(
+          monthData.income
+        )
+          ? monthData.income
+          : [];
 
-        const items = [
-          ...income.map(
-            (
-              item: any,
-              index: number
-            ) => ({
-              ...item,
+        const expenseItems = Array.isArray(
+          monthData.expense
+        )
+          ? monthData.expense
+          : [];
 
+        /**
+         * =================================================
+         * 收入
+         * =================================================
+         */
+
+        incomeItems.forEach(
+          (
+            item: any,
+            index: number
+          ) => {
+            if (!item) {
+              return;
+            }
+
+            const row: CashflowPlanningRow = {
+              year: yearValue,
+              month: monthValue,
               role: "income",
 
-              sortOrder:
-                index,
-            })
-          ),
+              project_id:
+                optionalString(
+                  item.project_id ??
+                    item.projectId
+                ),
 
-          ...expense.map(
-            (
-              item: any,
-              index: number
-            ) => ({
-              ...item,
+              name:
+                optionalString(
+                  item.name ??
+                    item.title ??
+                    item.project_name
+                ),
 
+              value:
+                optionalNumber(
+                  item.value ??
+                    item.amount
+                ),
+
+              independent:
+                optionalBoolean(
+                  item.independent
+                ),
+
+              from_excel:
+                optionalBoolean(
+                  item.from_excel ??
+                    item.fromExcel
+                ),
+
+              source_row:
+                optionalNumber(
+                  item.source_row ??
+                    item.sourceRow
+                ),
+
+              source_col:
+                optionalNumber(
+                  item.source_col ??
+                    item.sourceCol
+                ),
+
+              source_offset:
+                optionalNumber(
+                  item.source_offset ??
+                    item.sourceOffset
+                ),
+
+              is_annuity_contribution:
+                optionalBoolean(
+                  item.is_annuity_contribution ??
+                    item.isAnnuityContribution
+                ),
+
+              is_pension_payment:
+                optionalBoolean(
+                  item.is_pension_payment ??
+                    item.isPensionPayment
+                ),
+
+              sort_order:
+                optionalNumber(
+                  item.sort_order ??
+                    item.sortOrder ??
+                    index
+                ),
+
+              deleted:               
+                  item.deleted === true,
+
+              manual_remaining:
+                optionalNumber(
+                  item.manual_remaining ??
+                    item.manualRemaining
+                ),
+
+              manual_total_cash:
+                optionalNumber(
+                  item.manual_total_cash ??
+                    item.manualTotalCash
+                ),
+
+              manual_annuity:
+                optionalNumber(
+                  item.manual_annuity ??
+                    item.manualAnnuity
+                ),
+
+              original_opening_cash:
+                optionalNumber(
+                  item.original_opening_cash ??
+                    item.originalOpeningCash
+                ),
+
+              original_opening_annuity:
+                optionalNumber(
+                  item.original_opening_annuity ??
+                    item.originalOpeningAnnuity
+                ),
+            };
+
+            rows.push(row);
+          }
+        );
+
+        /**
+         * =================================================
+         * 支出
+         * =================================================
+         */
+
+        expenseItems.forEach(
+          (
+            item: any,
+            index: number
+          ) => {
+            if (!item) {
+              return;
+            }
+
+            const row: CashflowPlanningRow = {
+              year: yearValue,
+              month: monthValue,
               role: "expense",
 
-              sortOrder:
-                index,
-            })
-          ),
-        ];
+              project_id:
+                optionalString(
+                  item.project_id ??
+                    item.projectId
+                ),
 
-        // =============================================
-        // month meta
-        //
-        // 即使这个月没有任何收入/支出，
-        // 也保存一行。
-        // =============================================
+              name:
+                optionalString(
+                  item.name ??
+                    item.title ??
+                    item.project_name
+                ),
+
+              value:
+                optionalNumber(
+                  item.value ??
+                    item.amount
+                ),
+
+              independent:
+                optionalBoolean(
+                  item.independent
+                ),
+
+              from_excel:
+                optionalBoolean(
+                  item.from_excel ??
+                    item.fromExcel
+                ),
+
+              source_row:
+                optionalNumber(
+                  item.source_row ??
+                    item.sourceRow
+                ),
+
+              source_col:
+                optionalNumber(
+                  item.source_col ??
+                    item.sourceCol
+                ),
+
+              source_offset:
+                optionalNumber(
+                  item.source_offset ??
+                    item.sourceOffset
+                ),
+
+              is_annuity_contribution:
+                optionalBoolean(
+                  item.is_annuity_contribution ??
+                    item.isAnnuityContribution
+                ),
+
+              is_pension_payment:
+                optionalBoolean(
+                  item.is_pension_payment ??
+                    item.isPensionPayment
+                ),
+
+              sort_order:
+                optionalNumber(
+                  item.sort_order ??
+                    item.sortOrder ??
+                    index
+                ),
+
+              deleted:               
+                  item.deleted === true,
+
+              manual_remaining:
+                optionalNumber(
+                  item.manual_remaining ??
+                    item.manualRemaining
+                ),
+
+              manual_total_cash:
+                optionalNumber(
+                  item.manual_total_cash ??
+                    item.manualTotalCash
+                ),
+
+              manual_annuity:
+                optionalNumber(
+                  item.manual_annuity ??
+                    item.manualAnnuity
+                ),
+
+              original_opening_cash:
+                optionalNumber(
+                  item.original_opening_cash ??
+                    item.originalOpeningCash
+                ),
+
+              original_opening_annuity:
+                optionalNumber(
+                  item.original_opening_annuity ??
+                    item.originalOpeningAnnuity
+                ),
+            };
+
+            rows.push(row);
+          }
+        );
+
+        /**
+         * =================================================
+         * 如果这个月完全没有 income / expense，
+         * 保存 month meta。
+         *
+         * 这里沿用原来的 __month_meta__ 逻辑。
+         * =================================================
+         */
 
         if (
-          items.length === 0
+          incomeItems.length === 0 &&
+          expenseItems.length === 0
         ) {
-          rows.push({
-            year: yearValue,
-
-            month: monthValue,
-
-            role: "income",
-
-            project_id:
-              `__month_meta__${yearValue}_${monthValue}`,
-
-            name: "",
-
-            value: 0,
-
-            independent: true,
-
-            from_excel: false,
-
-            sort_order: null,
-
-            source_row: null,
-
-            source_col: null,
-
-            source_offset: null,
-
-            is_annuity_contribution:
-              false,
-
-            is_pension_payment:
-              false,
-
-            deleted: true,
-
-            manual_remaining:
-              optionalNumber(
-                month.manualRemaining
-              ),
-
-            manual_total_cash:
-              optionalNumber(
-                month.manualTotalCash
-              ),
-
-            manual_annuity:
-              optionalNumber(
-                month.manualAnnuity
-              ),
-
-            original_opening_cash:
-              optionalNumber(
-                year.originalOpeningCash
-              ) ?? 0,
-
-            original_opening_annuity:
-              optionalNumber(
-                year.originalOpeningAnnuity
-              ) ?? 0,
-          });
-
-          continue;
-        }
-
-        // =============================================
-        // 实际项目
-        // =============================================
-
-        for (const item of items) {
-          if (
-            !item ||
-            typeof item !== "object"
-          ) {
-            continue;
-          }
-
-          const role =
-            item.role ===
-            "expense"
-              ? "expense"
-              : "income";
-
-          const projectId =
-            typeof item.projectId ===
-              "string" &&
-            item.projectId.trim()
-              ? item.projectId
-              : `__item__${yearValue}_${monthValue}_${Math.random()
-                  .toString(36)
-                  .slice(2)}`;
-
-          const name =
-            typeof item.name ===
-            "string"
-              ? item.name
-              : "";
-
-          const value =
-            Number.isFinite(
-              item.value
-            )
-              ? Number(
-                  item.value
-                )
-              : 0;
-
-          const sortOrder =
-            Number.isFinite(
-              item.sortOrder
-            )
-              ? Number(
-                  item.sortOrder
-                )
-              : null;
+          const monthMeta: any =
+            monthData.meta ??
+            monthData;
 
           rows.push({
             year: yearValue,
-
             month: monthValue,
-
-            role,
+            role: "expense",
 
             project_id:
-              projectId,
+              monthMetaProjectId,
 
-            name,
+            name: "__month_meta__",
 
-            value,
+            value:
+              optionalNumber(
+                monthMeta.value
+              ),
 
             independent:
-              !!item.independent,
+              optionalBoolean(
+                monthMeta.independent
+              ),
 
             from_excel:
-              !!item.fromExcel,
-
-            // =========================================
-            // 拖拽排序
-            // =========================================
-
-            sort_order:
-              sortOrder,
+              optionalBoolean(
+                monthMeta.from_excel ??
+                  monthMeta.fromExcel
+              ),
 
             source_row:
               optionalNumber(
-                item.sourceRow
+                monthMeta.source_row ??
+                  monthMeta.sourceRow
               ),
 
             source_col:
               optionalNumber(
-                item.sourceCol
+                monthMeta.source_col ??
+                  monthMeta.sourceCol
               ),
 
             source_offset:
               optionalNumber(
-                item.sourceOffset
+                monthMeta.source_offset ??
+                  monthMeta.sourceOffset
               ),
 
-            // =========================================
-            // 转去养老保险
-            // =========================================
-
             is_annuity_contribution:
-              !!item.isAnnuityContribution,
-
-            // =========================================
-            // 本月交养老保险
-            // =========================================
+              optionalBoolean(
+                monthMeta.is_annuity_contribution ??
+                  monthMeta.isAnnuityContribution
+              ),
 
             is_pension_payment:
-              !!item.isPensionPayment,
+              optionalBoolean(
+                monthMeta.is_pension_payment ??
+                  monthMeta.isPensionPayment
+              ),
+
+            sort_order:
+              optionalNumber(
+                monthMeta.sort_order ??
+                  monthMeta.sortOrder ??
+                  0
+              ),
 
             deleted:
-              !!item.deleted,
-
-            // =========================================
-            // 月度手工数据
-            // =========================================
+              monthMeta.deleted === true,
 
             manual_remaining:
               optionalNumber(
-                month.manualRemaining
+                monthMeta.manual_remaining ??
+                  monthMeta.manualRemaining
               ),
 
             manual_total_cash:
               optionalNumber(
-                month.manualTotalCash
+                monthMeta.manual_total_cash ??
+                  monthMeta.manualTotalCash
               ),
 
             manual_annuity:
               optionalNumber(
-                month.manualAnnuity
+                monthMeta.manual_annuity ??
+                  monthMeta.manualAnnuity
               ),
-
-            // =========================================
-            // 年度初始数据
-            // =========================================
 
             original_opening_cash:
               optionalNumber(
-                year.originalOpeningCash
-              ) ?? 0,
+                monthMeta.original_opening_cash ??
+                  monthMeta.originalOpeningCash
+              ),
 
             original_opening_annuity:
               optionalNumber(
-                year.originalOpeningAnnuity
-              ) ?? 0,
+                monthMeta.original_opening_annuity ??
+                  monthMeta.originalOpeningAnnuity
+              ),
           });
         }
       }
     }
 
-    // =================================================
-    // 没有数据
-    // =================================================
+    const incomingYears = Array.from(
+      incomingYearSet
+    ).sort(
+      (a, b) => a - b
+    );
 
     if (
+      incomingYears.length === 0 ||
       rows.length === 0
     ) {
-      return NextResponse.json({
-        ok: true,
-
-        saved: 0,
-
-        projects:
-          projects.length,
-      });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "No valid cashflow rows provided",
+        },
+        {
+          status: 400,
+        }
+      );
     }
 
-    // =================================================
-    // 分批插入
-    // =================================================
+    console.log(
+      "[CASHFLOW-PLANNING POST] incoming years:",
+      incomingYears
+    );
 
-    const BATCH_SIZE =
-      500;
+    console.log(
+      "[CASHFLOW-PLANNING POST] incoming rows:",
+      rows.length
+    );
 
-    for (
-      let i = 0;
-      i < rows.length;
-      i += BATCH_SIZE
-    ) {
-      const batch =
-        rows.slice(
-          i,
-          i + BATCH_SIZE
-        );
+    /**
+     * =====================================================
+     * 关键修改
+     *
+     * 不再：
+     *
+     * supabase
+     *   .from("cashflow_planning")
+     *   .delete()
+     *   .in("year", incomingYears)
+     *
+     * 这里永远不 DELETE。
+     * =====================================================
+     */
 
-      const {
-        error,
-      } = await supabase
-        .from(
-          "cashflow_planning"
+    /**
+     * =====================================================
+     * 第一步：
+     * 读取数据库中这些年份已有的数据。
+     *
+     * 这里只读取，不删除。
+     *
+     * 为避免 Supabase 1000 行限制，同样分页。
+     * =====================================================
+     */
+
+    const existingRows: any[] = [];
+
+    const PAGE_SIZE = 1000;
+
+    let from = 0;
+
+    while (true) {
+      const to = from + PAGE_SIZE - 1;
+
+      const { data, error } = await supabase
+        .from("cashflow_planning")
+        .select(
+          [
+            "id",
+            "year",
+            "month",
+            "role",
+            "project_id",
+            "name",
+            "value",
+            "independent",
+            "from_excel",
+            "source_row",
+            "source_col",
+            "source_offset",
+            "is_annuity_contribution",
+            "is_pension_payment",
+            "sort_order",
+            "deleted",
+            "manual_remaining",
+            "manual_total_cash",
+            "manual_annuity",
+            "original_opening_cash",
+            "original_opening_annuity",
+          ].join(",")
         )
-        .insert(batch);
+        .in(
+          "year",
+          incomingYears
+        )
+        .order("year", {
+          ascending: true,
+        })
+        .order("month", {
+          ascending: true,
+        })
+        .range(from, to);
 
       if (error) {
         console.error(
-          "CASHFLOW-PLANNING INSERT error:",
+          "[CASHFLOW-PLANNING POST] load existing rows error:",
           error
         );
-
-        // =============================================
-        // 如果中途失败，
-        // 清理已经写入的数据，
-        // 避免留下半套快照。
-        // =============================================
-
-        await supabase
-          .from(
-            "cashflow_planning"
-          )
-          .delete()
-          .not(
-            "id",
-            "is",
-            null
-          );
 
         return NextResponse.json(
           {
             ok: false,
-
-            error:
-              error.message,
-
-            code:
-              error.code,
-
-            details:
-              error.details,
-
-            hint:
-              error.hint,
+            error: error.message,
           },
           {
             status: 500,
           }
         );
       }
+
+      const page =
+        data ?? [];
+
+      existingRows.push(
+        ...page
+      );
+
+      if (
+        page.length <
+        PAGE_SIZE
+      ) {
+        break;
+      }
+
+      from += PAGE_SIZE;
     }
+
+    console.log(
+      "[CASHFLOW-PLANNING POST] existing rows:",
+      existingRows.length
+    );
+
+    /**
+     * =====================================================
+     * 第二步：
+     * 建立数据库记录索引
+     * =====================================================
+     */
+
+    const existingMap =
+      new Map<
+        string,
+        any[]
+      >();
+
+    for (
+      const existing of existingRows
+    ) {
+      const key =
+        buildMatchKey(
+          existing
+        );
+
+      const list =
+        existingMap.get(
+          key
+        ) ?? [];
+
+      list.push(
+        existing
+      );
+
+      existingMap.set(
+        key,
+        list
+      );
+    }
+
+    /**
+     * =====================================================
+     * 第三步：
+     * 给 incoming rows 找对应的数据库 id
+     *
+     * 找到：
+     *   带 id UPDATE
+     *
+     * 找不到：
+     *   不带 id INSERT
+     *
+     * 注意：
+     * 同一个 key 如果数据库里有多条，
+     * 按顺序逐条对应，避免全部更新到第一条。
+     * =====================================================
+     */
+
+    const usedExistingIds =
+      new Set<string>();
+
+    const rowsToUpsert =
+      rows.map(
+        (row) => {
+          const key =
+            buildMatchKey(
+              row
+            );
+
+          const candidates =
+            existingMap.get(
+              key
+            ) ?? [];
+
+          let matched:
+            | any
+            | undefined;
+
+          for (
+            const candidate of candidates
+          ) {
+            if (
+              candidate?.id &&
+              !usedExistingIds.has(
+                candidate.id
+              )
+            ) {
+              matched =
+                candidate;
+
+              break;
+            }
+          }
+
+          if (
+            matched?.id
+          ) {
+            usedExistingIds.add(
+              matched.id
+            );
+
+            return {
+              id: matched.id,
+
+              year: row.year,
+              month: row.month,
+              role: row.role,
+
+              project_id:
+                row.project_id,
+
+              name:
+                row.name,
+
+              value:
+                row.value,
+
+              independent:
+                row.independent,
+
+              from_excel:
+                row.from_excel,
+
+              source_row:
+                row.source_row,
+
+              source_col:
+                row.source_col,
+
+              source_offset:
+                row.source_offset,
+
+              is_annuity_contribution:
+                row.is_annuity_contribution,
+
+              is_pension_payment:
+                row.is_pension_payment,
+
+              sort_order:
+                row.sort_order,
+
+              deleted:
+                row.deleted,
+
+              manual_remaining:
+                row.manual_remaining,
+
+              manual_total_cash:
+                row.manual_total_cash,
+
+              manual_annuity:
+                row.manual_annuity,
+
+              original_opening_cash:
+                row.original_opening_cash,
+
+              original_opening_annuity:
+                row.original_opening_annuity,
+            };
+          }
+
+          return {
+  id: crypto.randomUUID(),
+
+  year: row.year,
+  month: row.month,
+  role: row.role,
+
+  project_id:
+    row.project_id,
+
+  name:
+    row.name,
+
+  value:
+    row.value,
+
+  independent:
+    row.independent,
+
+  from_excel:
+    row.from_excel,
+
+  source_row:
+    row.source_row,
+
+  source_col:
+    row.source_col,
+
+  source_offset:
+    row.source_offset,
+
+  is_annuity_contribution:
+    row.is_annuity_contribution,
+
+  is_pension_payment:
+    row.is_pension_payment,
+
+  sort_order:
+    row.sort_order,
+
+  deleted:
+    row.deleted,
+
+  manual_remaining:
+    row.manual_remaining,
+
+  manual_total_cash:
+    row.manual_total_cash,
+
+  manual_annuity:
+    row.manual_annuity,
+
+  original_opening_cash:
+    row.original_opening_cash,
+
+  original_opening_annuity:
+    row.original_opening_annuity,
+};
+        }
+      );
+
+    /**
+     * =====================================================
+     * 第四步：
+     * 使用 PRIMARY KEY(id) 做 upsert
+     *
+     * 因为：
+     * cashflow_planning_pkey
+     * = id
+     *
+     * 新数据没有 id -> INSERT
+     * 已有数据有 id -> UPDATE
+     *
+     * 数据库中没有出现在本次 rowsToUpsert 的记录：
+     * 完全不会被碰。
+     * =====================================================
+     */
+
+    const UPSERT_BATCH_SIZE = 500;
+
+    let totalSaved = 0;
+
+    for (
+      let i = 0;
+      i < rowsToUpsert.length;
+      i += UPSERT_BATCH_SIZE
+    ) {
+      const batch =
+        rowsToUpsert.slice(
+          i,
+          i + UPSERT_BATCH_SIZE
+        );
+
+      console.log(
+        "[CASHFLOW-PLANNING POST] upserting batch:",
+        {
+          start: i,
+          count: batch.length,
+        }
+      );
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("cashflow_planning")
+        .upsert(
+          batch,
+          {
+            onConflict:
+              "id",
+          }
+        )
+        .select("id");
+
+      if (error) {
+        console.error(
+          "[CASHFLOW-PLANNING POST] upsert error:",
+          error
+        );
+
+        /**
+         * 非常重要：
+         *
+         * 这里也绝对不 DELETE。
+         *
+         * 如果第 2 批失败：
+         * 第 1 批已经保存的内容保留。
+         * 数据库原有内容也保留。
+         */
+        return NextResponse.json(
+          {
+            ok: false,
+            error:
+              error.message,
+            savedBeforeError:
+              totalSaved,
+          },
+          {
+            status: 500,
+          }
+        );
+      }
+
+      totalSaved +=
+        data?.length ??
+        batch.length;
+    }
+
+    console.log(
+      "[CASHFLOW-PLANNING POST] save completed:",
+      {
+        incomingYears,
+        incomingRows:
+          rows.length,
+        totalSaved,
+        existingRows:
+          existingRows.length,
+      }
+    );
 
     return NextResponse.json({
       ok: true,
 
-      saved:
+      /**
+       * 方便前端/日志确认
+       */
+      years:
+        incomingYears,
+
+      incomingRows:
         rows.length,
 
-      projects:
-        projects.length,
+      savedRows:
+        totalSaved,
+
+      existingRows:
+        existingRows.length,
+
+      /**
+       * 明确告诉前端：
+       * 本次保存没有执行删除。
+       */
+      deletedRows: 0,
     });
   } catch (error) {
     console.error(
-      "CASHFLOW-PLANNING POST exception:",
+      "[CASHFLOW-PLANNING POST] unexpected error:",
       error
     );
 
+    /**
+     * 这里也绝对不 DELETE。
+     */
     return NextResponse.json(
       {
         ok: false,
-
         error:
           error instanceof Error
             ? error.message
-            : "保存 CASHFLOW-PLANNING 失败",
+            : "Unknown error",
       },
       {
         status: 500,
@@ -701,9 +1213,14 @@ export async function POST(
   }
 }
 
-// =====================================================
-// DELETE
-// =====================================================
+/* =========================================================
+ * DELETE
+ *
+ * 这个是用户明确调用 DELETE API 时才执行。
+ *
+ * 我没有改它。
+ * POST 不会调用这里。
+ * ========================================================= */
 
 export async function DELETE() {
   try {
@@ -713,9 +1230,7 @@ export async function DELETE() {
     const {
       error,
     } = await supabase
-      .from(
-        "cashflow_planning"
-      )
+      .from("cashflow_planning")
       .delete()
       .not(
         "id",
@@ -725,25 +1240,15 @@ export async function DELETE() {
 
     if (error) {
       console.error(
-        "CASHFLOW-PLANNING DELETE error:",
+        "[CASHFLOW-PLANNING DELETE] error:",
         error
       );
 
       return NextResponse.json(
         {
           ok: false,
-
           error:
             error.message,
-
-          code:
-            error.code,
-
-          details:
-            error.details,
-
-          hint:
-            error.hint,
         },
         {
           status: 500,
@@ -753,23 +1258,20 @@ export async function DELETE() {
 
     return NextResponse.json({
       ok: true,
-
-      deleted: true,
     });
   } catch (error) {
     console.error(
-      "CASHFLOW-PLANNING DELETE exception:",
+      "[CASHFLOW-PLANNING DELETE] unexpected error:",
       error
     );
 
     return NextResponse.json(
       {
         ok: false,
-
         error:
           error instanceof Error
             ? error.message
-            : "清空 CASHFLOW-PLANNING 失败",
+            : "Unknown error",
       },
       {
         status: 500,
@@ -777,19 +1279,3 @@ export async function DELETE() {
     );
   }
 }
-
-// =====================================================
-// Helpers
-// =====================================================
-
-function optionalNumber(
-  value: unknown
-): number | null {
-  return (
-    typeof value === "number" &&
-    Number.isFinite(value)
-  )
-    ? value
-    : null;
-}
-
