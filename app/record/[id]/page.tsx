@@ -574,7 +574,15 @@ function fundingNumber(value: unknown) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function FundingCalculator() {
+function FundingCalculator({
+  collapsed,
+  onToggleCollapse,
+  onRemove,
+}: {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onRemove: () => void;
+}) {
   const [targetName, setTargetName] =
     useState("年金缴费");
 
@@ -963,22 +971,58 @@ function FundingCalculator() {
   const isEnough =
     difference >= 0;
 
+
+if (collapsed) {
+  return (
+    <section className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-5 py-3">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-gray-600"
+        >
+          <span>▶</span>
+          <span>资金筹集计算</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-sm text-gray-500 hover:text-gray-800"
+        >
+          隐藏
+        </button>
+      </div>
+    </section>
+  );
+}
+
   return (
     <section className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
       {/* =================================================
           标题
       ================================================= */}
 
-      <div className="mb-5">
-        <h2 className="text-lg font-semibold text-gray-900">
-          资金筹集计算
-        </h2>
+      <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-3">
+  <button
+    type="button"
+    onClick={onToggleCollapse}
+    className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-gray-600"
+  >
+    <span>▼</span>
+    <span>资金筹集计算</span>
+  </button>
 
-        <p className="mt-1 text-xs text-gray-500">
-          可用于年金、买基金、保险缴费、还款及其他大额资金安排。
-          这里只做本次计算，不修改 Fixed Income 或 CASHFLOW 原始数据。
-        </p>
-      </div>
+  <button
+    type="button"
+    onClick={onRemove}
+    className="text-sm text-gray-500 hover:text-gray-800"
+  >
+    隐藏
+  </button>
+</div>
+
+<div className="p-5">
 
       {/* =================================================
           目标
@@ -1563,6 +1607,7 @@ function FundingCalculator() {
           {sourceError}
         </div>
       )}
+      </div>
     </section>
   );
 }
