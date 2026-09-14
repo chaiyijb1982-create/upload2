@@ -66,14 +66,6 @@ type MonthlyFact = {
   transactionCount: number;
 };
 
-type BookMonthlyFact = {
-  bookName: string;
-  year: number;
-  amount: number;
-  transactionCount: number;
-  months: MonthlyFact[];
-};
-
 type CategoryFact = {
   name: string;
   amount: number;
@@ -1969,8 +1961,6 @@ type CFOFacts = {
 
   monthly: MonthlyFact[];
 
-  bookMonthly: BookMonthlyFact[];
-
   yearly: {
     year: number;
     amount: number;
@@ -2059,34 +2049,6 @@ function buildCFOFacts(
 
   const bookCount =
     new Map<string, number>();
-
-      // ===================================================
-  // 账本 × 年份 × 月份
-  // ===================================================
-
-  const bookYearAmount =
-    new Map<
-      string,
-      Map<number, number>
-    >();
-
-  const bookYearCount =
-    new Map<
-      string,
-      Map<number, number>
-    >();
-
-  const bookYearMonthAmount =
-    new Map<
-      string,
-      Map<number, Map<string, number>>
-    >();
-
-  const bookYearMonthCount =
-    new Map<
-      string,
-      Map<number, Map<string, number>>
-    >();
 
   const categoryAmount =
     new Map<string, number>();
@@ -2395,128 +2357,6 @@ function buildCFOFacts(
       1,
     );
 
-        // =================================================
-    // 账本 × 年份 × 月份
-    // =================================================
-
-    const bookYear =
-      getTransactionYear(
-        transaction,
-      );
-
-    const bookMonth =
-      getTransactionMonth(
-        transaction,
-      );
-
-    if (bookYear !== null) {
-      if (!bookYearAmount.has(book)) {
-        bookYearAmount.set(
-          book,
-          new Map<number, number>(),
-        );
-      }
-
-      if (!bookYearCount.has(book)) {
-        bookYearCount.set(
-          book,
-          new Map<number, number>(),
-        );
-      }
-
-      if (!bookYearMonthAmount.has(book)) {
-        bookYearMonthAmount.set(
-          book,
-          new Map<
-            number,
-            Map<string, number>
-          >(),
-        );
-      }
-
-      if (!bookYearMonthCount.has(book)) {
-        bookYearMonthCount.set(
-          book,
-          new Map<
-            number,
-            Map<string, number>
-          >(),
-        );
-      }
-
-      const yearAmountMap =
-        bookYearAmount.get(book)!;
-
-      const yearCountMap =
-        bookYearCount.get(book)!;
-
-      yearAmountMap.set(
-        bookYear,
-        (yearAmountMap.get(bookYear) || 0) +
-          amount,
-      );
-
-      yearCountMap.set(
-        bookYear,
-        (yearCountMap.get(bookYear) || 0) +
-          1,
-      );
-
-      if (bookMonth) {
-        const monthAmountByYear =
-          bookYearMonthAmount
-            .get(book)!;
-
-        const monthCountByYear =
-          bookYearMonthCount
-            .get(book)!;
-
-        if (
-          !monthAmountByYear.has(
-            bookYear,
-          )
-        ) {
-          monthAmountByYear.set(
-            bookYear,
-            new Map<string, number>(),
-          );
-        }
-
-        if (
-          !monthCountByYear.has(
-            bookYear,
-          )
-        ) {
-          monthCountByYear.set(
-            bookYear,
-            new Map<string, number>(),
-          );
-        }
-
-        const monthAmountMap =
-          monthAmountByYear.get(
-            bookYear,
-          )!;
-
-        const monthCountMap =
-          monthCountByYear.get(
-            bookYear,
-          )!;
-
-        addMap(
-          monthAmountMap,
-          bookMonth,
-          amount,
-        );
-
-        addMap(
-          monthCountMap,
-          bookMonth,
-          1,
-        );
-      }
-    }
-
     addMap(
       categoryAmount,
       category,
@@ -2643,91 +2483,7 @@ function buildCFOFacts(
         (a, b) =>
           b.amount - a.amount,
       );
-  // ===================================================
-  // Book Monthly
-  // ===================================================
 
-  const bookMonthly: BookMonthlyFact[] = [];
-
-  for (
-    const [bookName, yearAmountMap]
-    of bookYearAmount.entries()
-  ) {
-    const yearCountMap =
-      bookYearCount.get(bookName) ||
-      new Map<number, number>();
-
-    const yearMonthAmountMap =
-      bookYearMonthAmount.get(bookName) ||
-      new Map<
-        number,
-        Map<string, number>
-      >();
-
-    const yearMonthCountMap =
-      bookYearMonthCount.get(bookName) ||
-      new Map<
-        number,
-        Map<string, number>
-      >();
-
-    for (
-      const [year, amount]
-      of yearAmountMap.entries()
-    ) {
-      const transactionCount =
-        yearCountMap.get(year) || 0;
-
-      const monthAmountMap =
-        yearMonthAmountMap.get(year) ||
-        new Map<string, number>();
-
-      const monthCountMap =
-        yearMonthCountMap.get(year) ||
-        new Map<string, number>();
-
-      const months =
-        Array.from(
-          monthAmountMap.keys(),
-        )
-          .sort((a, b) =>
-            a.localeCompare(b)
-          )
-          .map(
-            (month) => ({
-              month,
-              amount:
-                monthAmountMap.get(
-                  month,
-                ) || 0,
-              transactionCount:
-                monthCountMap.get(
-                  month,
-                ) || 0,
-            }),
-          );
-
-      bookMonthly.push({
-        bookName,
-        year,
-        amount,
-        transactionCount,
-        months,
-      });
-    }
-  }
-
-  bookMonthly.sort(
-    (a, b) => {
-      if (a.year !== b.year) {
-        return a.year - b.year;
-      }
-
-      return (
-        b.amount - a.amount
-      );
-    },
-  );
   // ===================================================
   // Categories
   // ===================================================
@@ -3437,7 +3193,6 @@ function buildCFOFacts(
     books,
     categories,
     monthly,
-    bookMonthly,
     yearly,
 
     xxRelated: {
@@ -3596,30 +3351,6 @@ function buildCFOFactsText(
 
   lines.push("");
 
-
-    // ===================================================
-  // Book Monthly
-  // ===================================================
-
-  lines.push("【账本月度消费】");
-
-  for (const item of facts.bookMonthly) {
-    lines.push(
-      `账本：${item.bookName}｜${item.year}年：¥${item.amount.toFixed(
-        2,
-      )} / ${item.transactionCount}笔`,
-    );
-
-    for (const month of item.months) {
-      lines.push(
-        `  ${month.month}: ¥${month.amount.toFixed(
-          2,
-        )} / ${month.transactionCount}笔`,
-      );
-    }
-  }
-
-  lines.push("");
   // ===================================================
   // Categories
   // ===================================================
@@ -4199,37 +3930,6 @@ export async function POST(
           body?.payload?.transactions,
       );
 
-      console.log(
-  "[AI CFO DEBUG]",
-  {
-    question,
-    transactionCount:
-      transactions.length,
-
-    xiaobaoCount:
-      transactions.filter(
-        (item) =>
-          getBookName(item)
-            .includes("小宝"),
-      ).length,
-
-    xiaobao2026Count:
-      transactions.filter(
-        (item) =>
-          getBookName(item)
-            .includes("小宝") &&
-          getTransactionYear(item) ===
-            2026,
-      ).length,
-
-    year2026Count:
-      transactions.filter(
-        (item) =>
-          getTransactionYear(item) ===
-          2026,
-      ).length,
-  },
-);
     // =================================================
     // History
     // =================================================
@@ -4550,19 +4250,6 @@ CFO PROGRAM FACTS 是程序统计结果。
 
 禁止重新计算。
 
-账本月度问题必须使用【账本月度消费】程序统计结果。
-
-如果用户询问：
-- 某个账本按月
-- 某账本今年每个月
-- 某账本本年度月度消费
-- 某账本某年的月度消费
-
-必须直接读取【账本月度消费】中对应的：
-账本 + 年份 + 月份 + 金额 + 笔数。
-
-禁止使用【账本】中的年度总额自行拆分月份。
-禁止根据年度总额、交易笔数或其他数据估算、推算或平均分配月份金额。
 ==================================================
 交易明细
 ==================================================

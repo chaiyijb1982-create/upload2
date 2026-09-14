@@ -560,6 +560,68 @@ function getDecision(
 }
 
 // =====================================================
+// Holding 信息
+// =====================================================
+function HoldingInfo({
+  task,
+  holding,
+}: {
+  task: RecordTask;
+  holding: Holding;
+}) {
+  const amount = holdingAmount(holding);
+  const cost = holdingCost(holding);
+  const diff = amount - cost;
+  const rate =
+    Number.isFinite(cost) && cost > 0
+      ? (diff / cost) * 100
+      : null;
+  const currency = holdingCurrency(holding);
+  const decision = getDecision(task, holding);
+
+  return (
+    <div className="mt-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+        <div>
+          <span className="text-gray-400">当前值</span>
+          <div className="font-medium text-gray-700">
+            {formatMoney(amount, currency)}
+          </div>
+        </div>
+        <div>
+          <span className="text-gray-400">COST</span>
+          <div className="font-medium text-gray-700">
+            {formatMoney(cost, currency)}
+          </div>
+        </div>
+        <div>
+          <span className="text-gray-400">盈亏</span>
+          <div className="font-medium text-gray-700">
+            {formatMoney(diff, currency)}
+          </div>
+        </div>
+        <div>
+          <span className="text-gray-400">收益率</span>
+          <div className="font-medium text-gray-700">
+            {rate === null ? "—" : `${rate.toFixed(2)}%`}
+          </div>
+        </div>
+      </div>
+
+      {decision && (
+        <div className="mt-2 text-xs text-gray-600">
+          {decision.text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =====================================================
+// 通用资金筹集计算器
+// =====================================================
+
+// =====================================================
 // 通用资金筹集计算器
 // =====================================================
 
@@ -569,19 +631,142 @@ type ManualFundingSource = {
   amount: string;
 };
 
+type CashflowFundingRow = {
+  id: string;
+  year: string;
+  month: string;
+  expenseName: string;
+  amount: string;
+};
+
+  type FixedIncomeFundingRow = {
+    id: string;
+    assetId: string;
+    useAmount: string;
+  };
+
+
+type FundingCalculatorData = {
+  targetName?: unknown;
+  targetAmount?: unknown;
+  cashflowRows?: unknown;
+  manualSources?: unknown;
+  selectedFixedIncomeIds?: unknown;
+  fixedIncomeUseAmounts?: unknown;
+  fixedIncomeRows?: unknown;
+};
+
 function fundingNumber(value: unknown) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function createCashflowRowId() {
+  return `cashflow-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}`;
+}
+
+function createManualSourceId() {
+  return `manual-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}`;
+}
+
+function normalizeSavedCashflowRows(
+  value: unknown
+): CashflowFundingRow[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(
+      (row): row is Record<string, unknown> =>
+        !!row &&
+        typeof row === "object"
+    )
+    .map((row) => ({
+      id:
+        typeof row.id === "string" &&
+        row.id.trim()
+          ? row.id
+          : createCashflowRowId(),
+
+      year:
+        typeof row.year === "string"
+          ? row.year
+          : "",
+
+      month:
+        typeof row.month === "string"
+          ? row.month
+          : "",
+
+      expenseName:
+        typeof row.expenseName === "string"
+          ? row.expenseName
+          : "",
+
+      amount:
+        typeof row.amount === "string"
+          ? row.amount
+          : row.amount !== undefined &&
+            row.amount !== null
+          ? String(row.amount)
+          : "",
+    }));
+}
+
+function normalizeSavedManualSources(
+  value: unknown
+): ManualFundingSource[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(
+      (source): source is Record<string, unknown> =>
+        !!source &&
+        typeof source === "object"
+    )
+    .map((source) => ({
+      id:
+        typeof source.id === "string" &&
+        source.id.trim()
+          ? source.id
+          : createManualSourceId(),
+
+      name:
+        typeof source.name === "string"
+          ? source.name
+          : "",
+
+      amount:
+        typeof source.amount === "string"
+          ? source.amount
+          : source.amount !== undefined &&
+            source.amount !== null
+          ? String(source.amount)
+          : "",
+    }));
 }
 
 function FundingCalculator({
   collapsed,
   onToggleCollapse,
   onRemove,
+  initialContent,
+  onSaveContent,
 }: {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onRemove: () => void;
+  initialContent: Record<string, unknown> | null;
+  onSaveContent: (
+    content: Record<string, unknown>
+  ) => Promise<void>;
 }) {
   const [targetName, setTargetName] =
     useState("年金缴费");
@@ -598,11 +783,27 @@ function FundingCalculator({
   const [fixedIncomeUseAmounts, setFixedIncomeUseAmounts] =
     useState<Record<string, string>>({});
 
-  const [septemberAmount, setSeptemberAmount] =
-    useState("");
+  // =====================================================
+  // CASHFLOW
+  // =====================================================
 
-  const [octoberAmount, setOctoberAmount] =
-    useState("");
+  const [cashflowYears, setCashflowYears] =
+    useState<
+      Array<{
+        year: number;
+        months: Array<{
+          month: number;
+          expense: Array<{
+            name?: string;
+            value?: number;
+            deleted?: boolean;
+          }>;
+        }>;
+      }>
+    >([]);
+
+  const [cashflowRows, setCashflowRows] =
+    useState<CashflowFundingRow[]>([]);
 
   const [manualSources, setManualSources] =
     useState<ManualFundingSource[]>([]);
@@ -616,18 +817,197 @@ function FundingCalculator({
   const [sourceError, setSourceError] =
     useState("");
 
-  const currentYear =
-    new Date().getFullYear();
+  const [savingCalculator, setSavingCalculator] =
+    useState(false);
 
-  // -----------------------------------------------------
+  const [calculatorHydrated, setCalculatorHydrated] =
+    useState(false);
+
+  // =====================================================
+  // 从 Record.content 恢复资金筹集计算器
+  // =====================================================
+
+  useEffect(() => {
+    if (!initialContent) {
+      return;
+    }
+
+    const saved =
+      initialContent.fundingCalculator;
+
+    if (
+      !saved ||
+      typeof saved !== "object"
+    ) {
+      setCalculatorHydrated(true);
+      return;
+    }
+
+    const data =
+      saved as FundingCalculatorData;
+
+    if (
+      typeof data.targetName === "string"
+    ) {
+      setTargetName(
+        data.targetName
+      );
+    }
+
+    if (
+      typeof data.targetAmount === "string"
+    ) {
+      setTargetAmount(
+        data.targetAmount
+      );
+    }
+
+    setCashflowRows(
+      normalizeSavedCashflowRows(
+        data.cashflowRows
+      )
+    );
+
+    setManualSources(
+      normalizeSavedManualSources(
+        data.manualSources
+      )
+    );
+
+    if (
+      Array.isArray(
+        data.selectedFixedIncomeIds
+      )
+    ) {
+      setSelectedFixedIncomeIds(
+        data.selectedFixedIncomeIds.filter(
+          (
+            id
+          ): id is string =>
+            typeof id === "string"
+        )
+      );
+    }
+
+    if (
+      data.fixedIncomeUseAmounts &&
+      typeof data.fixedIncomeUseAmounts ===
+        "object"
+    ) {
+      const source =
+        data.fixedIncomeUseAmounts as Record<
+          string,
+          unknown
+        >;
+
+      const normalized: Record<
+        string,
+        string
+      > = {};
+
+      Object.entries(
+        source
+      ).forEach(
+        ([id, value]) => {
+          normalized[id] =
+            typeof value ===
+            "string"
+              ? value
+              : value !==
+                  undefined &&
+                value !== null
+              ? String(value)
+              : "";
+        }
+      );
+
+      setFixedIncomeUseAmounts(
+        normalized
+      );
+    }
+
+    setCalculatorHydrated(true);
+  }, [initialContent]);
+
+  // =====================================================
+  // 保存整个资金筹集计算器
+  // =====================================================
+
+ async function saveCalculator(
+  overrides: Partial<{
+    targetName: string;
+    targetAmount: string;
+    cashflowRows: CashflowFundingRow[];
+    manualSources: ManualFundingSource[];
+    selectedFixedIncomeIds: string[];
+    fixedIncomeUseAmounts: Record<string, string>;
+    fixedIncomeRows: FixedIncomeFundingRow[]
+  }> = {}
+){
+    const current =
+      initialContent ?? {};
+
+    const nextFundingCalculator = {
+      targetName:
+        overrides.targetName ??
+        targetName,
+
+      targetAmount:
+        overrides.targetAmount ??
+        targetAmount,
+
+      cashflowRows:
+        overrides.cashflowRows ??
+        cashflowRows,
+
+      manualSources:
+        overrides.manualSources ??
+        manualSources,
+
+      selectedFixedIncomeIds:
+        overrides.selectedFixedIncomeIds ??
+        selectedFixedIncomeIds,
+
+      fixedIncomeUseAmounts:
+        overrides.fixedIncomeUseAmounts ??
+        fixedIncomeUseAmounts,
+
+      fixedIncomeRows:
+        overrides.fixedIncomeRows ??
+        fixedIncomeRows,  
+    };
+
+    try {
+      setSavingCalculator(true);
+
+      await onSaveContent({
+        ...current,
+        fundingCalculator:
+          nextFundingCalculator,
+      });
+    } catch (error) {
+      console.error(
+        "保存资金筹集计算器失败:",
+        error
+      );
+    } finally {
+      setSavingCalculator(false);
+    }
+  }
+
+  // =====================================================
   // 加载 Fixed Income + CASHFLOW
-  // -----------------------------------------------------
+  // =====================================================
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadSources() {
       setSourceError("");
+
+      // -------------------------------------------------
+      // Fixed Income
+      // -------------------------------------------------
 
       try {
         setLoadingFixedIncome(true);
@@ -637,7 +1017,9 @@ function FundingCalculator({
 
         if (!cancelled) {
           setFixedIncomeAssets(
-            Array.isArray(data) ? data : []
+            Array.isArray(data)
+              ? data
+              : []
           );
         }
       } catch (error) {
@@ -653,9 +1035,15 @@ function FundingCalculator({
         }
       } finally {
         if (!cancelled) {
-          setLoadingFixedIncome(false);
+          setLoadingFixedIncome(
+            false
+          );
         }
       }
+
+      // -------------------------------------------------
+      // CASHFLOW
+      // -------------------------------------------------
 
       try {
         setLoadingCashflow(true);
@@ -683,68 +1071,41 @@ function FundingCalculator({
           ).state;
 
         const years =
-          Array.isArray(state?.years)
+          Array.isArray(
+            state?.years
+          )
             ? state!.years
             : [];
 
-        /*
-         * 这里读取的是 CASHFLOW 当前 Supabase 数据：
-         *
-         * 2026 → 9月 → expense → 转去养老保险
-         * 2026 → 10月 → expense → 转去养老保险
-         *
-         * 这里只读，不保存、不修改。
-         */
-
-        function findPensionAmount(
-          monthNumber: number
-        ) {
-          const yearData =
-            years.find(
-              (year) =>
-                Number(year.year) ===
-                currentYear
-            );
-
-          if (!yearData) return 0;
-
-          const monthData =
-            yearData.months?.find(
-              (month) =>
-                Number(month.month) ===
-                monthNumber
-            );
-
-          if (!monthData) return 0;
-
-          return (
-            monthData.expense ?? []
-          )
-            .filter(
-              (item) =>
-                !item.deleted &&
-                String(
-                  item.name ?? ""
-                ).trim() ===
-                  "转去养老保险"
-            )
-            .reduce(
-              (sum, item) =>
-                sum +
-                fundingNumber(
-                  item.value
-                ),
-              0
-            );
-        }
-
         if (!cancelled) {
-          setSeptemberAmount(
-            String(findPensionAmount(9))
-          );
+          setCashflowYears(
+            years.map(
+              (
+                yearData
+              ) => ({
+                year: Number(
+                  yearData.year
+                ),
 
-          setOctoberAmount(
-            String(findPensionAmount(10))
+                months: (
+                  yearData.months ??
+                  []
+                ).map(
+                  (
+                    monthData
+                  ) => ({
+                    month:
+                      Number(
+                        monthData.month
+                      ),
+
+                    expense:
+                      monthData.expense ??
+                      [],
+                  })
+                ),
+              })
+            )
           );
         }
       } catch (error) {
@@ -760,7 +1121,9 @@ function FundingCalculator({
         }
       } finally {
         if (!cancelled) {
-          setLoadingCashflow(false);
+          setLoadingCashflow(
+            false
+          );
         }
       }
     }
@@ -770,137 +1133,908 @@ function FundingCalculator({
     return () => {
       cancelled = true;
     };
-  }, [currentYear]);
+  }, []);
 
-  // -----------------------------------------------------
+  // =====================================================
   // Fixed Income 选择
-  // -----------------------------------------------------
+  // =====================================================
 
-  function toggleFixedIncome(
-    asset: FixedIncomeAsset
+function toggleFixedIncome(
+  asset: FixedIncomeAsset
+) {
+  const id = asset.id;
+
+  const isSelected =
+    selectedFixedIncomeIds.includes(id);
+
+  const nextSelectedIds = isSelected
+    ? selectedFixedIncomeIds.filter(
+        (item) => item !== id
+      )
+    : [
+        ...selectedFixedIncomeIds,
+        id,
+      ];
+
+  const nextUseAmounts = {
+    ...fixedIncomeUseAmounts,
+    ...(isSelected
+      ? {}
+      : fixedIncomeUseAmounts[id] !==
+        undefined
+        ? {}
+        : {
+            [id]: String(
+              fundingNumber(asset.amount)
+            ),
+          }),
+  };
+
+  setSelectedFixedIncomeIds(
+    nextSelectedIds
+  );
+
+  setFixedIncomeUseAmounts(
+    nextUseAmounts
+  );
+
+  void saveCalculator({
+    selectedFixedIncomeIds:
+      nextSelectedIds,
+
+    fixedIncomeUseAmounts:
+      nextUseAmounts,
+  });
+}
+
+
+  // =====================================================
+  // Fixed Income 资金行
+  // =====================================================
+
+
+
+  const [fixedIncomeRows, setFixedIncomeRows] =
+    useState<FixedIncomeFundingRow[]>([]);
+
+  // =====================================================
+  // 从旧数据恢复 Fixed Income
+  // =====================================================
+
+  useEffect(() => {
+    if (!initialContent) {
+      return;
+    }
+
+    const saved =
+      initialContent.fundingCalculator;
+
+    if (
+      !saved ||
+      typeof saved !== "object"
+    ) {
+      return;
+    }
+
+    const data =
+      saved as FundingCalculatorData & {
+        fixedIncomeRows?: unknown;
+      };
+
+    if (
+      Array.isArray(
+        data.fixedIncomeRows
+      )
+    ) {
+      const rows =
+        data.fixedIncomeRows
+          .filter(
+            (
+              row
+            ): row is Record<string, unknown> =>
+              !!row &&
+              typeof row === "object"
+          )
+          .map((row) => ({
+            id:
+              typeof row.id === "string" &&
+              row.id.trim()
+                ? row.id
+                : `fixed-income-${Date.now()}-${Math.random()
+                    .toString(36)
+                    .slice(2, 7)}`,
+
+            assetId:
+              typeof row.assetId ===
+              "string"
+                ? row.assetId
+                : "",
+
+            useAmount:
+              typeof row.useAmount ===
+              "string"
+                ? row.useAmount
+                : row.useAmount !==
+                    undefined &&
+                  row.useAmount !==
+                    null
+                ? String(
+                    row.useAmount
+                  )
+                : "",
+          }));
+
+      setFixedIncomeRows(
+        rows
+      );
+    }
+  }, [initialContent]);
+
+  // =====================================================
+  // 保存 Fixed Income 资金行
+  // =====================================================
+
+  async function saveFixedIncomeRows(
+    rows: FixedIncomeFundingRow[]
   ) {
-    const id = asset.id;
+    const current =
+      initialContent ?? {};
 
-    setSelectedFixedIncomeIds(
+    const saved =
+      current.fundingCalculator;
+
+    const currentCalculator =
+      saved &&
+      typeof saved === "object"
+        ? saved
+        : {};
+
+    try {
+      setSavingCalculator(true);
+
+      await onSaveContent({
+        ...current,
+
+        fundingCalculator: {
+          ...currentCalculator,
+
+          targetName,
+          targetAmount,
+
+          fixedIncomeRows:
+            rows,
+
+          cashflowRows,
+
+          manualSources,
+
+          selectedFixedIncomeIds:
+            rows.map(
+              (row) =>
+                row.assetId
+            ),
+
+          fixedIncomeUseAmounts:
+            rows.reduce(
+              (
+                result,
+                row
+              ) => ({
+                ...result,
+                [row.assetId]:
+                  row.useAmount,
+              }),
+              {} as Record<
+                string,
+                string
+              >
+            ),
+        },
+      });
+    } catch (error) {
+      console.error(
+        "保存 Fixed Income 资金失败:",
+        error
+      );
+    } finally {
+      setSavingCalculator(false);
+    }
+  }
+
+  // =====================================================
+  // 添加 Fixed Income 行
+  // =====================================================
+
+  function addFixedIncomeRow() {
+    const newRow: FixedIncomeFundingRow =
+      {
+        id: `fixed-income-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 7)}`,
+
+        assetId: "",
+
+        useAmount: "",
+      };
+
+    setFixedIncomeRows(
       (previous) => {
-        if (previous.includes(id)) {
-          return previous.filter(
-            (item) => item !== id
-          );
-        }
-
-        return [...previous, id];
-      }
-    );
-
-    setFixedIncomeUseAmounts(
-      (previous) => {
-        if (
-          previous[id] !== undefined
-        ) {
-          return previous;
-        }
-
-        return {
+        const next = [
           ...previous,
-          [id]: String(
-            fundingNumber(asset.amount)
-          ),
-        };
+          newRow,
+        ];
+
+        void saveFixedIncomeRows(
+          next
+        );
+
+        return next;
       }
     );
   }
+
+  // =====================================================
+  // 删除 Fixed Income 行
+  // =====================================================
+
+  function deleteFixedIncomeRow(
+    id: string
+  ) {
+    setFixedIncomeRows(
+      (previous) => {
+        const next =
+          previous.filter(
+            (row) =>
+              row.id !== id
+          );
+
+        void saveFixedIncomeRows(
+          next
+        );
+
+        return next;
+      }
+    );
+  }
+
+  // =====================================================
+  // 选择 Fixed Income
+  // =====================================================
+
+  function updateFixedIncomeAsset(
+    rowId: string,
+    assetId: string
+  ) {
+    const asset =
+      fixedIncomeAssets.find(
+        (item) =>
+          item.id === assetId
+      );
+
+    const currentAmount =
+      asset
+        ? fundingNumber(
+            asset.amount
+          )
+        : 0;
+
+    setFixedIncomeRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (row) =>
+              row.id === rowId
+                ? {
+                    ...row,
+
+                    assetId,
+
+                    useAmount:
+                      asset
+                        ? String(
+                            currentAmount
+                          )
+                        : "",
+                  }
+                : row
+          );
+
+        void saveFixedIncomeRows(
+          next
+        );
+
+        return next;
+      }
+    );
+  }
+
+  // =====================================================
+  // 修改 Fixed Income 本次使用金额
+  // =====================================================
 
   function updateFixedIncomeUseAmount(
-    id: string,
+    rowId: string,
     value: string
   ) {
-    setFixedIncomeUseAmounts(
-      (previous) => ({
-        ...previous,
-        [id]: value,
-      })
+    const row =
+      fixedIncomeRows.find(
+        (item) =>
+          item.id === rowId
+      );
+
+    if (!row) {
+      return;
+    }
+
+    const asset =
+      fixedIncomeAssets.find(
+        (item) =>
+          item.id ===
+          row.assetId
+      );
+
+    const available =
+      asset
+        ? fundingNumber(
+            asset.amount
+          )
+        : 0;
+
+    const requested =
+      fundingNumber(
+        value
+      );
+
+    const safeAmount =
+      Math.min(
+        Math.max(
+          requested,
+          0
+        ),
+        Math.max(
+          available,
+          0
+        )
+      );
+
+    const nextValue =
+      value === ""
+        ? ""
+        : String(
+            safeAmount
+          );
+
+    setFixedIncomeRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (item) =>
+              item.id === rowId
+                ? {
+                    ...item,
+
+                    useAmount:
+                      nextValue,
+                  }
+                : item
+          );
+
+        void saveFixedIncomeRows(
+          next
+        );
+
+        return next;
+      }
     );
   }
 
-  // -----------------------------------------------------
-  // 选中的 Fixed Income
-  // -----------------------------------------------------
 
-  const selectedFixedIncomeAssets =
-    useMemo(() => {
-      return fixedIncomeAssets.filter(
-        (asset) =>
-          selectedFixedIncomeIds.includes(
-            asset.id
-          )
-      );
-    }, [
-      fixedIncomeAssets,
-      selectedFixedIncomeIds,
-    ]);
+
+  // =====================================================
+  // Fixed Income 本次使用合计
+  // =====================================================
 
   const selectedFixedIncomeTotal =
     useMemo(() => {
-      return selectedFixedIncomeAssets.reduce(
-        (sum, asset) => {
-          const requested =
-            fundingNumber(
-              fixedIncomeUseAmounts[
-                asset.id
-              ]
+      return fixedIncomeRows.reduce(
+        (
+          sum,
+          row
+        ) => {
+          if (
+            !row.assetId
+          ) {
+            return sum;
+          }
+
+          const asset =
+            fixedIncomeAssets.find(
+              (item) =>
+                item.id ===
+                row.assetId
             );
 
+          if (!asset) {
+            return sum;
+          }
+
           const available =
-            fundingNumber(asset.amount);
+            fundingNumber(
+              asset.amount
+            );
 
-          /*
-           * 本次使用金额不能超过当前固收金额。
-           * 即使用户输入更大，计算也最多按当前资产金额计算。
-           */
-          const safeAmount = Math.min(
-            Math.max(requested, 0),
-            Math.max(available, 0)
+          const requested =
+            fundingNumber(
+              row.useAmount
+            );
+
+          const safeAmount =
+            Math.min(
+              Math.max(
+                requested,
+                0
+              ),
+              Math.max(
+                available,
+                0
+              )
+            );
+
+          return (
+            sum +
+            safeAmount
           );
-
-          return sum + safeAmount;
         },
         0
       );
     }, [
-      selectedFixedIncomeAssets,
-      fixedIncomeUseAmounts,
+      fixedIncomeRows,
+      fixedIncomeAssets,
     ]);
 
-  // -----------------------------------------------------
+  // =====================================================
   // CASHFLOW
-  // -----------------------------------------------------
+  // =====================================================
 
-  const september =
-    Math.max(
-      fundingNumber(septemberAmount),
-      0
-    );
+  const cashflowYearOptions =
+    useMemo(() => {
+      return cashflowYears
+        .map((item) =>
+          Number(item.year)
+        )
+        .filter(
+          (
+            year,
+            index,
+            array
+          ) =>
+            array.indexOf(
+              year
+            ) === index
+        )
+        .sort(
+          (a, b) => a - b
+        );
+    }, [cashflowYears]);
 
-  const october =
-    Math.max(
-      fundingNumber(octoberAmount),
-      0
+  function getCashflowYearData(
+    year: string
+  ) {
+    return cashflowYears.find(
+      (item) =>
+        Number(item.year) ===
+        Number(year)
     );
+  }
+
+  function getCashflowMonthOptions(
+    year: string
+  ) {
+    const yearData =
+      getCashflowYearData(
+        year
+      );
+
+    return (
+      yearData?.months ?? []
+    )
+      .map((item) =>
+        Number(item.month)
+      )
+      .filter(
+        (
+          month,
+          index,
+          array
+        ) =>
+          array.indexOf(
+            month
+          ) === index
+      )
+      .sort(
+        (a, b) => a - b
+      );
+  }
+
+  function getCashflowExpenseOptions(
+    year: string,
+    month: string
+  ) {
+    const yearData =
+      getCashflowYearData(
+        year
+      );
+
+    const monthData =
+      yearData?.months?.find(
+        (item) =>
+          Number(item.month) ===
+          Number(month)
+      );
+
+    return (
+      monthData?.expense ?? []
+    )
+      .filter(
+        (item) =>
+          !item.deleted &&
+          String(
+            item.name ?? ""
+          ).trim() !== ""
+      )
+      .map((item) => ({
+        name: String(
+          item.name ?? ""
+        ).trim(),
+
+        amount:
+          fundingNumber(
+            item.value
+          ),
+      }));
+  }
+
+  function getDefaultCashflowRow(): CashflowFundingRow {
+    const firstYear =
+      cashflowYearOptions[0];
+
+    const monthOptions =
+      firstYear !==
+      undefined
+        ? getCashflowMonthOptions(
+            String(firstYear)
+          )
+        : [];
+
+    const firstMonth =
+      monthOptions[0];
+
+    const expenseOptions =
+      firstYear !==
+        undefined &&
+      firstMonth !==
+        undefined
+        ? getCashflowExpenseOptions(
+            String(firstYear),
+            String(firstMonth)
+          )
+        : [];
+
+    const firstExpense =
+      expenseOptions[0];
+
+    return {
+      id: createCashflowRowId(),
+
+      year:
+        firstYear !==
+        undefined
+          ? String(firstYear)
+          : "",
+
+      month:
+        firstMonth !==
+        undefined
+          ? String(firstMonth)
+          : "",
+
+      expenseName:
+        firstExpense?.name ??
+        "",
+
+      amount:
+        firstExpense
+          ? String(
+              fundingNumber(
+                firstExpense.amount
+              )
+            )
+          : "",
+    };
+  }
+
+  function addCashflowRow() {
+    setCashflowRows(
+      (previous) => {
+        const next = [
+          ...previous,
+          getDefaultCashflowRow(),
+        ];
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  function updateCashflowYear(
+    id: string,
+    year: string
+  ) {
+    const monthOptions =
+      getCashflowMonthOptions(
+        year
+      );
+
+    const month =
+      monthOptions.length > 0
+        ? String(
+            monthOptions[0]
+          )
+        : "";
+
+    const expenseOptions =
+      month
+        ? getCashflowExpenseOptions(
+            year,
+            month
+          )
+        : [];
+
+    const firstExpense =
+      expenseOptions[0];
+
+    setCashflowRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (row) =>
+              row.id === id
+                ? {
+                    ...row,
+
+                    year,
+
+                    month,
+
+                    expenseName:
+                      firstExpense?.name ??
+                      "",
+
+                    amount:
+                      firstExpense
+                        ? String(
+                            fundingNumber(
+                              firstExpense.amount
+                            )
+                          )
+                        : "",
+                  }
+                : row
+          );
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  function updateCashflowMonth(
+    id: string,
+    month: string
+  ) {
+    const row =
+      cashflowRows.find(
+        (item) =>
+          item.id === id
+      );
+
+    if (!row) return;
+
+    const expenseOptions =
+      getCashflowExpenseOptions(
+        row.year,
+        month
+      );
+
+    const firstExpense =
+      expenseOptions[0];
+
+    setCashflowRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (item) =>
+              item.id === id
+                ? {
+                    ...item,
+
+                    month,
+
+                    expenseName:
+                      firstExpense?.name ??
+                      "",
+
+                    amount:
+                      firstExpense
+                        ? String(
+                            fundingNumber(
+                              firstExpense.amount
+                            )
+                          )
+                        : "",
+                  }
+                : item
+          );
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  function updateCashflowExpense(
+    id: string,
+    expenseName: string
+  ) {
+    const row =
+      cashflowRows.find(
+        (item) =>
+          item.id === id
+      );
+
+    if (!row) return;
+
+    const expenseOptions =
+      getCashflowExpenseOptions(
+        row.year,
+        row.month
+      );
+
+    const selectedExpense =
+      expenseOptions.find(
+        (item) =>
+          item.name ===
+          expenseName
+      );
+
+    setCashflowRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (item) =>
+              item.id === id
+                ? {
+                    ...item,
+
+                    expenseName,
+
+                    amount:
+                      selectedExpense
+                        ? String(
+                            fundingNumber(
+                              selectedExpense.amount
+                            )
+                          )
+                        : "",
+                  }
+                : item
+          );
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  function updateCashflowAmount(
+    id: string,
+    amount: string
+  ) {
+    setCashflowRows(
+      (previous) => {
+        const next =
+          previous.map(
+            (item) =>
+              item.id === id
+                ? {
+                    ...item,
+                    amount,
+                  }
+                : item
+          );
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  function deleteCashflowRow(
+    id: string
+  ) {
+    setCashflowRows(
+      (previous) => {
+        const next =
+          previous.filter(
+            (item) =>
+              item.id !== id
+          );
+
+        void saveCalculator({
+          cashflowRows:
+            next,
+        });
+
+        return next;
+      }
+    );
+  }
+
+  // =====================================================
+  // CASHFLOW 只要有行就直接计入
+  // =====================================================
 
   const cashflowTotal =
-    september + october;
+    useMemo(() => {
+      return cashflowRows.reduce(
+        (sum, row) => {
+          return (
+            sum +
+            Math.max(
+              fundingNumber(
+                row.amount
+              ),
+              0
+            )
+          );
+        },
+        0
+      );
+    }, [cashflowRows]);
 
-  // -----------------------------------------------------
+  // =====================================================
   // 手工资金
-  // -----------------------------------------------------
+  // =====================================================
 
   const manualTotal =
     manualSources.reduce(
       (sum, source) =>
         sum +
         Math.max(
-          fundingNumber(source.amount),
+          fundingNumber(
+            source.amount
+          ),
           0
         ),
       0
@@ -908,34 +2042,54 @@ function FundingCalculator({
 
   function addManualSource() {
     setManualSources(
-      (previous) => [
-        ...previous,
-        {
-          id: `manual-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2, 7)}`,
-          name: "",
-          amount: "",
-        },
-      ]
+      (previous) => {
+        const next = [
+          ...previous,
+          {
+            id: createManualSourceId(),
+            name: "",
+            amount: "",
+          },
+        ];
+
+        void saveCalculator({
+          manualSources:
+            next,
+        });
+
+        return next;
+      }
     );
   }
 
   function updateManualSource(
     id: string,
-    field: "name" | "amount",
+    field:
+      | "name"
+      | "amount",
     value: string
   ) {
     setManualSources(
-      (previous) =>
-        previous.map((source) =>
-          source.id === id
-            ? {
-                ...source,
-                [field]: value,
-              }
-            : source
-        )
+      (previous) => {
+        const next =
+          previous.map(
+            (source) =>
+              source.id === id
+                ? {
+                    ...source,
+                    [field]:
+                      value,
+                  }
+                : source
+          );
+
+        void saveCalculator({
+          manualSources:
+            next,
+        });
+
+        return next;
+      }
     );
   }
 
@@ -943,20 +2097,56 @@ function FundingCalculator({
     id: string
   ) {
     setManualSources(
-      (previous) =>
-        previous.filter(
-          (source) => source.id !== id
-        )
+      (previous) => {
+        const next =
+          previous.filter(
+            (source) =>
+              source.id !== id
+          );
+
+        void saveCalculator({
+          manualSources:
+            next,
+        });
+
+        return next;
+      }
     );
   }
 
-  // -----------------------------------------------------
+  // =====================================================
+  // 目标字段保存
+  // =====================================================
+
+  function updateTargetName(
+    value: string
+  ) {
+    setTargetName(value);
+
+    void saveCalculator({
+      targetName: value,
+    });
+  }
+
+  function updateTargetAmount(
+    value: string
+  ) {
+    setTargetAmount(value);
+
+    void saveCalculator({
+      targetAmount: value,
+    });
+  }
+
+  // =====================================================
   // 最终计算
-  // -----------------------------------------------------
+  // =====================================================
 
   const target =
     Math.max(
-      fundingNumber(targetAmount),
+      fundingNumber(
+        targetAmount
+      ),
       0
     );
 
@@ -966,69 +2156,100 @@ function FundingCalculator({
     manualTotal;
 
   const difference =
-    totalAvailable - target;
+    totalAvailable -
+    target;
 
   const isEnough =
     difference >= 0;
 
+  // =====================================================
+  // 折叠状态
+  // =====================================================
 
-if (collapsed) {
-  return (
-    <section className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between gap-3 px-5 py-3">
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-gray-600"
-        >
-          <span>▶</span>
-          <span>资金筹集计算</span>
-        </button>
+  if (collapsed) {
+    return (
+      <section className="mb-6 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex items-center justify-between gap-3 px-5 py-3">
+          <button
+            type="button"
+            onClick={
+              onToggleCollapse
+            }
+            className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-gray-600"
+          >
+            <span>▶</span>
 
-        <button
-          type="button"
-          onClick={onRemove}
-          className="text-sm text-gray-500 hover:text-gray-800"
-        >
-          隐藏
-        </button>
-      </div>
-    </section>
-  );
-}
+            <span>
+              资金筹集计算
+            </span>
+
+            {savingCalculator && (
+              <span className="text-xs font-normal text-gray-400">
+                保存中…
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-sm text-gray-500 hover:text-gray-800"
+          >
+            隐藏
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  // =====================================================
+  // 展开
+  // =====================================================
 
   return (
     <section className="mb-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      {/* =================================================
-          标题
-      ================================================= */}
+      <div className="mb-5">
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={
+              onToggleCollapse
+            }
+            className="flex items-center gap-2 text-lg font-semibold text-gray-900 hover:text-gray-600"
+          >
+            <span>▼</span>
 
-      <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-5 py-3">
-  <button
-    type="button"
-    onClick={onToggleCollapse}
-    className="flex items-center gap-2 text-sm font-semibold text-gray-800 hover:text-gray-600"
-  >
-    <span>▼</span>
-    <span>资金筹集计算</span>
-  </button>
+            <span>
+              资金筹集计算
+            </span>
 
-  <button
-    type="button"
-    onClick={onRemove}
-    className="text-sm text-gray-500 hover:text-gray-800"
-  >
-    隐藏
-  </button>
-</div>
+            {savingCalculator && (
+              <span className="text-xs font-normal text-gray-400">
+                保存中…
+              </span>
+            )}
+          </button>
 
-<div className="p-5">
+          <button
+            type="button"
+            onClick={onRemove}
+            className="text-sm text-gray-500 hover:text-gray-800"
+          >
+            隐藏
+          </button>
+        </div>
+
+        <p className="mt-1 text-xs text-gray-500">
+          可用于年金、买基金、保险缴费、还款及其他大额资金安排。
+          这里只做本次计算，不修改 Fixed Income 或 CASHFLOW 原始数据。
+        </p>
+      </div>
 
       {/* =================================================
           目标
       ================================================= */}
 
-      <div className="mb-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
+      <div className="mb-5 rounded-xl border border-gray-200 p-4">
         <div className="mb-3 text-sm font-semibold text-gray-800">
           ① 资金目标
         </div>
@@ -1036,13 +2257,13 @@ if (collapsed) {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
             <label className="mb-1 block text-xs text-gray-500">
-              目标名称
+              目标用途
             </label>
 
             <input
               value={targetName}
               onChange={(event) =>
-                setTargetName(
+                updateTargetName(
                   event.target.value
                 )
               }
@@ -1059,7 +2280,7 @@ if (collapsed) {
             <input
               value={targetAmount}
               onChange={(event) =>
-                setTargetAmount(
+                updateTargetAmount(
                   event.target.value
                 )
               }
@@ -1083,8 +2304,8 @@ if (collapsed) {
         </div>
 
         <div className="mb-4 text-xs text-gray-500">
-          这里直接读取「固收资产」页面的数据，不读取 Holding。
-          勾选后填写本次实际准备使用的金额。
+          点击「添加一行」后选择需要使用的固收资产。
+          当前金额为资产实际金额，本次使用金额默认等于当前金额，可以修改。
         </div>
 
         {loadingFixedIncome ? (
@@ -1096,126 +2317,209 @@ if (collapsed) {
             暂无 Fixed Income 资产
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            {fixedIncomeAssets.map(
-              (asset) => {
-                const selected =
-                  selectedFixedIncomeIds.includes(
-                    asset.id
-                  );
+          <>
+            {fixedIncomeRows.length > 0 && (
+              <div className="space-y-2">
+                {fixedIncomeRows.map(
+                  (row) => {
+                    const asset =
+                      fixedIncomeAssets.find(
+                        (item) =>
+                          item.id ===
+                          row.assetId
+                      );
 
-                const available =
-                  fundingNumber(
-                    asset.amount
-                  );
-
-                const useAmount =
-                  fundingNumber(
-                    fixedIncomeUseAmounts[
-                      asset.id
-                    ]
-                  );
-
-                return (
-                  <div
-                    key={asset.id}
-                    className={[
-                      "rounded-lg border p-3 transition",
-                      selected
-                        ? "border-gray-400 bg-gray-50"
-                        : "border-gray-200 bg-white",
-                    ].join(" ")}
-                  >
-                    <label className="flex cursor-pointer items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() =>
-                          toggleFixedIncome(
-                            asset
+                    const available =
+                      asset
+                        ? fundingNumber(
+                            asset.amount
                           )
-                        }
-                        className="mt-1 h-4 w-4 shrink-0 cursor-pointer"
-                      />
+                        : 0;
 
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="truncate text-sm font-medium text-gray-900">
-                            {asset.name}
-                          </div>
+                    const useAmount =
+                      fundingNumber(
+                        row.useAmount
+                      );
 
-                          <span className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500">
-                            {asset.type}
-                          </span>
-                        </div>
+                    return (
+                      <div
+                        key={row.id}
+                        className="rounded-lg border border-gray-200 bg-white p-3"
+                      >
+                        <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                          {/* 固收选择 */}
 
-                        {asset.institution && (
-                          <div className="mt-1 text-xs text-gray-400">
-                            {asset.institution}
-                          </div>
-                        )}
-
-                        <div className="mt-2 flex items-center justify-between">
-                          <span className="text-xs text-gray-500">
-                            当前资产
-                          </span>
-
-                          <span className="text-sm font-semibold text-gray-900">
-                            ¥
-                            {available.toLocaleString(
-                              "zh-CN",
-                              {
-                                minimumFractionDigits: 2,
-                                maximumFractionDigits: 2,
+                          <div className="min-w-0 flex-1">
+                            <select
+                              value={
+                                row.assetId
                               }
-                            )}
-                          </span>
-                        </div>
-                      </div>
-                    </label>
+                              onChange={(
+                                event
+                              ) =>
+                                updateFixedIncomeAsset(
+                                  row.id,
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                            >
+                              <option value="">
+                                选择 Fixed Income
+                              </option>
 
-                    {selected && (
-                      <div className="mt-3 border-t border-gray-200 pt-3">
-                        <label className="mb-1 block text-xs text-gray-500">
-                          本次使用金额
-                        </label>
+                              {fixedIncomeAssets.map(
+                                (
+                                  item
+                                ) => {
+                                  const alreadyUsed =
+                                    fixedIncomeRows.some(
+                                      (
+                                        other
+                                      ) =>
+                                        other.id !==
+                                          row.id &&
+                                        other.assetId ===
+                                          item.id
+                                    );
 
-                        <input
-                          value={
-                            fixedIncomeUseAmounts[
-                              asset.id
-                            ] ?? ""
-                          }
-                          onChange={(event) =>
-                            updateFixedIncomeUseAmount(
-                              asset.id,
-                              event.target.value
-                            )
-                          }
-                          type="number"
-                          min="0"
-                          max={available}
-                          step="0.01"
-                          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
-                        />
+                                  const itemAmount =
+                                    fundingNumber(
+                                      item.amount
+                                    );
 
-                        {useAmount >
-                          available && (
-                          <div className="mt-1 text-xs text-red-500">
-                            不能超过当前资产
-                            ¥
-                            {available.toLocaleString(
-                              "zh-CN"
-                            )}
+                                  return (
+                                    <option
+                                      key={
+                                        item.id
+                                      }
+                                      value={
+                                        item.id
+                                      }
+                                      disabled={
+                                        alreadyUsed
+                                      }
+                                    >
+                                      {item.name}　¥
+                                      {itemAmount.toLocaleString(
+                                        "zh-CN",
+                                        {
+                                          minimumFractionDigits: 2,
+                                          maximumFractionDigits: 2,
+                                        }
+                                      )}
+                                      {alreadyUsed
+                                        ? "（已选择）"
+                                        : ""}
+                                    </option>
+                                  );
+                                }
+                              )}
+                            </select>
                           </div>
-                        )}
+
+                          {/* 当前金额 */}
+
+                          {asset && (
+                            <>
+                              <div className="shrink-0 whitespace-nowrap text-sm text-gray-600">
+                                <span className="text-gray-400">
+                                  当前金额{" "}
+                                </span>
+
+                                <span className="font-medium text-gray-800">
+                                  ¥
+                                  {available.toLocaleString(
+                                    "zh-CN",
+                                    {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    }
+                                  )}
+                                </span>
+                              </div>
+
+                              {/* 本次使用 */}
+
+                              <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+                                <span className="text-sm text-gray-400">
+                                  本次使用
+                                </span>
+
+                                <input
+                                  value={
+                                    row.useAmount
+                                  }
+                                  onChange={(
+                                    event
+                                  ) =>
+                                    updateFixedIncomeUseAmount(
+                                      row.id,
+                                      event
+                                        .target
+                                        .value
+                                    )
+                                  }
+                                  type="number"
+                                  min="0"
+                                  max={
+                                    available
+                                  }
+                                  step="0.01"
+                                  className="w-[150px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {/* 删除 */}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              deleteFixedIncomeRow(
+                                row.id
+                              )
+                            }
+                            className="shrink-0 rounded-lg px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                          >
+                            删除
+                          </button>
+                        </div>
+
+                        {asset &&
+                          useAmount >
+                            available && (
+                            <div className="mt-2 text-xs text-red-500">
+                              本次使用金额不能超过当前金额 ¥
+                              {available.toLocaleString(
+                                "zh-CN",
+                                {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                }
+                              )}
+                            </div>
+                          )}
                       </div>
-                    )}
-                  </div>
-                );
-              }
+                    );
+                  }
+                )}
+              </div>
             )}
-          </div>
+
+            <button
+              type="button"
+              onClick={
+                addFixedIncomeRow
+              }
+              className="mt-3 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              ＋ 添加一行
+            </button>
+          </>
         )}
 
         <div className="mt-4 flex items-center justify-between rounded-lg bg-gray-50 px-3 py-3">
@@ -1246,71 +2550,240 @@ if (collapsed) {
         </div>
 
         <div className="mb-4 text-xs text-gray-500">
-          自动读取 {currentYear} 年 CASHFLOW 中「转去养老保险」的
-          9月、10月金额。这里可以临时修改，但不会修改 CASHFLOW。
+          选择 CASHFLOW 中准备使用的支出项目。
+          添加到这里的行会直接计入本次资金筹集。
+          本次使用金额可以单独修改。
+          这里只做本次计算，不修改 CASHFLOW 原始数据。
         </div>
 
         {loadingCashflow ? (
           <div className="rounded-lg bg-gray-50 px-3 py-5 text-center text-sm text-gray-400">
             正在读取 CASHFLOW……
           </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="rounded-lg border border-gray-200 bg-white p-3">
-              <label className="mb-1 block text-xs text-gray-500">
-                {currentYear}年9月转去养老保险
-              </label>
-
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-                  ¥
-                </span>
-
-                <input
-                  value={septemberAmount}
-                  onChange={(event) =>
-                    setSeptemberAmount(
-                      event.target.value
-                    )
-                  }
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm outline-none focus:border-gray-500"
-                />
-              </div>
-            </div>
-
-            <div className="rounded-lg border border-gray-200 bg-white p-3">
-              <label className="mb-1 block text-xs text-gray-500">
-                {currentYear}年10月转去养老保险
-              </label>
-
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
-                  ¥
-                </span>
-
-                <input
-                  value={octoberAmount}
-                  onChange={(event) =>
-                    setOctoberAmount(
-                      event.target.value
-                    )
-                  }
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-7 pr-3 text-sm outline-none focus:border-gray-500"
-                />
-              </div>
-            </div>
+        ) : cashflowYearOptions.length === 0 ? (
+          <div className="rounded-lg bg-gray-50 px-3 py-5 text-center text-sm text-gray-400">
+            暂无 CASHFLOW 数据
           </div>
+        ) : (
+          <>
+            {cashflowRows.length > 0 && (
+              <div className="space-y-2">
+                {cashflowRows.map(
+                  (row) => {
+                    const monthOptions =
+                      getCashflowMonthOptions(
+                        row.year
+                      );
+
+                    const expenseOptions =
+                      getCashflowExpenseOptions(
+                        row.year,
+                        row.month
+                      );
+
+                    return (
+                      <div
+                        key={row.id}
+                        className="rounded-lg border border-gray-200 bg-white p-3"
+                      >
+                        <div className="grid grid-cols-1 items-end gap-3 md:grid-cols-[120px_100px_minmax(180px,1fr)_180px_60px]">
+                          <div>
+                            <label className="mb-1 block text-xs text-gray-500">
+                              年份
+                            </label>
+
+                            <select
+                              value={
+                                row.year
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateCashflowYear(
+                                  row.id,
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                            >
+                              <option value="">
+                                选择年份
+                              </option>
+
+                              {cashflowYearOptions.map(
+                                (
+                                  year
+                                ) => (
+                                  <option
+                                    key={
+                                      year
+                                    }
+                                    value={String(
+                                      year
+                                    )}
+                                  >
+                                    {year}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs text-gray-500">
+                              月份
+                            </label>
+
+                            <select
+                              value={
+                                row.month
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateCashflowMonth(
+                                  row.id,
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                            >
+                              <option value="">
+                                选择月份
+                              </option>
+
+                              {monthOptions.map(
+                                (
+                                  month
+                                ) => (
+                                  <option
+                                    key={
+                                      month
+                                    }
+                                    value={String(
+                                      month
+                                    )}
+                                  >
+                                    {month}月
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs text-gray-500">
+                              支出项目
+                            </label>
+
+                            <select
+                              value={
+                                row.expenseName
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateCashflowExpense(
+                                  row.id,
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                              disabled={
+                                !row.year ||
+                                !row.month
+                              }
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500 disabled:bg-gray-50 disabled:text-gray-400"
+                            >
+                              <option value="">
+                                选择支出项目
+                              </option>
+
+                              {expenseOptions.map(
+                                (
+                                  expense,
+                                  index
+                                ) => (
+                                  <option
+                                    key={`${expense.name}-${index}`}
+                                    value={
+                                      expense.name
+                                    }
+                                  >
+                                    {
+                                      expense.name
+                                    }
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-1 block text-xs text-gray-500">
+                              本次使用金额
+                            </label>
+
+                            <input
+                              value={
+                                row.amount
+                              }
+                              onChange={(
+                                event
+                              ) =>
+                                updateCashflowAmount(
+                                  row.id,
+                                  event
+                                    .target
+                                    .value
+                                )
+                              }
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              deleteCashflowRow(
+                                row.id
+                              )
+                            }
+                            className="rounded-lg px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900"
+                          >
+                            删除
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={
+                addCashflowRow
+              }
+              className="mt-3 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              ＋ 添加一行
+            </button>
+          </>
         )}
 
         <div className="mt-4 flex items-center justify-between rounded-lg bg-gray-50 px-3 py-3">
           <span className="text-sm text-gray-600">
-            CASHFLOW 资金合计
+            CASHFLOW 本次使用
           </span>
 
           <span className="text-lg font-bold text-gray-900">
@@ -1331,66 +2804,70 @@ if (collapsed) {
       ================================================= */}
 
       <div className="mb-5 rounded-xl border border-gray-200 p-4">
-        <div className="mb-1 flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-gray-800">
-              ④ 其他资金
-            </div>
-
-            <div className="mt-1 text-xs text-gray-500">
-              用于以后其他场景，例如香港现金、银行卡现金、奖金等。
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={addManualSource}
-            className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
-          >
-            ＋ 添加资金
-          </button>
+        <div className="mb-1 text-sm font-semibold text-gray-800">
+          ④ 其他手工资金
         </div>
 
-        {manualSources.length === 0 ? (
-          <div className="mt-4 rounded-lg bg-gray-50 px-3 py-4 text-center text-xs text-gray-400">
-            暂无其他资金来源
-          </div>
-        ) : (
-          <div className="mt-4 space-y-2">
+        <div className="mb-4 text-xs text-gray-500">
+          这里可以填写不属于 Fixed Income / CASHFLOW
+          的其他资金来源。
+        </div>
+
+        {manualSources.length > 0 && (
+          <div className="space-y-2">
             {manualSources.map(
               (source) => (
                 <div
                   key={source.id}
-                  className="flex flex-col gap-2 rounded-lg border border-gray-200 p-3 md:flex-row"
+                  className="grid grid-cols-1 items-end gap-3 md:grid-cols-[minmax(180px,1fr)_220px_60px]"
                 >
-                  <input
-                    value={source.name}
-                    onChange={(event) =>
-                      updateManualSource(
-                        source.id,
-                        "name",
-                        event.target.value
-                      )
-                    }
-                    placeholder="资金名称，例如：香港现金"
-                    className="min-w-0 flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500"
-                  />
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-500">
+                      资金来源
+                    </label>
 
-                  <input
-                    value={source.amount}
-                    onChange={(event) =>
-                      updateManualSource(
-                        source.id,
-                        "amount",
-                        event.target.value
-                      )
-                    }
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="金额"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500 md:w-48"
-                  />
+                    <input
+                      value={
+                        source.name
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        updateManualSource(
+                          source.id,
+                          "name",
+                          event.target.value
+                        )
+                      }
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                      placeholder="例如：银行存款"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="mb-1 block text-xs text-gray-500">
+                      金额
+                    </label>
+
+                    <input
+                      value={
+                        source.amount
+                      }
+                      onChange={(
+                        event
+                      ) =>
+                        updateManualSource(
+                          source.id,
+                          "amount",
+                          event.target.value
+                        )
+                      }
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-gray-500"
+                    />
+                  </div>
 
                   <button
                     type="button"
@@ -1399,7 +2876,7 @@ if (collapsed) {
                         source.id
                       )
                     }
-                    className="rounded-lg border border-red-200 px-3 py-2 text-xs text-red-500 hover:bg-red-50"
+                    className="rounded-lg px-2 py-2 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-900"
                   >
                     删除
                   </button>
@@ -1409,50 +2886,53 @@ if (collapsed) {
           </div>
         )}
 
-        {manualSources.length > 0 && (
-          <div className="mt-4 flex items-center justify-between rounded-lg bg-gray-50 px-3 py-3">
-            <span className="text-sm text-gray-600">
-              其他资金合计
-            </span>
+        <button
+          type="button"
+          onClick={
+            addManualSource
+          }
+          className="mt-3 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+        >
+          ＋ 添加资金
+        </button>
 
-            <span className="text-lg font-bold text-gray-900">
-              ¥
-              {manualTotal.toLocaleString(
-                "zh-CN",
-                {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                }
-              )}
-            </span>
-          </div>
-        )}
+        <div className="mt-4 flex items-center justify-between rounded-lg bg-gray-50 px-3 py-3">
+          <span className="text-sm text-gray-600">
+            其他手工资金
+          </span>
+
+          <span className="text-lg font-bold text-gray-900">
+            ¥
+            {manualTotal.toLocaleString(
+              "zh-CN",
+              {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              }
+            )}
+          </span>
+        </div>
       </div>
 
       {/* =================================================
           最终结果
       ================================================= */}
 
-      <div
-        className={[
-          "rounded-xl border p-5",
-          isEnough
-            ? "border-green-200 bg-green-50"
-            : "border-red-200 bg-red-50",
-        ].join(" ")}
-      >
-        <div className="mb-4 text-base font-semibold text-gray-900">
-          ⑤ {targetName || "资金目标"} 计算结果
+      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <div className="mb-4 text-sm font-semibold text-gray-800">
+          ⑤ 资金筹集结果
         </div>
 
-        <div className="space-y-2 text-sm">
+        <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between gap-3">
             <span className="text-gray-600">
-              目标金额
+              资金目标
             </span>
 
             <span className="font-semibold text-gray-900">
-              ¥
+              {targetName ||
+                "资金目标"}{" "}
+              · ¥
               {target.toLocaleString(
                 "zh-CN",
                 {
@@ -1482,12 +2962,12 @@ if (collapsed) {
 
           <div className="flex items-center justify-between gap-3">
             <span className="text-gray-600">
-              {currentYear}年9月转去养老保险
+              CASHFLOW
             </span>
 
             <span className="font-semibold text-gray-900">
               ¥
-              {september.toLocaleString(
+              {cashflowTotal.toLocaleString(
                 "zh-CN",
                 {
                   minimumFractionDigits: 2,
@@ -1499,12 +2979,12 @@ if (collapsed) {
 
           <div className="flex items-center justify-between gap-3">
             <span className="text-gray-600">
-              {currentYear}年10月转去养老保险
+              其他手工资金
             </span>
 
             <span className="font-semibold text-gray-900">
               ¥
-              {october.toLocaleString(
+              {manualTotal.toLocaleString(
                 "zh-CN",
                 {
                   minimumFractionDigits: 2,
@@ -1514,15 +2994,15 @@ if (collapsed) {
             </span>
           </div>
 
-          {manualSources.length > 0 && (
+          <div className="border-t border-gray-200 pt-3">
             <div className="flex items-center justify-between gap-3">
-              <span className="text-gray-600">
-                其他资金
+              <span className="font-semibold text-gray-800">
+                可筹集资金合计
               </span>
 
-              <span className="font-semibold text-gray-900">
+              <span className="text-xl font-bold text-gray-900">
                 ¥
-                {manualTotal.toLocaleString(
+                {totalAvailable.toLocaleString(
                   "zh-CN",
                   {
                     minimumFractionDigits: 2,
@@ -1531,39 +3011,20 @@ if (collapsed) {
                 )}
               </span>
             </div>
-          )}
-
-          <div className="my-3 border-t border-gray-200" />
-
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-medium text-gray-700">
-              总可筹资金
-            </span>
-
-            <span className="text-xl font-bold text-gray-900">
-              ¥
-              {totalAvailable.toLocaleString(
-                "zh-CN",
-                {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                }
-              )}
-            </span>
           </div>
 
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <span className="font-medium text-gray-700">
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-gray-800">
               {isEnough
-                ? "剩余"
-                : "还需要补"}
+                ? "资金余额"
+                : "资金缺口"}
             </span>
 
             <span
               className={[
-                "text-xl font-bold",
+                "text-lg font-bold",
                 isEnough
-                  ? "text-green-600"
+                  ? "text-gray-900"
                   : "text-red-600",
               ].join(" ")}
             >
@@ -1579,170 +3040,36 @@ if (collapsed) {
               )}
             </span>
           </div>
-        </div>
 
-        <div
-          className={[
-            "mt-4 rounded-lg px-3 py-3 text-sm font-medium",
-            isEnough
-              ? "bg-white text-green-700"
-              : "bg-white text-red-700",
-          ].join(" ")}
-        >
-          {isEnough
-            ? `资金足够，可以覆盖「${
-                targetName || "资金目标"
-              }」。`
-            : `资金还差 ¥${Math.abs(
-                difference
-              ).toLocaleString("zh-CN", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}，需要另外补足。`}
+          <div className="pt-2">
+            {isEnough ? (
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-3 text-sm font-medium text-gray-800">
+                ✓ 资金已足够，可以覆盖本次资金目标。
+              </div>
+            ) : (
+              <div className="rounded-lg border border-red-200 bg-white px-3 py-3 text-sm font-medium text-red-600">
+                ⚠ 资金不足，还需要补充 ¥
+                {Math.abs(
+                  difference
+                ).toLocaleString(
+                  "zh-CN",
+                  {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  }
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {sourceError && (
-        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+        <div className="mt-4 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs text-red-600">
           {sourceError}
         </div>
       )}
-      </div>
     </section>
-  );
-}
-
-// =====================================================
-// Holding Card
-// =====================================================
-
-function HoldingInfo({
-  task,
-  holding,
-}: {
-  task: RecordTask;
-  holding: Holding;
-}) {
-  const amount = holdingAmount(holding);
-  const cost = holdingCost(holding);
-  const diff = amount - cost;
-  const rate =
-    cost > 0 ? (diff / cost) * 100 : null;
-
-  const currency =
-    holdingCurrency(holding);
-
-  const decision =
-    getDecision(task, holding);
-
-  return (
-    <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-      <div className="min-w-0 text-xs text-gray-700">
-        <span className="font-medium">
-          Holding：
-        </span>
-
-        <span>
-          {holdingName(holding) ||
-            "未命名资产"}
-        </span>
-
-        {holdingCode(holding) && (
-          <span className="text-gray-500">
-            {" · "}
-            {holdingCode(holding)}
-          </span>
-        )}
-      </div>
-
-      <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-        <span className="whitespace-nowrap">
-          <span className="text-gray-400">
-            当前值{" "}
-          </span>
-
-          <span className="font-medium text-gray-700">
-            {formatMoney(
-              amount,
-              currency
-            )}
-          </span>
-        </span>
-
-        <span className="whitespace-nowrap">
-          <span className="text-gray-400">
-            COST{" "}
-          </span>
-
-          <span className="font-medium text-gray-700">
-            {formatMoney(
-              cost,
-              currency
-            )}
-          </span>
-        </span>
-
-        <span className="whitespace-nowrap">
-          <span className="text-gray-400">
-            盈亏{" "}
-          </span>
-
-          <span
-            className={`font-medium ${
-              diff >= 0
-                ? "text-green-600"
-                : "text-red-500"
-            }`}
-          >
-            {diff >= 0 ? "+" : ""}
-            {formatMoney(
-              diff,
-              currency
-            )}
-          </span>
-        </span>
-
-        <span className="whitespace-nowrap">
-          <span className="text-gray-400">
-            收益率{" "}
-          </span>
-
-          <span
-            className={`font-medium ${
-              (rate ?? 0) >= 0
-                ? "text-green-600"
-                : "text-red-500"
-            }`}
-          >
-            {rate === null
-              ? "—"
-              : `${
-                  rate >= 0 ? "+" : ""
-                }${rate.toFixed(2)}%`}
-          </span>
-        </span>
-      </div>
-
-      {decision?.monitor && (
-        <div className="mt-1 text-xs text-gray-400">
-          监控：{decision.monitor}
-        </div>
-      )}
-
-      {decision && (
-        <div
-          className={`mt-1 text-xs ${
-            decision.tone === "green"
-              ? "text-green-600"
-              : decision.tone === "yellow"
-              ? "text-amber-600"
-              : "text-gray-500"
-          }`}
-        >
-          {decision.text}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -1759,8 +3086,12 @@ function SortableTaskRow({
 }: {
   task: RecordTask;
   holdings: Holding[];
-  onToggle: (task: RecordTask) => void;
-  onDelete: (task: RecordTask) => void;
+  onToggle: (
+    task: RecordTask
+  ) => void;
+  onDelete: (
+    task: RecordTask
+  ) => void;
   onSelectHolding: (
     task: RecordTask,
     holdingId: number | null
@@ -1779,7 +3110,9 @@ function SortableTaskRow({
 
   const style = {
     transform:
-      CSS.Transform.toString(transform),
+      CSS.Transform.toString(
+        transform
+      ),
     transition,
   };
 
@@ -1788,9 +3121,14 @@ function SortableTaskRow({
       ? holdings.find(
           (h) =>
             Number(
-              holdingField(h, "id")
+              holdingField(
+                h,
+                "id"
+              )
             ) ===
-            Number(task.holding_id)
+            Number(
+              task.holding_id
+            )
         ) ?? null
       : null;
 
@@ -1818,7 +3156,9 @@ function SortableTaskRow({
 
         <input
           type="checkbox"
-          checked={task.completed}
+          checked={
+            task.completed
+          }
           onChange={() =>
             onToggle(task)
           }
@@ -1838,7 +3178,10 @@ function SortableTaskRow({
 
           {task.condition && (
             <div className="mt-1 text-xs text-gray-500">
-              条件：{task.condition}
+              条件：
+              {
+                task.condition
+              }
             </div>
           )}
 
@@ -1849,7 +3192,8 @@ function SortableTaskRow({
 
             <select
               value={
-                task.holding_id === null
+                task.holding_id ===
+                null
                   ? ""
                   : String(
                       task.holding_id
@@ -1858,9 +3202,11 @@ function SortableTaskRow({
               onChange={(e) =>
                 onSelectHolding(
                   task,
-                  e.target.value
+                  e.target
+                    .value
                     ? Number(
-                        e.target.value
+                        e.target
+                          .value
                       )
                     : null
                 )
@@ -1871,30 +3217,44 @@ function SortableTaskRow({
                 请选择 Holding
               </option>
 
-              {holdings.map((h) => {
-                const id = Number(
-                  holdingField(h, "id")
-                );
+              {holdings.map(
+                (h) => {
+                  const id =
+                    Number(
+                      holdingField(
+                        h,
+                        "id"
+                      )
+                    );
 
-                if (!Number.isFinite(id)) {
-                  return null;
+                  if (
+                    !Number.isFinite(
+                      id
+                    )
+                  ) {
+                    return null;
+                  }
+
+                  return (
+                    <option
+                      key={id}
+                      value={id}
+                    >
+                      {holdingName(
+                        h
+                      ) ||
+                        "未命名资产"}
+                      {holdingCode(
+                        h
+                      )
+                        ? ` · ${holdingCode(
+                            h
+                          )}`
+                        : ""}
+                    </option>
+                  );
                 }
-
-                return (
-                  <option
-                    key={id}
-                    value={id}
-                  >
-                    {holdingName(h) ||
-                      "未命名资产"}
-                    {holdingCode(h)
-                      ? ` · ${holdingCode(
-                          h
-                        )}`
-                      : ""}
-                  </option>
-                );
-              })}
+              )}
             </select>
           </div>
 
@@ -1945,26 +3305,39 @@ export default function RecordDetailPage() {
         .filter(Boolean);
 
     return parts.length >= 2
-      ? parts[parts.length - 1] ?? ""
+      ? parts[
+          parts.length - 1
+        ] ?? ""
       : "";
   }, [pathname]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    })
-  );
+  const sensors =
+    useSensors(
+      useSensor(
+        PointerSensor,
+        {
+          activationConstraint:
+            {
+              distance: 5,
+            },
+        }
+      )
+    );
 
   const [record, setRecord] =
-    useState<RecordItem | null>(null);
+    useState<RecordItem | null>(
+      null
+    );
 
   const [tasks, setTasks] =
-    useState<RecordTask[]>([]);
+    useState<RecordTask[]>(
+      []
+    );
 
   const [files, setFiles] =
-    useState<RecordFile[]>([]);
+    useState<RecordFile[]>(
+      []
+    );
 
   const [holdings, setHoldings] =
     useState<Holding[]>([]);
@@ -1985,7 +3358,9 @@ export default function RecordDetailPage() {
     useState("");
 
   const [batchDrafts, setBatchDrafts] =
-    useState<BatchTaskDraft[]>([]);
+    useState<
+      BatchTaskDraft[]
+    >([]);
 
   const [showBatchReview, setShowBatchReview] =
     useState(false);
@@ -2002,43 +3377,56 @@ export default function RecordDetailPage() {
   const [deletingAllTasks, setDeletingAllTasks] =
     useState(false);
 
+  const [showFundingCalculator, setShowFundingCalculator] =
+    useState(false);
+
+  const [fundingCalculatorCollapsed, setFundingCalculatorCollapsed] =
+    useState(false);
+
   const [uploading, setUploading] =
     useState(false);
 
-  const editor = useEditor({
-    extensions: [
-      StarterKit,
-      TextStyle,
-      Color.configure({
-        types: ["textStyle"],
-      }),
-    ],
-    content: {
-      type: "doc",
-      content: [
-        {
-          type: "paragraph",
-        },
+  const editor =
+    useEditor({
+      extensions: [
+        StarterKit,
+        TextStyle,
+        Color.configure({
+          types: [
+            "textStyle",
+          ],
+        }),
       ],
-    },
-    editorProps: {
-      attributes: {
-        class:
-          "min-h-[320px] px-5 py-5 outline-none",
+
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+          },
+        ],
       },
-    },
-    immediatelyRender: false,
-  });
+
+      editorProps: {
+        attributes: {
+          class:
+            "min-h-[320px] px-5 py-5 outline-none",
+        },
+      },
+
+      immediatelyRender: false,
+    });
 
   async function loadRecord() {
     if (!recordId) return;
 
-    const response = await fetch(
-      `/api/record/${recordId}`,
-      {
-        cache: "no-store",
-      }
-    );
+    const response =
+      await fetch(
+        `/api/record/${recordId}`,
+        {
+          cache: "no-store",
+        }
+      );
 
     const data =
       await response.json();
@@ -2050,24 +3438,57 @@ export default function RecordDetailPage() {
       );
     }
 
+    const loadedRecord =
+      data?.record ??
+      null;
+
     setRecord(
-      data?.record ?? null
+      loadedRecord
     );
 
     setTitle(
-      data?.record?.title ?? ""
+      loadedRecord?.title ??
+        ""
+    );
+
+    // =================================================
+    // 如果当前 Record 已经保存过资金筹集计算器，
+    // 刷新后自动重新显示
+    // =================================================
+
+    const hasFundingCalculator =
+      Boolean(
+        loadedRecord?.content &&
+          typeof loadedRecord
+            .content ===
+            "object" &&
+          loadedRecord.content
+            .fundingCalculator &&
+          typeof loadedRecord
+            .content
+            .fundingCalculator ===
+            "object"
+      );
+
+    setShowFundingCalculator(
+      hasFundingCalculator
+    );
+
+    setFundingCalculatorCollapsed(
+      false
     );
   }
 
   async function loadTasks() {
     if (!recordId) return;
 
-    const response = await fetch(
-      `/api/record/${recordId}/tasks`,
-      {
-        cache: "no-store",
-      }
-    );
+    const response =
+      await fetch(
+        `/api/record/${recordId}/tasks`,
+        {
+          cache: "no-store",
+        }
+      );
 
     const data =
       await response.json();
@@ -2080,26 +3501,35 @@ export default function RecordDetailPage() {
     }
 
     const loadedTasks: RecordTask[] =
-      Array.isArray(data?.tasks)
+      Array.isArray(
+        data?.tasks
+      )
         ? data.tasks
         : [];
 
-    if (holdings.length > 0) {
-      let changed = false;
+    if (
+      holdings.length >
+      0
+    ) {
+      let changed =
+        false;
+
       const nextTasks = [
         ...loadedTasks,
       ];
 
       for (
         let i = 0;
-        i < nextTasks.length;
+        i <
+        nextTasks.length;
         i++
       ) {
         const task =
           nextTasks[i];
 
         if (
-          task.holding_id !== null
+          task.holding_id !==
+          null
         ) {
           continue;
         }
@@ -2110,7 +3540,8 @@ export default function RecordDetailPage() {
             holdings
           );
 
-        if (!matched) continue;
+        if (!matched)
+          continue;
 
         const matchedId =
           Number(
@@ -2133,16 +3564,23 @@ export default function RecordDetailPage() {
             await fetch(
               `/api/record/${recordId}/tasks`,
               {
-                method: "PUT",
+                method:
+                  "PUT",
+
                 headers: {
                   "Content-Type":
                     "application/json",
                 },
-                body: JSON.stringify({
-                  taskId: task.id,
-                  holding_id:
-                    matchedId,
-                }),
+
+                body: JSON.stringify(
+                  {
+                    taskId:
+                      task.id,
+
+                    holding_id:
+                      matchedId,
+                  }
+                ),
               }
             );
 
@@ -2155,14 +3593,17 @@ export default function RecordDetailPage() {
                 matchedId,
             };
 
-            changed = true;
+            changed =
+              true;
           }
         } catch {
           // 自动匹配失败不影响页面。
         }
       }
 
-      setTasks(nextTasks);
+      setTasks(
+        nextTasks
+      );
 
       return;
     }
@@ -2175,12 +3616,13 @@ export default function RecordDetailPage() {
   async function loadFiles() {
     if (!recordId) return;
 
-    const response = await fetch(
-      `/api/record/${recordId}/files`,
-      {
-        cache: "no-store",
-      }
-    );
+    const response =
+      await fetch(
+        `/api/record/${recordId}/files`,
+        {
+          cache: "no-store",
+        }
+      );
 
     const data =
       await response.json();
@@ -2193,7 +3635,9 @@ export default function RecordDetailPage() {
     }
 
     setFiles(
-      Array.isArray(data?.files)
+      Array.isArray(
+        data?.files
+      )
         ? data.files
         : []
     );
@@ -2205,7 +3649,9 @@ export default function RecordDetailPage() {
         await getHoldings();
 
       setHoldings(
-        Array.isArray(result)
+        Array.isArray(
+          result
+        )
           ? result
           : []
       );
@@ -2215,38 +3661,54 @@ export default function RecordDetailPage() {
         e
       );
 
-      setHoldings([]);
+      setHoldings(
+        []
+      );
     }
   }
 
   useEffect(() => {
-    if (!recordId) return;
+    if (!recordId)
+      return;
 
-    let cancelled = false;
+    let cancelled =
+      false;
 
     async function init() {
       try {
-        setLoading(true);
+        setLoading(
+          true
+        );
+
         setError("");
 
-        await Promise.all([
-          loadRecord(),
-          loadFiles(),
-          loadHoldings(),
-        ]);
+        await Promise.all(
+          [
+            loadRecord(),
+            loadFiles(),
+            loadHoldings(),
+          ]
+        );
 
         await loadTasks();
       } catch (e) {
-        if (!cancelled) {
+        if (
+          !cancelled
+        ) {
           setError(
-            e instanceof Error
+            e instanceof
+              Error
               ? e.message
               : "加载记录失败"
           );
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
+        if (
+          !cancelled
+        ) {
+          setLoading(
+            false
+          );
         }
       }
     }
@@ -2258,6 +3720,12 @@ export default function RecordDetailPage() {
     };
   }, [recordId]);
 
+  // =====================================================
+  // 正文恢复
+  // 资金筹集计算器不是 TipTap 正文，
+  // 所以恢复正文时把 fundingCalculator 排除掉
+  // =====================================================
+
   useEffect(() => {
     if (
       !editor ||
@@ -2266,19 +3734,116 @@ export default function RecordDetailPage() {
       return;
     }
 
+    const {
+      fundingCalculator:
+        _fundingCalculator,
+      ...editorContent
+    } = record.content;
+
     editor.commands.setContent(
-      record.content
+      editorContent
     );
   }, [
     editor,
     record?.id,
   ]);
 
+  // =====================================================
+  // 保存资金筹集计算器到当前 Record.content
+  // =====================================================
+
+  async function saveFundingCalculatorContent(
+    content: Record<string, unknown>
+  ) {
+    if (!recordId) {
+      return;
+    }
+
+    const response =
+      await fetch(
+        `/api/record/${recordId}`,
+        {
+          method:
+            "PUT",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            content,
+          }),
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error ||
+          "保存资金筹集计算失败"
+      );
+    }
+
+    setRecord(
+      data?.record ??
+        null
+    );
+  }
+
+  // =====================================================
+  // 删除资金筹集计算器
+  // =====================================================
+
+  async function removeFundingCalculator() {
+    if (!recordId)
+      return;
+
+    try {
+      const current =
+        record?.content ??
+        {};
+
+      const {
+        fundingCalculator:
+          _fundingCalculator,
+        ...restContent
+      } = current;
+
+      await saveFundingCalculatorContent(
+        restContent
+      );
+
+      setShowFundingCalculator(
+        false
+      );
+
+      setFundingCalculatorCollapsed(
+        false
+      );
+    } catch (e) {
+      alert(
+        e instanceof Error
+          ? e.message
+          : "隐藏资金筹集计算失败"
+      );
+    }
+  }
+
+  // =====================================================
+  // 保存标题
+  // =====================================================
+
   async function saveTitle() {
     const value =
       title.trim();
 
-    if (!recordId || !value) {
+    if (
+      !recordId ||
+      !value
+    ) {
       alert(
         "记录名称不能为空"
       );
@@ -2286,17 +3851,22 @@ export default function RecordDetailPage() {
     }
 
     try {
-      setSavingTitle(true);
+      setSavingTitle(
+        true
+      );
 
       const response =
         await fetch(
           `/api/record/${recordId}`,
           {
-            method: "PUT",
+            method:
+              "PUT",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
               title: value,
             }),
@@ -2314,7 +3884,8 @@ export default function RecordDetailPage() {
       }
 
       setRecord(
-        data?.record ?? null
+        data?.record ??
+          null
       );
     } catch (e) {
       alert(
@@ -2323,9 +3894,17 @@ export default function RecordDetailPage() {
           : "保存标题失败"
       );
     } finally {
-      setSavingTitle(false);
+      setSavingTitle(
+        false
+      );
     }
   }
+
+  // =====================================================
+  // 保存正文
+  // 注意：保留 fundingCalculator
+  // 防止点击「保存正文」把计算器数据覆盖掉
+  // =====================================================
 
   async function saveContent() {
     if (
@@ -2336,20 +3915,50 @@ export default function RecordDetailPage() {
     }
 
     try {
-      setSavingContent(true);
+      setSavingContent(
+        true
+      );
+
+      const editorJson =
+        editor.getJSON();
+
+      const currentFundingCalculator =
+        record?.content
+          ?.fundingCalculator;
+
+      const nextContent: Record<
+        string,
+        unknown
+      > = {
+        ...(editorJson as Record<
+          string,
+          unknown
+        >),
+      };
+
+      if (
+        currentFundingCalculator !==
+        undefined
+      ) {
+        nextContent.fundingCalculator =
+          currentFundingCalculator;
+      }
 
       const response =
         await fetch(
           `/api/record/${recordId}`,
           {
-            method: "PUT",
+            method:
+              "PUT",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
               content:
-                editor.getJSON(),
+                nextContent,
             }),
           }
         );
@@ -2365,7 +3974,8 @@ export default function RecordDetailPage() {
       }
 
       setRecord(
-        data?.record ?? null
+        data?.record ??
+          null
       );
     } catch (e) {
       alert(
@@ -2374,9 +3984,15 @@ export default function RecordDetailPage() {
           : "保存内容失败"
       );
     } finally {
-      setSavingContent(false);
+      setSavingContent(
+        false
+      );
     }
   }
+
+  // =====================================================
+  // 新增任务
+  // =====================================================
 
   async function createTask(
     taskTitle: string,
@@ -2394,15 +4010,20 @@ export default function RecordDetailPage() {
       await fetch(
         `/api/record/${recordId}/tasks`,
         {
-          method: "POST",
+          method:
+            "POST",
+
           headers: {
             "Content-Type":
               "application/json",
           },
+
           body: JSON.stringify({
             title:
               taskTitle.trim(),
+
             condition,
+
             holding_id:
               holdingId,
           }),
@@ -2421,17 +4042,25 @@ export default function RecordDetailPage() {
   }
 
   async function handleAddTask() {
-    if (!newTask.trim()) return;
+    if (
+      !newTask.trim()
+    )
+      return;
 
     try {
-      setAddingTask(true);
+      setAddingTask(
+        true
+      );
 
       const parsed =
         parseBatchTaskLine(
           newTask
         );
 
-      if (!parsed.title) return;
+      if (
+        !parsed.title
+      )
+        return;
 
       const auto =
         findMatchingHolding(
@@ -2474,18 +4103,28 @@ export default function RecordDetailPage() {
           : "新增任务失败"
       );
     } finally {
-      setAddingTask(false);
+      setAddingTask(
+        false
+      );
     }
   }
+
+  // =====================================================
+  // 批量任务
+  // =====================================================
 
   function buildBatchDrafts() {
     const parsedLines =
       batchText
         .split(/\r?\n/)
-        .map(parseBatchTaskLine)
+        .map(
+          parseBatchTaskLine
+        )
         .filter(
           (item) =>
-            Boolean(item.title)
+            Boolean(
+              item.title
+            )
         );
 
     const unique =
@@ -2494,7 +4133,8 @@ export default function RecordDetailPage() {
           parsedLines.map(
             (item) => [
               `${item.title}|||${
-                item.condition ?? ""
+                item.condition ??
+                ""
               }`,
               item,
             ]
@@ -2503,7 +4143,10 @@ export default function RecordDetailPage() {
       );
 
     return unique.map(
-      (item, index) => {
+      (
+        item,
+        index
+      ) => {
         const auto =
           findMatchingHolding(
             item.title,
@@ -2533,29 +4176,39 @@ export default function RecordDetailPage() {
             detected?.label ||
             null,
 
-          holdingId: auto
-            ? Number(
-                holdingField(
-                  auto,
-                  "id"
+          holdingId:
+            auto
+              ? Number(
+                  holdingField(
+                    auto,
+                    "id"
+                  )
                 )
-              )
-            : null,
+              : null,
         };
       }
     );
   }
 
   function handlePreviewBatchTasks() {
-    if (!batchText.trim()) return;
+    if (
+      !batchText.trim()
+    )
+      return;
 
     const drafts =
       buildBatchDrafts();
 
-    if (!drafts.length) return;
+    if (!drafts.length)
+      return;
 
-    setBatchDrafts(drafts);
-    setShowBatchReview(true);
+    setBatchDrafts(
+      drafts
+    );
+
+    setShowBatchReview(
+      true
+    );
   }
 
   async function handleConfirmBatchAdd() {
@@ -2567,7 +4220,9 @@ export default function RecordDetailPage() {
     }
 
     try {
-      setAddingTask(true);
+      setAddingTask(
+        true
+      );
 
       for (
         const draft of batchDrafts
@@ -2592,7 +4247,9 @@ export default function RecordDetailPage() {
 
       setBatchText("");
       setBatchDrafts([]);
-      setShowBatchReview(false);
+      setShowBatchReview(
+        false
+      );
 
       await loadTasks();
       await loadRecord();
@@ -2603,9 +4260,15 @@ export default function RecordDetailPage() {
           : "批量新增任务失败"
       );
     } finally {
-      setAddingTask(false);
+      setAddingTask(
+        false
+      );
     }
   }
+
+  // =====================================================
+  // 任务操作
+  // =====================================================
 
   async function handleToggleTask(
     task: RecordTask
@@ -2615,13 +4278,18 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/tasks`,
           {
-            method: "PUT",
+            method:
+              "PUT",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
-              taskId: task.id,
+              taskId:
+                task.id,
+
               completed:
                 !task.completed,
             }),
@@ -2658,13 +4326,18 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/tasks`,
           {
-            method: "PUT",
+            method:
+              "PUT",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
-              taskId: task.id,
+              taskId:
+                task.id,
+
               holding_id:
                 holdingId,
             }),
@@ -2708,13 +4381,17 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/tasks`,
           {
-            method: "DELETE",
+            method:
+              "DELETE",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
-              taskId: task.id,
+              taskId:
+                task.id,
             }),
           }
         );
@@ -2759,15 +4436,18 @@ export default function RecordDetailPage() {
           `Holding 本身不会被删除。`
       );
 
-    if (!confirmed) return;
+    if (!confirmed)
+      return;
 
     try {
-      setDeletingAllTasks(true);
+      setDeletingAllTasks(
+        true
+      );
+
       setError("");
 
-      const currentTasks = [
-        ...tasks,
-      ];
+      const currentTasks =
+        [...tasks];
 
       for (
         const task of currentTasks
@@ -2776,13 +4456,17 @@ export default function RecordDetailPage() {
           await fetch(
             `/api/record/${recordId}/tasks`,
             {
-              method: "DELETE",
+              method:
+                "DELETE",
+
               headers: {
                 "Content-Type":
                   "application/json",
               },
+
               body: JSON.stringify({
-                taskId: task.id,
+                taskId:
+                  task.id,
               }),
             }
           );
@@ -2816,7 +4500,9 @@ export default function RecordDetailPage() {
           : "批量删除任务失败"
       );
     } finally {
-      setDeletingAllTasks(false);
+      setDeletingAllTasks(
+        false
+      );
     }
   }
 
@@ -2830,7 +4516,8 @@ export default function RecordDetailPage() {
 
     if (
       !over ||
-      active.id === over.id
+      active.id ===
+        over.id
     ) {
       return;
     }
@@ -2838,13 +4525,15 @@ export default function RecordDetailPage() {
     const oldIndex =
       tasks.findIndex(
         (x) =>
-          x.id === active.id
+          x.id ===
+          active.id
       );
 
     const newIndex =
       tasks.findIndex(
         (x) =>
-          x.id === over.id
+          x.id ===
+          over.id
       );
 
     if (
@@ -2860,9 +4549,13 @@ export default function RecordDetailPage() {
         oldIndex,
         newIndex
       ).map(
-        (task, index) => ({
+        (
+          task,
+          index
+        ) => ({
           ...task,
-          sort_order: index,
+          sort_order:
+            index,
         })
       );
 
@@ -2873,11 +4566,14 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/tasks`,
           {
-            method: "PUT",
+            method:
+              "PUT",
+
             headers: {
               "Content-Type":
                 "application/json",
             },
+
             body: JSON.stringify({
               reorder:
                 next.map(
@@ -2887,6 +4583,7 @@ export default function RecordDetailPage() {
                   ) => ({
                     taskId:
                       task.id,
+
                     sort_order:
                       index,
                   })
@@ -2895,7 +4592,9 @@ export default function RecordDetailPage() {
           }
         );
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
         await loadTasks();
       }
     } catch {
@@ -2903,13 +4602,18 @@ export default function RecordDetailPage() {
     }
   }
 
+  // =====================================================
+  // 附件
+  // =====================================================
+
   async function handleUploadFile(
     event: React.ChangeEvent<HTMLInputElement>
   ) {
     const file =
       event.target.files?.[0];
 
-    event.target.value = "";
+    event.target.value =
+      "";
 
     if (
       !file ||
@@ -2919,7 +4623,9 @@ export default function RecordDetailPage() {
     }
 
     try {
-      setUploading(true);
+      setUploading(
+        true
+      );
 
       const formData =
         new FormData();
@@ -2933,8 +4639,11 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/files`,
           {
-            method: "POST",
-            body: formData,
+            method:
+              "POST",
+
+            body:
+              formData,
           }
         );
 
@@ -2957,7 +4666,9 @@ export default function RecordDetailPage() {
           : "上传附件失败"
       );
     } finally {
-      setUploading(false);
+      setUploading(
+        false
+      );
     }
   }
 
@@ -2969,11 +4680,14 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/files/${file.id}`,
           {
-            cache: "no-store",
+            cache:
+              "no-store",
           }
         );
 
-      if (!response.ok) {
+      if (
+        !response.ok
+      ) {
         throw new Error(
           "打开附件失败"
         );
@@ -3025,7 +4739,8 @@ export default function RecordDetailPage() {
         await fetch(
           `/api/record/${recordId}/files/${file.id}`,
           {
-            method: "DELETE",
+            method:
+              "DELETE",
           }
         );
 
@@ -3050,6 +4765,10 @@ export default function RecordDetailPage() {
     }
   }
 
+  // =====================================================
+  // Loading
+  // =====================================================
+
   if (loading) {
     return (
       <main className="min-h-screen bg-gray-50 p-6">
@@ -3059,6 +4778,10 @@ export default function RecordDetailPage() {
       </main>
     );
   }
+
+  // =====================================================
+  // Error
+  // =====================================================
 
   if (
     error ||
@@ -3085,9 +4808,15 @@ export default function RecordDetailPage() {
     );
   }
 
+  // =====================================================
+  // 页面
+  // =====================================================
+
   return (
     <main className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6">
+        {/* 返回 */}
+
         <button
           type="button"
           onClick={() =>
@@ -3248,7 +4977,9 @@ export default function RecordDetailPage() {
                     editor
                       ?.chain()
                       .focus()
-                      .setColor(color)
+                      .setColor(
+                        color
+                      )
                       .run()
                   }
                   className="rounded px-2 py-1 text-xs hover:bg-gray-100"
@@ -3286,7 +5017,46 @@ export default function RecordDetailPage() {
             资金筹集计算器
         ================================================= */}
 
-        <FundingCalculator />
+        {!showFundingCalculator ? (
+          <section className="mb-6">
+            <button
+              type="button"
+              onClick={() => {
+                setShowFundingCalculator(
+                  true
+                );
+
+                setFundingCalculatorCollapsed(
+                  false
+                );
+              }}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              ＋ 添加资金筹集计算
+            </button>
+          </section>
+        ) : (
+          <FundingCalculator
+            collapsed={
+              fundingCalculatorCollapsed
+            }
+            onToggleCollapse={() =>
+              setFundingCalculatorCollapsed(
+                (value) =>
+                  !value
+              )
+            }
+            onRemove={
+              removeFundingCalculator
+            }
+            initialContent={
+              record.content
+            }
+            onSaveContent={
+              saveFundingCalculatorContent
+            }
+          />
+        )}
 
         {/* =================================================
             执行任务
@@ -3307,7 +5077,10 @@ export default function RecordDetailPage() {
                       x.completed
                   ).length
                 }{" "}
-                / {tasks.length}
+                /{" "}
+                {
+                  tasks.length
+                }
               </div>
             </div>
 
@@ -3318,7 +5091,8 @@ export default function RecordDetailPage() {
               }
               disabled={
                 deletingAllTasks ||
-                tasks.length === 0
+                tasks.length ===
+                  0
               }
               className="shrink-0 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs text-red-500 transition hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -3330,7 +5104,9 @@ export default function RecordDetailPage() {
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
             <DndContext
-              sensors={sensors}
+              sensors={
+                sensors
+              }
               collisionDetection={
                 closestCenter
               }
@@ -3340,7 +5116,8 @@ export default function RecordDetailPage() {
             >
               <SortableContext
                 items={tasks.map(
-                  (x) => x.id
+                  (x) =>
+                    x.id
                 )}
                 strategy={
                   verticalListSortingStrategy
@@ -3349,8 +5126,12 @@ export default function RecordDetailPage() {
                 {tasks.map(
                   (task) => (
                     <SortableTaskRow
-                      key={task.id}
-                      task={task}
+                      key={
+                        task.id
+                      }
+                      task={
+                        task
+                      }
                       holdings={
                         holdings
                       }
@@ -3380,10 +5161,13 @@ export default function RecordDetailPage() {
 
           <div className="mt-4 flex gap-2">
             <input
-              value={newTask}
+              value={
+                newTask
+              }
               onChange={(e) =>
                 setNewTask(
-                  e.target.value
+                  e.target
+                    .value
                 )
               }
               onKeyDown={(e) => {
@@ -3421,10 +5205,13 @@ export default function RecordDetailPage() {
             </div>
 
             <textarea
-              value={batchText}
+              value={
+                batchText
+              }
               onChange={(e) =>
                 setBatchText(
-                  e.target.value
+                  e.target
+                    .value
                 )
               }
               placeholder={
@@ -3437,7 +5224,7 @@ export default function RecordDetailPage() {
                 "检查002849持仓 | 持续观察"
               }
               rows={5}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-gray-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none"
             />
 
             <button
@@ -3473,11 +5260,15 @@ export default function RecordDetailPage() {
               {batchDrafts.map(
                 (draft) => (
                   <div
-                    key={draft.id}
+                    key={
+                      draft.id
+                    }
                     className="rounded-lg border border-gray-200 p-3"
                   >
                     <div className="font-medium text-sm text-gray-900">
-                      {draft.title}
+                      {
+                        draft.title
+                      }
                     </div>
 
                     <label className="mt-2 flex items-center gap-2 text-xs text-gray-500">
@@ -3488,9 +5279,13 @@ export default function RecordDetailPage() {
                         }
                         onChange={() =>
                           setBatchDrafts(
-                            (items) =>
+                            (
+                              items
+                            ) =>
                               items.map(
-                                (x) =>
+                                (
+                                  x
+                                ) =>
                                   x.id ===
                                   draft.id
                                     ? {
@@ -3512,11 +5307,17 @@ export default function RecordDetailPage() {
                         draft.condition ??
                         ""
                       }
-                      onChange={(e) =>
+                      onChange={(
+                        e
+                      ) =>
                         setBatchDrafts(
-                          (items) =>
+                          (
+                            items
+                          ) =>
                             items.map(
-                              (x) =>
+                              (
+                                x
+                              ) =>
                                 x.id ===
                                 draft.id
                                   ? {
@@ -3545,11 +5346,17 @@ export default function RecordDetailPage() {
                                 draft.holdingId
                               )
                         }
-                        onChange={(e) =>
+                        onChange={(
+                          e
+                        ) =>
                           setBatchDrafts(
-                            (items) =>
+                            (
+                              items
+                            ) =>
                               items.map(
-                                (x) =>
+                                (
+                                  x
+                                ) =>
                                   x.id ===
                                   draft.id
                                     ? {
@@ -3576,7 +5383,9 @@ export default function RecordDetailPage() {
                         </option>
 
                         {holdings.map(
-                          (h) => {
+                          (
+                            h
+                          ) => {
                             const id =
                               Number(
                                 holdingField(
@@ -3595,8 +5404,12 @@ export default function RecordDetailPage() {
 
                             return (
                               <option
-                                key={id}
-                                value={id}
+                                key={
+                                  id
+                                }
+                                value={
+                                  id
+                                }
                               >
                                 {holdingName(
                                   h
@@ -3687,7 +5500,9 @@ export default function RecordDetailPage() {
                 {files.map(
                   (file) => (
                     <div
-                      key={file.id}
+                      key={
+                        file.id
+                      }
                       className="flex items-center justify-between rounded-lg bg-gray-50 px-3 py-2"
                     >
                       <button
@@ -3699,7 +5514,9 @@ export default function RecordDetailPage() {
                         }
                         className="truncate text-left text-sm text-blue-600 hover:underline"
                       >
-                        {file.file_name}
+                        {
+                          file.file_name
+                        }
                       </button>
 
                       <button

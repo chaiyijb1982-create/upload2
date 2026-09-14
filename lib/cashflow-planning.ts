@@ -91,6 +91,8 @@ export type CashflowState = {
 // =====================================================
 
 type CashflowPlanningRow = {
+   id: string | null;
+
   year: number;
 
   month: number;

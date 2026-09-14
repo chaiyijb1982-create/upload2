@@ -50,12 +50,29 @@ function optionalString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function normalizeName(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
 /**
- * 用“业务字段”寻找数据库中的对应记录。
+ * 用业务字段寻找数据库中的对应记录。
  *
- * 注意：
  * value / manual_* 等字段不能参与匹配，
  * 因为这些字段本来就是用户可能修改的内容。
+ *
+ * 特殊项目：
+ *
+ * 1. SAL
+ *    同一个年月只能存在一条 active。
+ *
+ * 2. 转去养老保险
+ *    同一个年月只能存在一条 active。
+ *
+ * 3. 本月交养老保险
+ *    同一个年月只能存在一条 active。
  */
 function buildMatchKey(row: {
   year: number;
@@ -69,6 +86,64 @@ function buildMatchKey(row: {
   is_annuity_contribution: boolean | null;
   is_pension_payment: boolean | null;
 }) {
+  const name = normalizeName(row.name);
+
+  // =========================================================
+  // SAL
+  // =========================================================
+
+  if (
+    row.role === "income" &&
+    name === "sal"
+  ) {
+    return JSON.stringify([
+      row.year,
+      row.month,
+      "income",
+      "__SPECIAL_SAL__",
+    ]);
+  }
+
+  // =========================================================
+  // 转去养老保险
+  // =========================================================
+
+  if (
+    row.role === "expense" &&
+    name === "转去养老保险"
+  ) {
+    return JSON.stringify([
+      row.year,
+      row.month,
+      "expense",
+      "__SPECIAL_TRANSFER_TO_PENSION__",
+    ]);
+  }
+
+  // =========================================================
+  // 本月交养老保险
+  // =========================================================
+
+  if (
+    row.role === "expense" &&
+    (
+      row.project_id === "fixed:pension-payment" ||
+      row.is_pension_payment === true ||
+      name === "本月交养老保险"
+    )
+  ) {
+    return JSON.stringify([
+      row.year,
+      row.month,
+      "expense",
+      "__SPECIAL_PENSION_PAYMENT__",
+    ]);
+  }
+
+  // =========================================================
+  // 普通项目
+  // =========================================================
+
   return JSON.stringify([
     row.year,
     row.month,
@@ -86,9 +161,8 @@ function buildMatchKey(row: {
 /* =========================================================
  * GET
  *
- * 重点：
  * Supabase 默认最多返回 1000 条，
- * 所以这里必须分页。
+ * 所以这里分页读取。
  * ========================================================= */
 
 export async function GET() {
@@ -231,16 +305,12 @@ export async function GET() {
  *
  * 数据库中存在、但当前页面没有传来的数据：
  *   保留不动
- *
- * 所以：
- * 页面只有 2033/01~03
- * 不会导致 2033/04~12 被删除。
  * ========================================================= */
 
 export async function POST(request: Request) {
   try {
-
     const supabase = createSupabaseServerClient();
+
     const body = await request.json();
 
     const years = Array.isArray(body?.years)
@@ -250,6 +320,8 @@ export async function POST(request: Request) {
     const projects = Array.isArray(body?.projects)
       ? body.projects
       : [];
+
+    void projects;
 
     if (years.length === 0) {
       return NextResponse.json(
@@ -267,11 +339,9 @@ export async function POST(request: Request) {
 
     const incomingYearSet = new Set<number>();
 
-    /**
-     * =====================================================
+    /* =====================================================
      * 构建 incoming rows
-     * =====================================================
-     */
+     * ===================================================== */
 
     for (const yearData of years) {
       if (!yearData) {
@@ -313,15 +383,6 @@ export async function POST(request: Request) {
           continue;
         }
 
-        /**
-         * =================================================
-         * month meta
-         *
-         * 有些月份没有 income / expense 项目，
-         * 但是仍然需要保存月份的手工数据。
-         * =================================================
-         */
-
         const monthMetaProjectId =
           `__month_meta__${yearValue}_${monthValue}`;
 
@@ -337,11 +398,9 @@ export async function POST(request: Request) {
           ? monthData.expense
           : [];
 
-        /**
-         * =================================================
+        /* =================================================
          * 收入
-         * =================================================
-         */
+         * ================================================= */
 
         incomeItems.forEach(
           (
@@ -412,10 +471,8 @@ export async function POST(request: Request) {
                 ),
 
               is_pension_payment:
-                optionalBoolean(
-                  item.is_pension_payment ??
-                    item.isPensionPayment
-                ),
+                item.is_pension_payment === true ||
+                item.isPensionPayment === true,
 
               sort_order:
                 optionalNumber(
@@ -424,8 +481,8 @@ export async function POST(request: Request) {
                     index
                 ),
 
-              deleted:               
-                  item.deleted === true,
+              deleted:
+                item.deleted === true,
 
               manual_remaining:
                 optionalNumber(
@@ -462,11 +519,9 @@ export async function POST(request: Request) {
           }
         );
 
-        /**
-         * =================================================
+        /* =================================================
          * 支出
-         * =================================================
-         */
+         * ================================================= */
 
         expenseItems.forEach(
           (
@@ -537,10 +592,8 @@ export async function POST(request: Request) {
                 ),
 
               is_pension_payment:
-                optionalBoolean(
-                  item.is_pension_payment ??
-                    item.isPensionPayment
-                ),
+                item.is_pension_payment === true ||
+                item.isPensionPayment === true,
 
               sort_order:
                 optionalNumber(
@@ -549,8 +602,8 @@ export async function POST(request: Request) {
                     index
                 ),
 
-              deleted:               
-                  item.deleted === true,
+              deleted:
+                item.deleted === true,
 
               manual_remaining:
                 optionalNumber(
@@ -587,14 +640,10 @@ export async function POST(request: Request) {
           }
         );
 
-        /**
-         * =================================================
+        /* =================================================
          * 如果这个月完全没有 income / expense，
          * 保存 month meta。
-         *
-         * 这里沿用原来的 __month_meta__ 逻辑。
-         * =================================================
-         */
+         * ================================================= */
 
         if (
           incomeItems.length === 0 &&
@@ -655,10 +704,8 @@ export async function POST(request: Request) {
               ),
 
             is_pension_payment:
-              optionalBoolean(
-                monthMeta.is_pension_payment ??
-                  monthMeta.isPensionPayment
-              ),
+              monthMeta.is_pension_payment === true ||
+              monthMeta.isPensionPayment === true,
 
             sort_order:
               optionalNumber(
@@ -735,31 +782,12 @@ export async function POST(request: Request) {
       rows.length
     );
 
-    /**
-     * =====================================================
-     * 关键修改
-     *
-     * 不再：
-     *
-     * supabase
-     *   .from("cashflow_planning")
-     *   .delete()
-     *   .in("year", incomingYears)
-     *
-     * 这里永远不 DELETE。
-     * =====================================================
-     */
-
-    /**
-     * =====================================================
+    /* =====================================================
      * 第一步：
      * 读取数据库中这些年份已有的数据。
      *
      * 这里只读取，不删除。
-     *
-     * 为避免 Supabase 1000 行限制，同样分页。
-     * =====================================================
-     */
+     * ===================================================== */
 
     const existingRows: any[] = [];
 
@@ -807,6 +835,13 @@ export async function POST(request: Request) {
         .order("month", {
           ascending: true,
         })
+        .order("role", {
+          ascending: true,
+        })
+        .order("sort_order", {
+          ascending: true,
+          nullsFirst: false,
+        })
         .range(from, to);
 
       if (error) {
@@ -848,35 +883,22 @@ export async function POST(request: Request) {
       existingRows.length
     );
 
-    /**
-     * =====================================================
+    /* =====================================================
      * 第二步：
      * 建立数据库记录索引
-     * =====================================================
-     */
+     * ===================================================== */
 
     const existingMap =
-      new Map<
-        string,
-        any[]
-      >();
+      new Map<string, any[]>();
 
-    for (
-      const existing of existingRows
-    ) {
+    for (const existing of existingRows) {
       const key =
-        buildMatchKey(
-          existing
-        );
+        buildMatchKey(existing);
 
       const list =
-        existingMap.get(
-          key
-        ) ?? [];
+        existingMap.get(key) ?? [];
 
-      list.push(
-        existing
-      );
+      list.push(existing);
 
       existingMap.set(
         key,
@@ -884,46 +906,368 @@ export async function POST(request: Request) {
       );
     }
 
-    /**
-     * =====================================================
+    /* =====================================================
+     * 第二步-A：
+     * 清理数据库历史特殊项目重复记录
+     *
+     * 重要：
+     * NEVER DELETE。
+     *
+     * 多余历史记录：
+     *     deleted = true
+     *
+     * 每个年月最终只保留 1 条 active。
+     *
+     * 注意：
+     * 这里使用 UPDATE，
+     * 不能使用 upsert({id, deleted})。
+     *
+     * 同时不写 updated_at，
+     * 避免数据库不存在该字段导致 500。
+     * ===================================================== */
+
+    const duplicateIdsToMarkDeleted: string[] = [];
+
+    for (const [
+      key,
+      candidates,
+    ] of existingMap.entries()) {
+      if (candidates.length <= 1) {
+        continue;
+      }
+
+      const isSpecial =
+        key.includes(
+          "__SPECIAL_SAL__"
+        ) ||
+        key.includes(
+          "__SPECIAL_TRANSFER_TO_PENSION__"
+        ) ||
+        key.includes(
+          "__SPECIAL_PENSION_PAYMENT__"
+        );
+
+      if (!isSpecial) {
+        continue;
+      }
+
+      const activeCandidates =
+        candidates.filter(
+          (row) =>
+            row.deleted !== true
+        );
+
+      if (
+        activeCandidates.length <= 1
+      ) {
+        continue;
+      }
+
+      /*
+       * 保留第一条 active。
+       * 其他 active 标记 deleted=true。
+       */
+
+      const keep =
+        activeCandidates[0];
+
+      for (
+        let i = 1;
+        i < activeCandidates.length;
+        i++
+      ) {
+        const duplicate =
+          activeCandidates[i];
+
+        if (
+          duplicate?.id &&
+          duplicate.id !== keep?.id
+        ) {
+          duplicateIdsToMarkDeleted.push(
+            duplicate.id
+          );
+        }
+      }
+    }
+
+    if (
+      duplicateIdsToMarkDeleted.length >
+      0
+    ) {
+      console.log(
+        "[CASHFLOW-PLANNING POST] marking historical duplicates deleted:",
+        duplicateIdsToMarkDeleted.length
+      );
+
+      const DELETE_MARK_BATCH_SIZE =
+        500;
+
+      for (
+        let i = 0;
+        i <
+        duplicateIdsToMarkDeleted.length;
+        i +=
+          DELETE_MARK_BATCH_SIZE
+      ) {
+        const batch =
+          duplicateIdsToMarkDeleted.slice(
+            i,
+            i +
+              DELETE_MARK_BATCH_SIZE
+          );
+
+        /*
+         * 这里只 UPDATE deleted。
+         *
+         * 不使用 DELETE。
+         * 不使用部分字段 upsert。
+         */
+
+        const {
+          error:
+            duplicateMarkError,
+        } = await supabase
+          .from(
+            "cashflow_planning"
+          )
+          .update({
+            deleted: true,
+          })
+          .in(
+            "id",
+            batch
+          );
+
+        if (
+          duplicateMarkError
+        ) {
+          console.error(
+            "[CASHFLOW-PLANNING POST] duplicate cleanup error:",
+            duplicateMarkError
+          );
+
+          return NextResponse.json(
+            {
+              ok: false,
+              error:
+                duplicateMarkError.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+      }
+
+      /*
+       * 同步修改内存里的 existingRows。
+       */
+
+      for (
+        const id of
+          duplicateIdsToMarkDeleted
+      ) {
+        const found =
+          existingRows.find(
+            (row) =>
+              row.id === id
+          );
+
+        if (found) {
+          found.deleted = true;
+        }
+      }
+
+      /*
+       * 同步修改 existingMap。
+       */
+
+      for (
+        const candidates of
+          existingMap.values()
+      ) {
+        for (
+          const candidate of
+            candidates
+        ) {
+          if (
+            candidate?.id &&
+            duplicateIdsToMarkDeleted.includes(
+              candidate.id
+            )
+          ) {
+            candidate.deleted = true;
+          }
+        }
+      }
+    }
+
+    /* =====================================================
+     * 第二步-B：
+     * 本次 incoming rows 特殊项目去重
+     *
+     * 特殊项目：
+     *   SAL
+     *   转去养老保险
+     *   本月交养老保险
+     *
+     * 同一个：
+     *   年 + 月 + 特殊项目
+     *
+     * 最终只允许进入数据库 1 条。
+     *
+     * 普通项目完全不改变。
+     * ===================================================== */
+
+    const dedupedRows: CashflowPlanningRow[] =
+      [];
+
+    const incomingSpecialKeys =
+      new Set<string>();
+
+    for (const row of rows) {
+      const name =
+        normalizeName(
+          row.name
+        );
+
+      const isSpecial =
+        (
+          row.role === "income" &&
+          name === "sal"
+        ) ||
+        (
+          row.role === "expense" &&
+          name ===
+            "转去养老保险"
+        ) ||
+        (
+          row.role === "expense" &&
+          (
+            row.project_id ===
+              "fixed:pension-payment" ||
+            row.is_pension_payment ===
+              true ||
+            name ===
+              "本月交养老保险"
+          )
+        );
+
+      /*
+       * 普通项目原样保留。
+       */
+
+      if (!isSpecial) {
+        dedupedRows.push(
+          row
+        );
+
+        continue;
+      }
+
+      const key =
+        buildMatchKey(row);
+
+      /*
+       * 同一个特殊项目已经出现：
+       * 跳过后面的重复。
+       */
+
+      if (
+        incomingSpecialKeys.has(
+          key
+        )
+      ) {
+        continue;
+      }
+
+      incomingSpecialKeys.add(
+        key
+      );
+
+      dedupedRows.push(
+        row
+      );
+    }
+
+    console.log(
+      "[CASHFLOW-PLANNING POST] rows after special dedupe:",
+      {
+        before:
+          rows.length,
+        after:
+          dedupedRows.length,
+      }
+    );
+
+    /* =====================================================
      * 第三步：
      * 给 incoming rows 找对应的数据库 id
      *
-     * 找到：
-     *   带 id UPDATE
+     * 匹配顺序：
      *
-     * 找不到：
-     *   不带 id INSERT
-     *
-     * 注意：
-     * 同一个 key 如果数据库里有多条，
-     * 按顺序逐条对应，避免全部更新到第一条。
-     * =====================================================
-     */
+     * 1. 优先 active
+     * 2. 没有 active，再使用历史 deleted
+     * 3. 都没有，新建完整记录
+     * ===================================================== */
 
     const usedExistingIds =
       new Set<string>();
 
     const rowsToUpsert =
-      rows.map(
+      dedupedRows.map(
         (row) => {
           const key =
-            buildMatchKey(
-              row
-            );
+            buildMatchKey(row);
 
           const candidates =
-            existingMap.get(
-              key
-            ) ?? [];
+            existingMap.get(key) ??
+            [];
 
           let matched:
-            | any
+            | (typeof candidates)[number]
             | undefined;
 
+          /*
+           * ---------------------------------------------
+           * 第一优先：
+           * active 记录
+           * ---------------------------------------------
+           */
+
           for (
-            const candidate of candidates
+            const candidate of
+              candidates
           ) {
+            if (
+              candidate?.id &&
+              candidate.deleted !== true &&
+              !usedExistingIds.has(
+                candidate.id
+              )
+            ) {
+              matched =
+                candidate;
+
+              break;
+            }
+          }
+
+          /*
+           * ---------------------------------------------
+           * 第二优先：
+           * 历史 deleted 记录
+           * ---------------------------------------------
+           */
+
+          for (
+            const candidate of
+              candidates
+          ) {
+            if (matched) {
+              break;
+            }
+
             if (
               candidate?.id &&
               !usedExistingIds.has(
@@ -937,19 +1281,29 @@ export async function POST(request: Request) {
             }
           }
 
-          if (
-            matched?.id
-          ) {
+          /*
+           * ---------------------------------------------
+           * 找到数据库记录
+           * ---------------------------------------------
+           */
+
+          if (matched?.id) {
             usedExistingIds.add(
               matched.id
             );
 
             return {
-              id: matched.id,
+              id:
+                matched.id,
 
-              year: row.year,
-              month: row.month,
-              role: row.role,
+              year:
+                row.year,
+
+              month:
+                row.month,
+
+              role:
+                row.role,
 
               project_id:
                 row.project_id,
@@ -984,8 +1338,11 @@ export async function POST(request: Request) {
               sort_order:
                 row.sort_order,
 
+              /*
+               * 本次 incoming 数据重新成为 active。
+               */
               deleted:
-                row.deleted,
+                false,
 
               manual_remaining:
                 row.manual_remaining,
@@ -1004,104 +1361,149 @@ export async function POST(request: Request) {
             };
           }
 
+          /*
+           * ---------------------------------------------
+           * 完全没有对应记录：
+           * 创建新记录。
+           *
+           * year/month/role 等 NOT NULL 字段
+           * 全部完整写入。
+           * ---------------------------------------------
+           */
+
           return {
-  id: crypto.randomUUID(),
+            id:
+              crypto.randomUUID(),
 
-  year: row.year,
-  month: row.month,
-  role: row.role,
+            year:
+              row.year,
 
-  project_id:
-    row.project_id,
+            month:
+              row.month,
 
-  name:
-    row.name,
+            role:
+              row.role,
 
-  value:
-    row.value,
+            project_id:
+              row.project_id,
 
-  independent:
-    row.independent,
+            name:
+              row.name,
 
-  from_excel:
-    row.from_excel,
+            value:
+              row.value,
 
-  source_row:
-    row.source_row,
+            independent:
+              row.independent,
 
-  source_col:
-    row.source_col,
+            from_excel:
+              row.from_excel,
 
-  source_offset:
-    row.source_offset,
+            source_row:
+              row.source_row,
 
-  is_annuity_contribution:
-    row.is_annuity_contribution,
+            source_col:
+              row.source_col,
 
-  is_pension_payment:
-    row.is_pension_payment,
+            source_offset:
+              row.source_offset,
 
-  sort_order:
-    row.sort_order,
+            is_annuity_contribution:
+              row.is_annuity_contribution,
 
-  deleted:
-    row.deleted,
+            is_pension_payment:
+              row.is_pension_payment,
 
-  manual_remaining:
-    row.manual_remaining,
+            sort_order:
+              row.sort_order,
 
-  manual_total_cash:
-    row.manual_total_cash,
+            deleted:
+              false,
 
-  manual_annuity:
-    row.manual_annuity,
+            manual_remaining:
+              row.manual_remaining,
 
-  original_opening_cash:
-    row.original_opening_cash,
+            manual_total_cash:
+              row.manual_total_cash,
 
-  original_opening_annuity:
-    row.original_opening_annuity,
-};
+            manual_annuity:
+              row.manual_annuity,
+
+            original_opening_cash:
+              row.original_opening_cash,
+
+            original_opening_annuity:
+              row.original_opening_annuity,
+          };
         }
       );
 
-    /**
-     * =====================================================
+    /* =====================================================
      * 第四步：
-     * 使用 PRIMARY KEY(id) 做 upsert
+     * 最终安全检查
      *
-     * 因为：
-     * cashflow_planning_pkey
-     * = id
+     * is_pension_payment:
+     *   true / false
      *
-     * 新数据没有 id -> INSERT
-     * 已有数据有 id -> UPDATE
+     * deleted:
+     *   true / false
      *
-     * 数据库中没有出现在本次 rowsToUpsert 的记录：
-     * 完全不会被碰。
-     * =====================================================
-     */
+     * 永远不会主动写 null。
+     * ===================================================== */
 
-    const UPSERT_BATCH_SIZE = 500;
+    const safeRowsToUpsert =
+      rowsToUpsert.map(
+        (row) => ({
+          ...row,
 
-    let totalSaved = 0;
+          is_pension_payment:
+            row.is_pension_payment ===
+            true,
+
+          deleted:
+            row.deleted === true,
+        })
+      );
+
+    console.log(
+      "[CASHFLOW-PLANNING POST] prepared rows:",
+      safeRowsToUpsert.length
+    );
+
+    /* =====================================================
+     * 第五步：
+     * 使用 id 做 upsert
+     *
+     * 不 DELETE。
+     * ===================================================== */
+
+    const UPSERT_BATCH_SIZE =
+      500;
+
+    let totalSaved =
+      0;
 
     for (
       let i = 0;
-      i < rowsToUpsert.length;
-      i += UPSERT_BATCH_SIZE
+      i <
+      safeRowsToUpsert.length;
+      i +=
+        UPSERT_BATCH_SIZE
     ) {
       const batch =
-        rowsToUpsert.slice(
+        safeRowsToUpsert.slice(
           i,
-          i + UPSERT_BATCH_SIZE
+          i +
+            UPSERT_BATCH_SIZE
         );
 
       console.log(
         "[CASHFLOW-PLANNING POST] upserting batch:",
         {
-          start: i,
-          count: batch.length,
+          start:
+            i,
+          count:
+            batch.length,
         }
       );
 
@@ -1109,7 +1511,9 @@ export async function POST(request: Request) {
         data,
         error,
       } = await supabase
-        .from("cashflow_planning")
+        .from(
+          "cashflow_planning"
+        )
         .upsert(
           batch,
           {
@@ -1117,7 +1521,9 @@ export async function POST(request: Request) {
               "id",
           }
         )
-        .select("id");
+        .select(
+          "id"
+        );
 
       if (error) {
         console.error(
@@ -1125,15 +1531,6 @@ export async function POST(request: Request) {
           error
         );
 
-        /**
-         * 非常重要：
-         *
-         * 这里也绝对不 DELETE。
-         *
-         * 如果第 2 批失败：
-         * 第 1 批已经保存的内容保留。
-         * 数据库原有内容也保留。
-         */
         return NextResponse.json(
           {
             ok: false,
@@ -1168,9 +1565,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
 
-      /**
-       * 方便前端/日志确认
-       */
       years:
         incomingYears,
 
@@ -1183,11 +1577,11 @@ export async function POST(request: Request) {
       existingRows:
         existingRows.length,
 
-      /**
-       * 明确告诉前端：
-       * 本次保存没有执行删除。
+      /*
+       * POST 本次没有执行 DELETE。
        */
-      deletedRows: 0,
+      deletedRows:
+        0,
     });
   } catch (error) {
     console.error(
@@ -1195,9 +1589,10 @@ export async function POST(request: Request) {
       error
     );
 
-    /**
-     * 这里也绝对不 DELETE。
+    /*
+     * 这里绝对不 DELETE。
      */
+
     return NextResponse.json(
       {
         ok: false,
@@ -1216,9 +1611,8 @@ export async function POST(request: Request) {
 /* =========================================================
  * DELETE
  *
- * 这个是用户明确调用 DELETE API 时才执行。
+ * 只有明确调用 DELETE API 时才执行。
  *
- * 我没有改它。
  * POST 不会调用这里。
  * ========================================================= */
 
@@ -1230,7 +1624,9 @@ export async function DELETE() {
     const {
       error,
     } = await supabase
-      .from("cashflow_planning")
+      .from(
+        "cashflow_planning"
+      )
       .delete()
       .not(
         "id",
@@ -1279,3 +1675,4 @@ export async function DELETE() {
     );
   }
 }
+

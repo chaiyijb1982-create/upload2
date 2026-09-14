@@ -32,11 +32,13 @@ import {
 // 参数
 // =====================================================
 
-const START_YEAR = 2027;
+const CURRENT_YEAR = new Date().getFullYear();
 
-const END_YEAR = 2041;
+const START_YEAR = Math.max(CURRENT_YEAR, 2026);
 
-const FREEDOM_END_YEAR = 2041;
+const END_YEAR = 2042;
+
+const FREEDOM_END_YEAR = 2042;
 
 const RETURN_RATE = 0.05;
 
@@ -49,11 +51,11 @@ const START_ASSET = 1600000;
 // 生活费用
 // =====================================================
 //
-// 2027 - 2031：37万
-// 2032 - 2041：32万
+// 默认回退生活费：2027 - 2031：37万
+// 默认回退生活费：2032 - 2042：32万
 //
 // 财务自由目标：
-// 从当年开始到 2041 年所有剩余生活费。
+// 从当年开始到 2042 年所有剩余生活费。
 // =====================================================
 
 const BASE_EXPENSE: Record<
@@ -77,6 +79,7 @@ const BASE_EXPENSE: Record<
   2039: 320000,
   2040: 320000,
   2041: 320000,
+  2042: 320000,
 
 };
 
@@ -110,6 +113,7 @@ const ANNUITY: Record<
   2039: 39000,
   2040: 39000,
   2041: 39000,
+  2042: 39000,
 
 };
 
@@ -137,7 +141,7 @@ function toNumber(
 // =====================================================
 //
 // 2027
-// = 2027~2041 所有生活费
+// = 2027~2042 所有生活费
 //
 // 2028
 // = 2028~2041 所有生活费
@@ -148,31 +152,80 @@ function toNumber(
 // = 2041 年生活费
 // =====================================================
 
-function getFinancialFreedomTarget(
-  startYear: number
-): number {
+type ForecastInput = {
+  expense: number;
+  growthRate: number;
+  hkInvestment: number;
+  remainingCash: number;
+};
 
-  let target = 0;
+type ForecastInputs = Record<number, ForecastInput>;
 
 
-  for (
-    let year = startYear;
-    year <= FREEDOM_END_YEAR;
-    year++
-  ) {
+const DEFAULT_FORECAST_INPUTS: ForecastInputs = {
+  2026: { expense: 0, growthRate: 5, hkInvestment: 0, remainingCash: 0 },
+  2027: { expense: 37, growthRate: 5, hkInvestment: 6, remainingCash: -5.4 },
+  2028: { expense: 37, growthRate: 5, hkInvestment: 6, remainingCash: 5.6 },
+  2029: { expense: 37, growthRate: 5, hkInvestment: 6, remainingCash: 5.6 },
+  2030: { expense: 37, growthRate: 5, hkInvestment: 6, remainingCash: 5.6 },
+  2031: { expense: 37, growthRate: 5, hkInvestment: 6, remainingCash: 5.6 },
+  2032: { expense: 32, growthRate: 5, hkInvestment: 6, remainingCash: 10.6 },
+  2033: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 30.9 },
+  2034: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 40.1 },
+  2035: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 40.1 },
+  2036: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 40.1 },
+  2037: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 40.1 },
+  2038: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 53.1 },
+  2039: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 62.1 },
+  2040: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 62.1 },
+  2041: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 62.1 },
+  2042: { expense: 32, growthRate: 5, hkInvestment: 12, remainingCash: 62.1 },
+};
 
-    target +=
-      Number(
-        BASE_EXPENSE[year] || 0
-      );
-
+function getDefaultForecastInputs(): ForecastInputs {
+  const result: ForecastInputs = {};
+  for (let year = 2026; year <= FREEDOM_END_YEAR; year++) {
+    result[year] = {
+      ...(DEFAULT_FORECAST_INPUTS[year] ?? {
+        expense: Number(BASE_EXPENSE[year] ?? 0) / 10000,
+        growthRate: 5,
+        hkInvestment: 0,
+        remainingCash: 0,
+      }),
+    };
   }
-
-
-  return target;
-
+  return result;
 }
 
+// Financial Freedom 的 forecast_inputs 永远以“万元”保存。
+// Tiantian 页面内部金额全部以“元”计算，因此只在这里统一转换。
+function getForecastExpenseYuan(
+  year: number,
+  forecastInputs: ForecastInputs
+): number {
+  const expenseWan = Number(
+    forecastInputs[year]?.expense ??
+    Number(BASE_EXPENSE[year] ?? 0) / 10000
+  );
+
+  return Number.isFinite(expenseWan)
+    ? expenseWan * 10000
+    : 0;
+}
+
+
+function getFinancialFreedomTarget(
+  startYear: number,
+  forecastInputs: ForecastInputs
+): number {
+  let target = 0;
+
+  for (let year = startYear; year <= FREEDOM_END_YEAR; year++) {
+    target += getForecastExpenseYuan(year, forecastInputs);
+  }
+
+  return target;
+}
 
 // =====================================================
 // 金额格式
@@ -371,6 +424,19 @@ export default function TiantianUpDetailPage() {
   ] = useState(true);
 
 
+  // ===================================================
+  // Financial Freedom 年度输入
+  // 与 /financial-freedom 共用 Supabase 中的 forecast_inputs
+  // ===================================================
+
+  const [
+    forecastInputs,
+    setForecastInputs,
+  ] = useState<ForecastInputs>(
+    () => getDefaultForecastInputs()
+  );
+
+
   // =====================================================
   // 当前财务自由目标
   // =====================================================
@@ -379,9 +445,10 @@ export default function TiantianUpDetailPage() {
     useMemo(
       () =>
         getFinancialFreedomTarget(
-          START_YEAR
+          START_YEAR,
+          forecastInputs
         ),
-      []
+      [forecastInputs]
     );
 
 
@@ -486,6 +553,106 @@ export default function TiantianUpDetailPage() {
       try {
 
         setLoading(true);
+
+
+        // =================================================
+        // 0. 读取 Financial Freedom 年度输入
+        //
+        // /financial-freedom 会把可编辑年度数据保存到：
+        // financial_freedom_history.forecast_inputs
+        //
+        // Tiantian Up Detail 不再维护第二套生活费数据，
+        // 财务自由目标直接使用这里的同一份数据。
+        // =================================================
+
+        const {
+          data: forecastHistory,
+          error: forecastHistoryError,
+        } = await supabase
+          .from("financial_freedom_history")
+          .select("forecast_inputs, snapshot_date, created_at")
+          .not("forecast_inputs", "is", null)
+          .order("created_at", { ascending: false })
+          .order("snapshot_date", { ascending: false })
+          .limit(1);
+
+        if (forecastHistoryError) {
+          console.error(
+            "Tiantian Detail forecast inputs error:",
+            forecastHistoryError
+          );
+        }
+
+        let savedForecastInputs =
+          forecastHistory?.[0]?.forecast_inputs;
+
+        // 同一浏览器内，如果 Financial Freedom 刚刚修改过，优先读取本地最新编辑值。
+        // 这样即使 Supabase 网络保存稍有延迟，两个页面也会立即保持一致。
+        try {
+          const localValue = window.localStorage.getItem(
+            "financial_freedom_forecast_inputs_v1"
+          );
+          if (localValue) {
+            const parsed = JSON.parse(localValue);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              savedForecastInputs = parsed;
+            }
+          }
+        } catch (localStorageError) {
+          console.warn(
+            "Tiantian local forecast inputs read failed:",
+            localStorageError
+          );
+        }
+
+        // 先建立完整默认值，再覆盖保存的值。
+        // 这样即使数据库只保存部分年份，也不会让未保存年份变成 0。
+        const resolvedForecastInputs =
+          getDefaultForecastInputs();
+
+        if (
+          savedForecastInputs &&
+          typeof savedForecastInputs === "object"
+        ) {
+          Object.entries(
+            savedForecastInputs as Record<string, any>
+          ).forEach(([year, value]) => {
+            const yearNumber = Number(year);
+
+            if (
+              !Number.isFinite(yearNumber) ||
+              !value ||
+              typeof value !== "object"
+            ) {
+              return;
+            }
+
+            const fallback =
+              resolvedForecastInputs[yearNumber] ?? {
+                expense: 0,
+                growthRate: 5,
+                hkInvestment: 0,
+                remainingCash: 0,
+              };
+
+            resolvedForecastInputs[yearNumber] = {
+              expense: Number.isFinite(Number(value.expense))
+                ? Number(value.expense)
+                : fallback.expense,
+              growthRate: Number.isFinite(Number(value.growthRate))
+                ? Number(value.growthRate)
+                : fallback.growthRate,
+              hkInvestment: Number.isFinite(Number(value.hkInvestment))
+                ? Number(value.hkInvestment)
+                : fallback.hkInvestment,
+              remainingCash: Number.isFinite(Number(value.remainingCash))
+                ? Number(value.remainingCash)
+                : fallback.remainingCash,
+            };
+          });
+        }
+
+        setForecastInputs(resolvedForecastInputs);
 
 
         // =================================================
@@ -762,324 +929,100 @@ export default function TiantianUpDetailPage() {
 
         // =================================================
         // 10. 年度资产预测
+        //
+        // ★ 与 /financial-freedom 使用完全相同的资产模型 ★
+        //
+        // 年末资产 = 年初资产 × (1 + growthRate)
+        //          + (香港投资 + 当年剩余现金) × 10000
+        //
+        // 注意：生活费、年金、贷款不会再次从资产中扣除。
+        // Financial Freedom 页面本身也不是这样计算年末资产的。
         // =================================================
 
-        let simulationAsset =
-          netAsset;
-
-
+        const activeForecastInputs = resolvedForecastInputs;
+        let simulationAsset = netAsset;
         const result: any[] = [];
 
+        for (let year = START_YEAR; year <= END_YEAR; year++) {
+          const input =
+            activeForecastInputs[year] ??
+            getDefaultForecastInputs()[year];
 
-        for (
-          let year = START_YEAR;
-          year <= END_YEAR;
-          year++
-        ) {
+          const expenseWan = toNumber(input?.expense);
+          const growthRate = toNumber(input?.growthRate);
+          const hkInvestment = toNumber(input?.hkInvestment);
+          const remainingCash = toNumber(input?.remainingCash);
+          const newAsset = hkInvestment + remainingCash;
 
-          // ===============================================
-          // 年初资产
-          // ===============================================
+          const isCurrentBaseYear =
+            year === CURRENT_YEAR &&
+            year === START_YEAR;
 
-          const beginAsset =
-            simulationAsset;
+          const beginAsset = simulationAsset;
+          const investmentReturn = isCurrentBaseYear
+            ? 0
+            : beginAsset * growthRate / 100;
 
+          const totalAsset = isCurrentBaseYear
+            ? beginAsset
+            : beginAsset + investmentReturn + newAsset * 10000;
 
-          // ===============================================
-          // 年收入
-          // ===============================================
+          simulationAsset = totalAsset;
 
-          const income =
-            ANNUAL_INCOME;
-
-
-          // ===============================================
-          // 生活费用
-          // ===============================================
-
-          const expense =
-            Number(
-              BASE_EXPENSE[year] ||
-              0
-            );
-
-
-          // ===============================================
-          // 年金
-          // ===============================================
-
-          const pension =
-            Number(
-              ANNUITY[year] ||
-              0
-            );
-
-
-          // ===============================================
-          // Financial Freedom 贷款压力
-          // ===============================================
-
-          const loan =
-            Number(
-              loans[year]?.pressure ||
-              0
-            );
-
-
-          // ===============================================
-          // 年度现金流
-          //
-          // 年收入
-          // -
-          // 生活费
-          // -
-          // 年金
-          // -
-          // 贷款压力
-          // ===============================================
-
-          const cashFlow =
-            income
-            -
-            expense
-            -
-            pension
-            -
-            loan;
-
-
-          // ===============================================
-          // 投资收益
-          //
-          // 年初资产 × 5%
-          // ===============================================
-
-          const investmentReturn =
-            beginAsset *
-            RETURN_RATE;
-
-
-          // ===============================================
-          // 年末资产
-          // ===============================================
-
-          const totalAsset =
-            beginAsset
-            +
-            investmentReturn
-            +
-            cashFlow;
-
-
-          // ===============================================
-          // 更新下一年年初资产
-          // ===============================================
-
-          simulationAsset =
-            totalAsset;
-
-
-          // ===============================================
-          // 当年剩余财务自由目标
-          // ===============================================
-
+          const expense = expenseWan * 10000;
           const freedomTarget =
-            getFinancialFreedomTarget(
-              year
-            );
+            getFinancialFreedomTarget(year, activeForecastInputs);
+          const rawFreedomGap = freedomTarget - totalAsset;
+          const freedomGap = Math.max(0, rawFreedomGap);
 
+          const remainingYears = END_YEAR - year + 1;
 
-          // ===============================================
-          // 财务自由真实差额(年末)
-          //
-          // ★★★ 关键修改 ★★★
-          //
-          // 不在这里把负数截断。
-          //
-          // 如果：
-          //
-          // 财务自由目标 = 500万
-          // 年末资产 = 550万
-          //
-          // rawFreedomGap = -50万
-          //
-          // 这 -50万 必须继续参与
-          // 天天向上1 / 天天向上2 的计算。
-          // ===============================================
+          const insuranceYear = safeProjection.find(
+            (item: any) => Number(item?.year) === year
+          );
 
-          const rawFreedomGap =
-            freedomTarget -
-            totalAsset;
-
-
-          // ===============================================
-          // 财务自由差额(年末)
-          //
-          // 页面显示使用。
-          //
-          // 达成后仍然显示：
-          // 「已达成」
-          //
-          // 所以这里继续保持 >= 0
-          // ===============================================
-
-          const freedomGap =
-            Math.max(
-              0,
-              rawFreedomGap
-            );
-
-
-          // ===============================================
-          // 剩余年份
-          // ===============================================
-
-          const remainingYears =
-            END_YEAR -
-            year +
-            1;
-
-
-          // ===============================================
-          // 对应年度保险数据
-          // ===============================================
-
-          const insuranceYear =
-            safeProjection.find(
-              (
-                item: any
-              ) =>
-                Number(
-                  item?.year
-                ) === year
-            );
-
-
-          // ===============================================
-          // 全部未来保费
-          // ===============================================
-
-          const totalFuturePremium =
-            toNumber(
-              insuranceYear?.totalFuturePremium
-            );
-
-
-          // ===============================================
-          // 夫妻未来保费
-          // ===============================================
-
-          const coupleFuturePremium =
-            toNumber(
-              insuranceYear?.coupleFuturePremium
-            );
-
-
-          // ===============================================
-          // 儿子现金价值
-          // ===============================================
-
-          const sonFutureCashValue =
-            toNumber(
-              insuranceYear?.sonCashValue
-            );
-
-
-          // ===============================================
-          // 天天向上1
-          //
-          // ★★★ 关键修改 ★★★
-          //
-          // 使用 rawFreedomGap
-          // 而不是 freedomGap。
-          //
-          // 所以即使财务自由已经达成：
-          //
-          // 目标 500万
-          // 资产 550万
-          // rawFreedomGap = -50万
-          //
-          // 天天向上1：
-          // -50万 + 全部未来保费
-          // ===============================================
+          const totalFuturePremium = toNumber(
+            insuranceYear?.totalFuturePremium
+          );
+          const coupleFuturePremium = toNumber(
+            insuranceYear?.coupleFuturePremium
+          );
+          const sonFutureCashValue = toNumber(
+            insuranceYear?.sonCashValue
+          );
 
           const yearTiantian1 =
-            rawFreedomGap +
-            totalFuturePremium;
-
-
-          // ===============================================
-          // 天天向上2
-          //
-          // ★★★ 关键修改 ★★★
-          //
-          // 使用 rawFreedomGap
-          // 而不是 freedomGap。
-          //
-          // = 财务自由真实差额
-          // + 夫妻未来保费
-          // - 儿子现金价值
-          // ===============================================
-
+            rawFreedomGap + totalFuturePremium;
           const yearTiantian2 =
-            rawFreedomGap +
-            coupleFuturePremium -
-            sonFutureCashValue;
-
-
-          // ===============================================
-          // 保存
-          // ===============================================
+            rawFreedomGap + coupleFuturePremium - sonFutureCashValue;
 
           result.push({
-
             year,
-
             remainingYears,
-
             beginAsset,
-
-            income,
-
+            income: 0,
             expense,
-
-            pension,
-
-            loan,
-
+            pension: Number(ANNUITY[year] || 0),
+            loan: Number(loans[year]?.pressure || 0),
             investmentReturn,
-
-            cashFlow,
-
+            cashFlow: newAsset * 10000,
+            growthRate,
+            hkInvestment,
+            remainingCash,
+            newAsset,
             totalAsset,
-
             freedomTarget,
-
             freedomGap,
-
-            // ★ 新增：
-            // 保留真实财务自由差额
             rawFreedomGap,
-
             totalFuturePremium,
-
             coupleFuturePremium,
-
             sonFutureCashValue,
-
             yearTiantian1,
-
             yearTiantian2,
-
           });
-
         }
 
-
-        setYearlyRows(
-          result
-        );
-
+        setYearlyRows(result);
 
         // =================================================
         // Debug
@@ -1120,18 +1063,14 @@ export default function TiantianUpDetailPage() {
 
         console.log(
           "Current Freedom Target:",
-          getFinancialFreedomTarget(
-            START_YEAR
-          )
+          currentFreedomTarget
         );
 
         console.log(
           "Current Freedom Gap:",
           Math.max(
             0,
-            getFinancialFreedomTarget(
-              START_YEAR
-            ) -
+            currentFreedomTarget -
             netAsset
           )
         );
@@ -1261,7 +1200,7 @@ export default function TiantianUpDetailPage() {
             "
           >
 
-            2027–2041 财务自由、资产增长与保险压力年度分析
+            {START_YEAR}–{END_YEAR} 财务自由、资产增长与保险压力年度分析
 
           </p>
 
@@ -1699,7 +1638,7 @@ export default function TiantianUpDetailPage() {
               "
             >
 
-              2027–2041 全部剩余生活费用
+              2027–2042 全部剩余生活费用
 
             </p>
 
@@ -2038,7 +1977,7 @@ export default function TiantianUpDetailPage() {
                 当年财务自由目标
               </b>
 
-              = 从当年开始到 2041 年全部剩余生活费
+              = 从当年开始到 2042 年全部剩余生活费
 
             </p>
 
@@ -2112,7 +2051,7 @@ export default function TiantianUpDetailPage() {
               "
             >
 
-              📊 2027–2041 天天向上年度预测
+              📊 2027–2042 天天向上年度预测
 
             </h2>
 
@@ -2125,7 +2064,7 @@ export default function TiantianUpDetailPage() {
               "
             >
 
-              年末资产、财务自由差额与未来保险压力统一计算
+              年末资产、财务自由目标与 Financial Freedom 使用同一套预测模型
 
             </p>
 
@@ -2691,7 +2630,7 @@ export default function TiantianUpDetailPage() {
                 📐 财务自由目标：
               </b>
 
-              每一年都重新计算「从该年开始到 2041 年剩余生活费」。
+              每一年都重新计算「从该年开始到 2042 年剩余生活费」。
 
             </p>
 
@@ -2701,13 +2640,13 @@ export default function TiantianUpDetailPage() {
               例如：
 
               2027 =
-              2027–2041 全部生活费；
+              {START_YEAR}–{END_YEAR} 全部生活费；
 
               2028 =
               2028–2041 全部生活费；
 
-              2041 =
-              2041 年生活费。
+              2042 =
+              2042 年生活费。
 
             </p>
 

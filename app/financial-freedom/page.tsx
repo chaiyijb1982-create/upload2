@@ -31,13 +31,26 @@ import {
 // 参数
 // =====================================================
 
-const START_YEAR = 2027;
+const FORECAST_BASE_YEAR = 2026;
 
 const END_YEAR = 2042;
 
-const FREEDOM_END_YEAR = 2041;
+const FREEDOM_END_YEAR = 2042;
 
 const RETIREMENT_AGE = 60;
+
+
+// =====================================================
+// 当前年份
+// =====================================================
+//
+// 页面只显示当前年份及以后。
+// 例如：
+// 2026 年 → 显示 2026–2042
+// 2027 年 → 自动隐藏 2026，显示 2027–2042
+// =====================================================
+
+const CURRENT_YEAR = new Date().getFullYear();
 
 
 // =====================================================
@@ -54,196 +67,310 @@ const START_ASSET = 1600000;
 // =====================================================
 // 年收入
 // =====================================================
+//
+// 保留原数据用于页面其他逻辑说明。
+// 新的年度资产预测不再使用年收入计算新增资产。
+// =====================================================
 
 const ANNUAL_INCOME = 1100000;
 
 
 // =====================================================
-// 投资收益率
-// =====================================================
-
-const RETURN_RATE = 0.05;
-
-
-// =====================================================
-// 生活费用
+// 默认资产增长率
 // =====================================================
 //
-// 2027 - 2031：37万 / 年
-// 2032 - 2042：32万 / 年
-//
-// 注意：
-// 2042 也包含在财务自由目标中。
+// 每年可以在页面中单独修改。
+// 单位：%
 // =====================================================
 
-const BASE_EXPENSE: Record<
-  number,
-  number
-> = {
+const DEFAULT_GROWTH_RATE = 5;
+
+
+// =====================================================
+// 年度预测输入类型
+// =====================================================
+
+type ForecastInput = {
+  expense: number;
+  growthRate: number;
+  hkInvestment: number;
+  remainingCash: number;
+};
+
+type ForecastInputs = Record<number, ForecastInput>;
+
+
+// =====================================================
+// 每年生活费默认值
+// =====================================================
+//
+// 单位：元。
+// 页面中显示/编辑时转换为“万元”。
+// =====================================================
+
+const BASE_EXPENSE: Record<number, number> = {
+  2026: 0,
 
   2027: 370000,
-
   2028: 370000,
-
   2029: 370000,
-
   2030: 370000,
-
   2031: 370000,
 
-
   2032: 320000,
-
   2033: 320000,
-
   2034: 320000,
-
   2035: 320000,
-
   2036: 320000,
-
   2037: 320000,
-
   2038: 320000,
-
   2039: 320000,
-
   2040: 320000,
-
   2041: 320000,
-
   2042: 320000,
-
 };
 
 
 // =====================================================
 // 年金缴费
 // =====================================================
+//
+// 保留原模型数据。
+// 新的“每年新增资产”计算不再用年金/收入/贷款压力。
+// =====================================================
 
-const ANNUITY: Record<
-  number,
-  number
-> = {
+const ANNUITY: Record<number, number> = {
+  2026: 0,
 
   2027: 724000,
-
   2028: 614000,
-
   2029: 614000,
-
   2030: 614000,
-
   2031: 614000,
-
   2032: 614000,
-
 
   2033: 351000,
 
-
   2034: 259000,
-
   2035: 259000,
-
   2036: 259000,
-
   2037: 259000,
-
 
   2038: 129000,
 
-
   2039: 39000,
-
   2040: 39000,
-
   2041: 39000,
-
   2042: 39000,
-
 };
 
 
 // =====================================================
-// ★ 剩余财务自由目标
+// ★ 每年资产预测输入
 // =====================================================
 //
-// 定义：
+// 用户可编辑：
+// 1. 当年生活费      单位：万元
+// 2. 每年资产增长率  单位：%
+// 3. 香港投资        单位：万元
+// 4. 当年剩余现金    单位：万元
 //
-// 从某一年开始，直到 2042 年，
-// 剩余所有生活费的总和。
+// 用户提供的年度规划：
+// 2027：香港投资 6，剩余现金 -5.4
+// 2028：香港投资 6，剩余现金 5.6
+// 2029：香港投资 6，剩余现金 5.6
+// 2030：香港投资 6，剩余现金 5.6
+// 2031：香港投资 6，剩余现金 5.6
+// 2032：香港投资 6，剩余现金 10.6
+// 2033：香港投资 12，剩余现金 30.9
+// 2034：香港投资 12，剩余现金 40.1
+// 2035：香港投资 12，剩余现金 40.1
+// 2036：香港投资 12，剩余现金 40.1
+// 2037：香港投资 12，剩余现金 40.1
+// 2038：香港投资 12，剩余现金 53.1
+// 2039：香港投资 12，剩余现金 62.1
+// 2040：香港投资 12，剩余现金 62.1
+// 2041：香港投资 12，剩余现金 62.1
+// 2042：香港投资 12，剩余现金 62.1
 //
-// 例如：
-//
-// 2027
-// = 2027 ~ 2042 全部生活费
-//
-// 2028
-// = 2028 ~ 2042 全部生活费
-//
-// 2029
-// = 2029 ~ 2042 全部生活费
-//
-// 所以随着年份增加，目标会逐年下降。
-//
-// 2027：
-// 37万 × 5
-// +
-// 32万 × 11
-// = 537万
-//
-// 2028：
-// 37万 × 4
-// +
-// 32万 × 11
-// = 500万
-//
-// ...
-//
-// 2042：
-// 32万
+// 2026 为当前基准年，暂不自动假设新增资产，
+// 当年数据可以直接在页面中填写。
 // =====================================================
+
+const DEFAULT_FORECAST_INPUTS: ForecastInputs = {
+  2026: {
+    expense: 0,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 0,
+    remainingCash: 0,
+  },
+
+  2027: {
+    expense: 37,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: -5.4,
+  },
+
+  2028: {
+    expense: 37,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: 5.6,
+  },
+
+  2029: {
+    expense: 37,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: 5.6,
+  },
+
+  2030: {
+    expense: 37,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: 5.6,
+  },
+
+  2031: {
+    expense: 37,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: 5.6,
+  },
+
+  2032: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 6,
+    remainingCash: 10.6,
+  },
+
+  2033: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 30.9,
+  },
+
+  2034: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 40.1,
+  },
+
+  2035: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 40.1,
+  },
+
+  2036: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 40.1,
+  },
+
+  2037: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 40.1,
+  },
+
+  2038: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 53.1,
+  },
+
+  2039: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 62.1,
+  },
+
+  2040: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 62.1,
+  },
+
+  2041: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 62.1,
+  },
+
+  2042: {
+    expense: 32,
+    growthRate: DEFAULT_GROWTH_RATE,
+    hkInvestment: 12,
+    remainingCash: 62.1,
+  },
+};
+
+
+function getDefaultForecastInput(year: number) {
+  return (
+    DEFAULT_FORECAST_INPUTS[year] ?? {
+      expense:
+        Number(BASE_EXPENSE[year] || 0) / 10000,
+      growthRate:
+        DEFAULT_GROWTH_RATE,
+      hkInvestment: 0,
+      remainingCash: 0,
+    }
+  );
+}
+
+
+function getInitialForecastInputs(): ForecastInputs {
+  const result: ForecastInputs = {};
+
+  for (
+    let year = FORECAST_BASE_YEAR;
+    year <= END_YEAR;
+    year++
+  ) {
+    result[year] = {
+      ...getDefaultForecastInput(year),
+    };
+  }
+
+  return result;
+}
+
 
 function getFinancialFreedomTarget(
-  year: number
+  year: number,
+  inputs?: ForecastInputs
 ) {
-
   let target = 0;
-
 
   for (
     let y = year;
     y <= FREEDOM_END_YEAR;
     y++
   ) {
+    const expense =
+      inputs?.[y]?.expense ??
+      getDefaultForecastInput(y).expense;
 
-    target += Number(
-      BASE_EXPENSE[y] || 0
-    );
-
+    target +=
+      Number(expense || 0) * 10000;
   }
 
-
   return target;
-
 }
-
-
-// =====================================================
-// 当前模型起始财务自由目标
-// =====================================================
-//
-// 因为当前 Financial Freedom 模型从 2027 年开始，
-// 所以当前目标按照 2027 ~ 2042 剩余生活费计算。
-//
-// = 537万
-// =====================================================
-
-const CURRENT_FINANCIAL_FREEDOM_TARGET =
-  getFinancialFreedomTarget(
-    START_YEAR
-  );
 
 
 // =====================================================
@@ -345,6 +472,31 @@ export default function FinancialFreedomPage() {
     loading,
     setLoading,
   ] = useState(true);
+
+
+  // ===================================================
+  // ★ 年度预测输入
+  // ===================================================
+  //
+  // 所有金额输入单位：万元。
+  // 页面编辑后立即重新计算后续年份。
+  // ===================================================
+
+  const [
+    forecastInputs,
+    setForecastInputs,
+  ] = useState<ForecastInputs>(
+    getInitialForecastInputs()
+  );
+
+
+  // 是否已经从 Supabase 恢复过年度预测输入。
+  // 未恢复前禁止自动保存，避免页面初始化时把默认值覆盖数据库。
+  const [
+    forecastInputsLoaded,
+    setForecastInputsLoaded,
+  ] = useState(false);
+
 
 
   // ===================================================
@@ -567,10 +719,92 @@ export default function FinancialFreedomPage() {
           netAsset
         );
    
-        
+        // =================================================
+        // 恢复 Financial Freedom 年度预测输入
+        // =================================================
+        //
+        // forecast_inputs 存在 financial_freedom_history 中。
+        // 页面第一次打开时读取最近一次保存的版本；
+        // 如果没有历史数据，则继续使用默认值。
+        //
+        // 注意：这里不能在恢复之前保存快照，否则会把默认值覆盖掉。
+        // =================================================
+
+        const {
+          data: savedForecastHistory,
+          error: savedForecastHistoryError,
+        } = await supabase
+          .from('financial_freedom_history')
+          .select('snapshot_date, forecast_inputs')
+          .not('forecast_inputs', 'is', null)
+          .order('snapshot_date', { ascending: false })
+          .limit(1);
+
+        if (savedForecastHistoryError) {
+          console.error(
+            'Financial Freedom forecast inputs loading error:',
+            savedForecastHistoryError
+          );
+        } else {
+          const saved = savedForecastHistory?.[0]?.forecast_inputs;
+
+          if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+            const restored = getInitialForecastInputs();
+
+            for (let year = FORECAST_BASE_YEAR; year <= END_YEAR; year++) {
+              const savedInput = (saved as Record<string, any>)[String(year)];
+
+              if (savedInput && typeof savedInput === 'object') {
+                restored[year] = {
+                  ...restored[year],
+                  expense: Number.isFinite(Number(savedInput.expense))
+                    ? Number(savedInput.expense)
+                    : restored[year].expense,
+                  growthRate: Number.isFinite(Number(savedInput.growthRate))
+                    ? Number(savedInput.growthRate)
+                    : restored[year].growthRate,
+                  hkInvestment: Number.isFinite(Number(savedInput.hkInvestment))
+                    ? Number(savedInput.hkInvestment)
+                    : restored[year].hkInvestment,
+                  remainingCash: Number.isFinite(Number(savedInput.remainingCash))
+                    ? Number(savedInput.remainingCash)
+                    : restored[year].remainingCash,
+                };
+              }
+            }
+
+            setForecastInputs(restored);
+
+            console.log(
+              'Financial Freedom forecast inputs restored from Supabase:',
+              savedForecastHistory?.[0]?.snapshot_date
+            );
+          }
+        }
+
+        try {
+          window.localStorage.setItem(
+            'financial_freedom_forecast_inputs_v1',
+            JSON.stringify(
+              savedForecastHistory?.[0]?.forecast_inputs ??
+              getInitialForecastInputs()
+            )
+          );
+        } catch (localStorageError) {
+          console.warn(
+            'Financial Freedom local forecast inputs initial save failed:',
+            localStorageError
+          );
+        }
+
+        setForecastInputsLoaded(true);
+
 
         // =================================================
         // Debug
+        // =================================================
+
+
         // =================================================
 
         console.log(
@@ -608,14 +842,32 @@ export default function FinancialFreedomPage() {
 
         console.log(
           "Current Financial Freedom Target:",
-          CURRENT_FINANCIAL_FREEDOM_TARGET
+          getFinancialFreedomTarget(
+            Math.max(
+              FORECAST_BASE_YEAR,
+              Math.min(
+                CURRENT_YEAR,
+                END_YEAR
+              )
+            ),
+            forecastInputs
+          )
         );
 
         console.log(
           "Current Financial Freedom Gap:",
           Math.max(
             0,
-            CURRENT_FINANCIAL_FREEDOM_TARGET -
+            getFinancialFreedomTarget(
+              Math.max(
+                FORECAST_BASE_YEAR,
+                Math.min(
+                  CURRENT_YEAR,
+                  END_YEAR
+                )
+              ),
+              forecastInputs
+            ) -
             netAsset
           )
         );
@@ -658,6 +910,10 @@ export default function FinancialFreedomPage() {
         // =================================================
         // 9. 年度贷款模型
         // =================================================
+        //
+        // 贷款数据继续读取并保留。
+        // 新的年度资产预测不再使用贷款压力计算新增资产。
+        // =================================================
 
         const loans:
           Record<
@@ -670,30 +926,20 @@ export default function FinancialFreedomPage() {
 
 
         for (
-          let year = START_YEAR;
+          let year = FORECAST_BASE_YEAR;
           year <= END_YEAR;
           year++
         ) {
-
-          // =================================================
-          // 年度贷款支付
-          // =================================================
 
           const payment =
             await getFinancialFreedomLoanPayment(
               year
             );
 
-
-          // =================================================
-          // 年度贷款压力
-          // =================================================
-
           const pressure =
             await getAnnualLoanPressure(
               year
             );
-
 
           loans[year] = {
 
@@ -714,258 +960,6 @@ export default function FinancialFreedomPage() {
 
         setLoanPressure(
           loans
-        );
-
-
-        // =================================================
-        // 10. 年度资产预测
-        // =================================================
-        //
-        // 注意：
-        //
-        // 使用刚刚计算出来的 netAsset，
-        // 不使用 currentFamilyAsset state。
-        //
-        // 因为 setState 是异步的。
-        // =================================================
-
-        let currentAsset =
-          netAsset;
-
-
-        const result: any[] = [];
-
-
-        // =================================================
-        // 2027 → 2042
-        // =================================================
-
-        for (
-          let year = START_YEAR;
-          year <= END_YEAR;
-          year++
-        ) {
-
-          // =================================================
-          // 生活费
-          // =================================================
-
-          const expense =
-            Number(
-              BASE_EXPENSE[year] || 0
-            );
-
-
-          // =================================================
-          // 年金缴费
-          // =================================================
-
-          const pension =
-            Number(
-              ANNUITY[year] || 0
-            );
-
-
-          // =================================================
-          // Financial Freedom 贷款年度压力
-          // =================================================
-
-          const loan =
-            Number(
-              loans[year]?.pressure || 0
-            );
-
-
-          // =================================================
-          // 年度现金流
-          // =================================================
-          //
-          // 年收入
-          // -
-          // 生活费
-          // -
-          // 年金
-          // -
-          // 贷款压力
-          // =================================================
-
-          const cashFlow =
-            ANNUAL_INCOME
-            -
-            expense
-            -
-            pension
-            -
-            loan;
-
-
-          // =================================================
-          // 投资收益
-          // =================================================
-          //
-          // 年初资产 × 5%
-          // =================================================
-
-          const investmentReturn =
-            currentAsset *
-            RETURN_RATE;
-
-
-          // =================================================
-          // 年末资产
-          // =================================================
-
-          currentAsset =
-            currentAsset
-            +
-            investmentReturn
-            +
-            cashFlow;
-
-
-          // =================================================
-          // ★ 当年剩余财务自由目标
-          // =================================================
-          //
-          // 例如：
-          //
-          // 2027：
-          // 2027~2042 全部生活费
-          //
-          // 2028：
-          // 2028~2042 全部生活费
-          //
-          // ...
-          //
-          // 2042：
-          // 2042 年生活费
-          // =================================================
-
-          const freedomTarget =
-            getFinancialFreedomTarget(
-              year
-            );
-
-
-          // =================================================
-          // ★ 当年财务自由差额
-          // =================================================
-          //
-          // 当年剩余财务自由目标
-          // -
-          // 当年预计资产
-          //
-          // 如果资产已经超过目标，
-          // 差额显示 0。
-          // =================================================
-
-          const freedomGap =
-            Math.max(
-              0,
-              freedomTarget -
-              currentAsset
-            );
-
-
-          // =================================================
-          // 剩余年份
-          // =================================================
-
-          const remainingYears =
-            END_YEAR -
-            year +
-            1;
-
-
-          // =================================================
-          // 保存年度结果
-          // =================================================
-
-          result.push({
-
-            year,
-
-            remainingYears,
-
-            asset:
-              currentAsset,
-
-            income:
-              ANNUAL_INCOME,
-
-            expense,
-
-            annuity:
-              pension,
-
-            loan,
-
-            investmentReturn,
-
-            cashFlow,
-
-            freedomTarget,
-
-            freedomGap,
-
-          });
-
-        }
-
-
-        // =================================================
-        // 11. 保存年度预测
-        // =================================================
-
-        setRows(
-          result
-        );
-
-
-        // =================================================
-        // Debug：检查年度目标
-        // =================================================
-
-        console.log(
-          "========================================"
-        );
-
-        console.log(
-          "Financial Freedom Annual Targets"
-        );
-
-
-        result.forEach(
-          (
-            row
-          ) => {
-
-            console.log(
-              row.year,
-              {
-                remainingYears:
-                  row.remainingYears,
-
-                expense:
-                  row.expense,
-
-                freedomTarget:
-                  row.freedomTarget,
-
-                asset:
-                  row.asset,
-
-                freedomGap:
-                  row.freedomGap,
-              }
-            );
-
-          }
-        );
-
-
-        console.log(
-          "========================================"
         );
 
 
@@ -994,6 +988,304 @@ export default function FinancialFreedomPage() {
     load();
 
   }, []);
+
+
+  // =====================================================
+  // ★ 保存年度预测输入 + 当前 Financial Freedom 快照
+  // =====================================================
+  //
+  // 只要用户修改任意年度输入，就保存到 Supabase。
+  // 页面刷新后会从 forecast_inputs 恢复。
+  // =====================================================
+
+  useEffect(() => {
+
+    if (!forecastInputsLoaded) {
+      return;
+    }
+
+    if (!currentFamilyAsset && currentFamilyAsset !== 0) {
+      return;
+    }
+
+    const saveForecastInputs = async () => {
+
+      const currentYearForTarget =
+        Math.max(
+          FORECAST_BASE_YEAR,
+          Math.min(CURRENT_YEAR, END_YEAR)
+        );
+
+      const freedomTarget =
+        getFinancialFreedomTarget(
+          currentYearForTarget,
+          forecastInputs
+        );
+
+      const freedomGap = Math.max(
+        0,
+        freedomTarget - currentFamilyAsset
+      );
+
+      const freedomRate =
+        freedomTarget > 0
+          ? (currentFamilyAsset / freedomTarget) * 100
+          : 0;
+
+      const today =
+        new Date().toISOString().split('T')[0];
+
+      const { error: historyError } =
+        await supabase
+          .from('financial_freedom_history')
+          .upsert(
+            {
+              snapshot_date: today,
+              total_asset: currentFamilyAsset,
+              freedom_target: freedomTarget,
+              freedom_gap: freedomGap,
+              freedom_rate: freedomRate,
+              forecast_inputs: forecastInputs,
+            },
+            {
+              onConflict: 'snapshot_date',
+            }
+          );
+
+      if (historyError) {
+        console.error(
+          'Financial Freedom history save error:',
+          {
+            message: historyError.message,
+            details: historyError.details,
+            hint: historyError.hint,
+            code: historyError.code,
+          }
+        );
+      } else {
+        try {
+          window.localStorage.setItem(
+            'financial_freedom_forecast_inputs_v1',
+            JSON.stringify(forecastInputs)
+          );
+        } catch (localStorageError) {
+          console.warn(
+            'Financial Freedom local forecast inputs save failed:',
+            localStorageError
+          );
+        }
+      }
+    };
+
+    void saveForecastInputs();
+
+  }, [
+    forecastInputs,
+    forecastInputsLoaded,
+    currentFamilyAsset,
+  ]);
+
+
+  // =====================================================
+  // ★ 年度资产预测
+  // =====================================================
+  //
+  // 当前年份以前不显示。
+  // 当前年份作为预测起点：
+  //
+  // 当年预计资产(年末)
+  // = 上一年预计资产(年末)
+  //   × (1 + 每年资产增长率)
+  //   + 香港投资
+  //   + 当年剩余现金
+  //
+  // 特别处理：
+  // 2026 是当前模型的基准年，直接使用当前家庭净资产，
+  // 不再对当前资产重复计算一次增长。
+  // =====================================================
+
+  useEffect(() => {
+
+    if (!currentFamilyAsset && currentFamilyAsset !== 0) {
+      return;
+    }
+
+    const calculationStartYear =
+      Math.max(
+        FORECAST_BASE_YEAR,
+        Math.min(
+          CURRENT_YEAR,
+          END_YEAR
+        )
+      );
+
+    let previousAsset =
+      currentFamilyAsset;
+
+    const result: any[] = [];
+
+
+    for (
+      let year = calculationStartYear;
+      year <= END_YEAR;
+      year++
+    ) {
+
+      const input =
+        forecastInputs[year] ??
+        getDefaultForecastInput(year);
+
+      const expense =
+        Number(
+          input.expense || 0
+        );
+
+      const growthRate =
+        Number(
+          input.growthRate || 0
+        );
+
+      const hkInvestment =
+        Number(
+          input.hkInvestment || 0
+        );
+
+      const remainingCash =
+        Number(
+          input.remainingCash || 0
+        );
+
+      const newAsset =
+        hkInvestment +
+        remainingCash;
+
+      const isCurrentBaseYear =
+        year === FORECAST_BASE_YEAR &&
+        calculationStartYear === FORECAST_BASE_YEAR;
+
+      const beginningAsset =
+        previousAsset;
+
+      let currentAsset: number;
+      let investmentReturn: number;
+
+
+      if (isCurrentBaseYear) {
+
+        currentAsset =
+          currentFamilyAsset;
+
+        investmentReturn =
+          0;
+
+      }
+      else {
+
+        investmentReturn =
+          beginningAsset *
+          growthRate /
+          100;
+
+        currentAsset =
+          beginningAsset
+          *
+          (
+            1 +
+            growthRate /
+            100
+          )
+          +
+          newAsset *
+          10000;
+
+      }
+
+
+      previousAsset =
+        currentAsset;
+
+      const freedomTarget =
+        getFinancialFreedomTarget(
+          year,
+          forecastInputs
+        );
+
+      const freedomGap =
+        Math.max(
+          0,
+          freedomTarget -
+          currentAsset
+        );
+
+      const remainingYears =
+        END_YEAR -
+        year +
+        1;
+
+
+      result.push({
+
+        year,
+
+        remainingYears,
+
+        asset:
+          currentAsset,
+
+        income:
+          ANNUAL_INCOME,
+
+        expense:
+          expense *
+          10000,
+
+        annuity:
+          Number(
+            ANNUITY[year] || 0
+          ),
+
+        loan:
+          Number(
+            loanPressure[year]?.pressure || 0
+          ),
+
+        investmentReturn,
+
+        cashFlow:
+          newAsset *
+          10000,
+
+        growthRate,
+
+        hkInvestment,
+
+        remainingCash,
+
+        newAsset,
+
+        freedomTarget,
+
+        freedomGap,
+
+        isBaseYear:
+          isCurrentBaseYear,
+
+      });
+
+    }
+
+
+    setRows(
+      result
+    );
+
+  }, [
+    currentFamilyAsset,
+    forecastInputs,
+    loanPressure,
+  ]);
+
+
     // =====================================================
   // 金额格式
   // =====================================================
@@ -1022,55 +1314,21 @@ export default function FinancialFreedomPage() {
   // ★ 财务自由目标计算
   // =====================================================
   //
-  // 新逻辑：
+  // 从指定年份开始，
+  // 一直到 2042 年，
+  // 加总剩余所有年份的生活费。
   //
-  // 财务自由目标不再使用：
-  //
-  // 当年生活费 × 25
-  //
-  // 而是：
-  //
-  // 从指定年份开始
-  // 一直到 2042 年
-  // 剩余所有生活费的总和。
-  //
-  // 例如：
-  //
-  // 2027：
-  // 2027 + 2028 + ... + 2042
-  //
-  // 2028：
-  // 2028 + 2029 + ... + 2042
-  //
-  // ...
-  //
-  // 2042：
-  // 2042
-  //
-  // 所以财务自由目标会随着年份
-  // 自动逐年下降。
+  // 使用页面当前可编辑的“当年生活费”。
   // =====================================================
 
   function getFreedomTarget(
     startYear: number
   ) {
 
-    let total = 0;
-
-    for (
-      let year = startYear;
-      year <= FREEDOM_END_YEAR;
-      year++
-    ) {
-
-      total +=
-        Number(
-          BASE_EXPENSE[year] || 0
-        );
-
-    }
-
-    return total;
+    return getFinancialFreedomTarget(
+      startYear,
+      forecastInputs
+    );
 
   }
 
@@ -1078,30 +1336,24 @@ export default function FinancialFreedomPage() {
   // =====================================================
   // ★ 当前财务自由目标
   // =====================================================
-  //
-  // 当前时间点是进入 2027 年前的规划状态，
-  // 所以当前目标按照：
-  //
-  // 2027 - 2042
-  //
-  // 所有未来生活费计算。
-  // =====================================================
+
+  const currentForecastStartYear =
+    Math.max(
+      FORECAST_BASE_YEAR,
+      Math.min(
+        CURRENT_YEAR,
+        END_YEAR
+      )
+    );
 
   const currentFreedomTarget =
     getFreedomTarget(
-      START_YEAR
+      currentForecastStartYear
     );
 
 
   // =====================================================
   // ★ 当前财务自由差额
-  // =====================================================
-  //
-  // 当前家庭净资产
-  // 对比当前财务自由目标。
-  //
-  // 如果已经超过目标，
-  // 差额显示 0。
   // =====================================================
 
   const currentFreedomGap =
@@ -1399,7 +1651,7 @@ export default function FinancialFreedomPage() {
               "
             >
 
-              2027–2041 剩余生活费总和
+              {currentForecastStartYear}–{END_YEAR} 剩余生活费总和
 
             </div>
 
@@ -1607,7 +1859,7 @@ export default function FinancialFreedomPage() {
                 "
               >
 
-                2027–2041 所有未来生活费
+                {currentForecastStartYear}–{END_YEAR} 所有未来生活费
 
               </div>
 
@@ -1699,7 +1951,7 @@ export default function FinancialFreedomPage() {
 
             <p>
 
-              2027–2042 每年的预计生活费全部加总。
+              {currentForecastStartYear}–{END_YEAR} 每年的预计生活费全部加总。
 
             </p>
 
@@ -1733,7 +1985,7 @@ export default function FinancialFreedomPage() {
         </section>
 
                 {/* =================================================
-            年度现金流预测
+            ★ 年度资产预测
             ================================================= */}
 
         <section
@@ -1768,7 +2020,7 @@ export default function FinancialFreedomPage() {
                 "
               >
 
-                📊 年度现金流预测
+                📊 年度资产预测
 
               </h2>
 
@@ -1781,7 +2033,7 @@ export default function FinancialFreedomPage() {
                 "
               >
 
-                2027–2042 年家庭资产变化预测
+                页面只显示当前年份及以后；修改任意输入后，后续年份会自动重新计算。
 
               </p>
 
@@ -1790,11 +2042,57 @@ export default function FinancialFreedomPage() {
           </div>
 
 
+          <div
+            className="
+              mb-5
+              rounded-xl
+              bg-blue-50
+              border
+              border-blue-100
+              p-5
+              text-sm
+              text-blue-800
+              leading-7
+            "
+          >
+
+            <p>
+              <b>资产预测公式：</b>
+            </p>
+
+            <p>
+              当年预计资产(年末)
+              =
+              去年预计资产(年末)
+              ×
+              (1 + 每年资产增长率)
+              +
+              香港投资
+              +
+              当年剩余现金
+            </p>
+
+            <p>
+              每年新增资产
+              =
+              香港投资
+              +
+              当年剩余现金
+            </p>
+
+            <p>
+              所有输入金额单位均为“万元”，资产增长率单位为“%”。
+              不自动按月份比例折算。
+            </p>
+
+          </div>
+
+
           <table
             className="
               w-full
               text-sm
-              min-w-[1100px]
+              min-w-[1250px]
             "
           >
 
@@ -1818,7 +2116,6 @@ export default function FinancialFreedomPage() {
                   年份
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1826,10 +2123,9 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  年末资产
+                  当年生活费<br />(万元)
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1837,10 +2133,9 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  年收入
+                  资产增长率<br />(%)
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1848,10 +2143,9 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  生活费
+                  香港投资<br />(万元)
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1859,10 +2153,9 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  年金
+                  当年剩余现金<br />(万元)
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1870,10 +2163,9 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  当年还贷
+                  每年新增资产<br />(万元)
                 </th>
 
-
                 <th
                   className="
                     p-3
@@ -1881,9 +2173,18 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  投资收益(年末)
+                  当年预计资产(年末)
                 </th>
 
+                <th
+                  className="
+                    p-3
+                    text-right
+                    font-medium
+                  "
+                >
+                  财务自由目标
+                </th>
 
                 <th
                   className="
@@ -1892,7 +2193,7 @@ export default function FinancialFreedomPage() {
                     font-medium
                   "
                 >
-                  年度现金流(年末)
+                  财务自由差额
                 </th>
 
               </tr>
@@ -1908,6 +2209,24 @@ export default function FinancialFreedomPage() {
                     row: any
                   ) => {
 
+                    const input =
+                      forecastInputs[
+                        Number(row.year)
+                      ] ??
+                      getDefaultForecastInput(
+                        Number(row.year)
+                      );
+
+                    const newAsset =
+                      Number(
+                        input.hkInvestment || 0
+                      )
+                      +
+                      Number(
+                        input.remainingCash || 0
+                      );
+
+
                     return (
 
                       <tr
@@ -1921,8 +2240,6 @@ export default function FinancialFreedomPage() {
                         "
                       >
 
-                        {/* 年份 */}
-
                         <td
                           className="
                             p-3
@@ -1933,10 +2250,322 @@ export default function FinancialFreedomPage() {
 
                           {row.year}
 
+                          {
+                            row.isBaseYear
+                              ? (
+                                <div
+                                  className="
+                                    text-xs
+                                    text-gray-400
+                                    mt-1
+                                  "
+                                >
+                                  当前资产基准
+                                </div>
+                              )
+                              : null
+                          }
+
                         </td>
 
 
-                        {/* 年末资产 */}
+                        {/* 当年生活费 */}
+
+                        <td
+                          className="
+                            p-2
+                            text-right
+                          "
+                        >
+
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={
+                              input.expense
+                            }
+                            onChange={
+                              (
+                                e
+                              ) => {
+
+                                const value =
+                                  Number(
+                                    e.target.value
+                                  );
+
+                                setForecastInputs(
+                                  (
+                                    prev
+                                  ) => ({
+                                    ...prev,
+                                    [row.year]: {
+                                      ...(
+                                        prev[
+                                          row.year
+                                        ] ??
+                                        getDefaultForecastInput(
+                                          row.year
+                                        )
+                                      ),
+                                      expense:
+                                        Number.isFinite(
+                                          value
+                                        )
+                                          ? value
+                                          : 0,
+                                    },
+                                  })
+                                );
+
+                              }
+                            }
+                            className="
+                              w-24
+                              rounded-lg
+                              border
+                              border-gray-200
+                              px-2
+                              py-2
+                              text-right
+                              outline-none
+                              focus:border-blue-400
+                            "
+                          />
+
+                        </td>
+
+
+                        {/* 资产增长率 */}
+
+                        <td
+                          className="
+                            p-2
+                            text-right
+                          "
+                        >
+
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={
+                              input.growthRate
+                            }
+                            onChange={
+                              (
+                                e
+                              ) => {
+
+                                const value =
+                                  Number(
+                                    e.target.value
+                                  );
+
+                                setForecastInputs(
+                                  (
+                                    prev
+                                  ) => ({
+                                    ...prev,
+                                    [row.year]: {
+                                      ...(
+                                        prev[
+                                          row.year
+                                        ] ??
+                                        getDefaultForecastInput(
+                                          row.year
+                                        )
+                                      ),
+                                      growthRate:
+                                        Number.isFinite(
+                                          value
+                                        )
+                                          ? value
+                                          : 0,
+                                    },
+                                  })
+                                );
+
+                              }
+                            }
+                            className="
+                              w-20
+                              rounded-lg
+                              border
+                              border-gray-200
+                              px-2
+                              py-2
+                              text-right
+                              outline-none
+                              focus:border-blue-400
+                            "
+                          />
+
+                        </td>
+
+
+                        {/* 香港投资 */}
+
+                        <td
+                          className="
+                            p-2
+                            text-right
+                          "
+                        >
+
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={
+                              input.hkInvestment
+                            }
+                            onChange={
+                              (
+                                e
+                              ) => {
+
+                                const value =
+                                  Number(
+                                    e.target.value
+                                  );
+
+                                setForecastInputs(
+                                  (
+                                    prev
+                                  ) => ({
+                                    ...prev,
+                                    [row.year]: {
+                                      ...(
+                                        prev[
+                                          row.year
+                                        ] ??
+                                        getDefaultForecastInput(
+                                          row.year
+                                        )
+                                      ),
+                                      hkInvestment:
+                                        Number.isFinite(
+                                          value
+                                        )
+                                          ? value
+                                          : 0,
+                                    },
+                                  })
+                                );
+
+                              }
+                            }
+                            className="
+                              w-24
+                              rounded-lg
+                              border
+                              border-gray-200
+                              px-2
+                              py-2
+                              text-right
+                              outline-none
+                              focus:border-blue-400
+                            "
+                          />
+
+                        </td>
+
+
+                        {/* 当年剩余现金 */}
+
+                        <td
+                          className="
+                            p-2
+                            text-right
+                          "
+                        >
+
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={
+                              input.remainingCash
+                            }
+                            onChange={
+                              (
+                                e
+                              ) => {
+
+                                const value =
+                                  Number(
+                                    e.target.value
+                                  );
+
+                                setForecastInputs(
+                                  (
+                                    prev
+                                  ) => ({
+                                    ...prev,
+                                    [row.year]: {
+                                      ...(
+                                        prev[
+                                          row.year
+                                        ] ??
+                                        getDefaultForecastInput(
+                                          row.year
+                                        )
+                                      ),
+                                      remainingCash:
+                                        Number.isFinite(
+                                          value
+                                        )
+                                          ? value
+                                          : 0,
+                                    },
+                                  })
+                                );
+
+                              }
+                            }
+                            className="
+                              w-24
+                              rounded-lg
+                              border
+                              border-gray-200
+                              px-2
+                              py-2
+                              text-right
+                              outline-none
+                              focus:border-blue-400
+                            "
+                          />
+
+                        </td>
+
+
+                        {/* 每年新增资产 */}
+
+                        <td
+                          className={`
+                            p-3
+                            text-right
+                            font-bold
+                            ${
+                              newAsset >= 0
+                                ? "text-green-700"
+                                : "text-red-600"
+                            }
+                          `}
+                        >
+
+                          {
+                            newAsset.toLocaleString(
+                              "zh-CN",
+                              {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              }
+                            )
+                          }
+
+                        </td>
+
+
+                        {/* 当年预计资产 */}
 
                         <td
                           className="
@@ -1956,122 +2585,47 @@ export default function FinancialFreedomPage() {
                         </td>
 
 
-                        {/* 年收入 */}
+                        {/* 财务自由目标 */}
 
                         <td
                           className="
                             p-3
                             text-right
+                            font-bold
+                            text-blue-700
                           "
                         >
 
                           {
                             money(
-                              row.income
+                              row.freedomTarget
                             )
                           }
 
                         </td>
 
 
-                        {/* 生活费 */}
-
-                        <td
-                          className="
-                            p-3
-                            text-right
-                          "
-                        >
-
-                          {
-                            money(
-                              row.expense
-                            )
-                          }
-
-                        </td>
-
-
-                        {/* 年金 */}
-
-                        <td
-                          className="
-                            p-3
-                            text-right
-                          "
-                        >
-
-                          {
-                            money(
-                              row.annuity
-                            )
-                          }
-
-                        </td>
-
-
-                        {/* 贷款压力 */}
-
-                        <td
-                          className="
-                            p-3
-                            text-right
-                          "
-                        >
-
-                          {
-                            Number(
-                              row.loan || 0
-                            ) > 0
-                              ? money(
-                                  row.loan
-                                )
-                              : "-"
-                          }
-
-                        </td>
-
-
-                        {/* 投资收益 */}
-
-                        <td
-                          className="
-                            p-3
-                            text-right
-                            text-green-700
-                          "
-                        >
-
-                          {
-                            money(
-                              row.investmentReturn
-                            )
-                          }
-
-                        </td>
-
-
-                        {/* 年度现金流 */}
+                        {/* 财务自由差额 */}
 
                         <td
                           className={`
                             p-3
                             text-right
-                            font-medium
+                            font-bold
                             ${
-                              Number(
-                                row.cashFlow || 0
-                              ) >= 0
-                                ? "text-green-700"
-                                : "text-red-600"
+                              row.freedomGap > 0
+                                ? "text-orange-600"
+                                : "text-green-600"
                             }
                           `}
                         >
 
                           {
-                            money(
-                              row.cashFlow
-                            )
+                            row.freedomGap > 0
+                              ? money(
+                                  row.freedomGap
+                                )
+                              : "已达成"
                           }
 
                         </td>
@@ -2087,56 +2641,6 @@ export default function FinancialFreedomPage() {
             </tbody>
 
           </table>
-
-
-          {/* =================================================
-              计算说明
-              ================================================= */}
-
-          <div
-            className="
-              mt-5
-              rounded-xl
-              bg-blue-50
-              border
-              border-blue-100
-              p-5
-              text-sm
-              text-blue-800
-              leading-7
-            "
-          >
-
-            <p>
-
-              <b>
-                年度资产计算：
-              </b>
-
-            </p>
-
-
-            <p>
-
-              年末资产 = 年初资产 + 投资收益 + 年度现金流
-
-            </p>
-
-
-            <p>
-
-              投资收益 = 年初资产 × 5%
-
-            </p>
-
-
-            <p>
-
-              年度现金流 = 年收入 − 生活费 − 年金 − 贷款压力
-
-            </p>
-
-          </div>
 
         </section>
 
@@ -2509,7 +3013,7 @@ export default function FinancialFreedomPage() {
             <p>
 
               每一年的财务自由目标 =
-              从该年开始到 2041 年的所有剩余生活费总和。
+              从该年开始到 2042 年的所有剩余生活费总和。
 
             </p>
 
@@ -2517,7 +3021,7 @@ export default function FinancialFreedomPage() {
             <p>
 
               2027 财务自由目标 =
-              2027 + 2028 + …… + 2041 生活费
+              2027 + 2028 + …… + 2042 生活费
 
             </p>
 
@@ -2525,7 +3029,7 @@ export default function FinancialFreedomPage() {
             <p>
 
               2028 财务自由目标 =
-              2028 + 2029 + …… + 2041 生活费
+              2028 + 2029 + …… + 2042 生活费
 
             </p>
 
@@ -2539,8 +3043,8 @@ export default function FinancialFreedomPage() {
 
             <p>
 
-              2041 财务自由目标 =
-              2041 年生活费
+              2042 财务自由目标 =
+              2042 年生活费
 
             </p>
 
@@ -3337,7 +3841,7 @@ export default function FinancialFreedomPage() {
               "
             >
 
-              2027–2042 剩余生活费总和
+              {currentForecastStartYear}–{END_YEAR} 剩余生活费总和
 
             </p>
 

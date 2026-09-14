@@ -1294,16 +1294,36 @@ export async function getExpenseTransactions(
       await query;
 
 
-    if (error) {
+if (error) {
 
-      console.error(
-        "getExpenseTransactions error:",
-        error
-      );
+  console.error(
+    "getExpenseTransactions error:",
+    error
+  );
 
-      return allTransactions;
+  console.error(
+    "getExpenseTransactions error message:",
+    error.message
+  );
 
-    }
+  console.error(
+    "getExpenseTransactions error details:",
+    error.details
+  );
+
+  console.error(
+    "getExpenseTransactions error hint:",
+    error.hint
+  );
+
+  console.error(
+    "getExpenseTransactions error code:",
+    error.code
+  );
+
+  return allTransactions;
+
+}
 
 
     const page:
@@ -1462,7 +1482,8 @@ export async function getExpenseTransactionById(
 // =====================================================
 
 export async function createExpenseTransaction(
-  input: ExpenseTransactionInput
+  input: ExpenseTransactionInput,
+  db = supabase
 ): Promise<{
 
   success: boolean;
@@ -1703,7 +1724,8 @@ export async function createExpenseTransaction(
 // =====================================================
 
 export async function createExpenseTransactions(
-  inputs: ExpenseTransactionInput[]
+  inputs: ExpenseTransactionInput[],
+  db = supabase
 ): Promise<ExpenseImportResult> {
 
   const result:
@@ -1786,7 +1808,8 @@ export async function createExpenseTransactions(
 
     const created =
       await createExpenseTransaction(
-        normalized
+        normalized,
+        db
       );
 
 

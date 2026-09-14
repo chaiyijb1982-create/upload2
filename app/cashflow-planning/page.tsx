@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import * as XLSX from "xlsx";
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import {
   loadCashflowPlanning,
   saveCashflowPlanning,
@@ -44,22 +44,28 @@ import { CSS } from "@dnd-kit/utilities";
 // ============================================================
 
 const TARGET_START_YEAR = 2026;
-const EXCEL_END_YEAR = 2037;
+
 const TARGET_END_YEAR = 2042;
 
-// 2026 只从 9 月开始读取；2027–2037 保持全年。
-const TARGET_2026_START_MONTH = 9;
+// type / interface
+// TARGET_START_YEAR / TARGET_END_YEAR
+// 其他工具函数
 
-const STORAGE_KEY =
-  "ai-wealth-os-cashflow-planning-v12";
 
-const EXCEL_FILE = "/NEW.xlsx";
+
+
+
+
 
 // ============================================================
 // 类型
 // ============================================================
 
 type Role = "income" | "expense";
+
+// Excel 导入诊断信息。
+// 当前版本业务数据已经以 Supabase 为主，诊断信息仅作为可选结构保留。
+type ExcelDiagnostics = Record<string, unknown>;
 
 type Project = {
   projectId: string;
@@ -134,28 +140,6 @@ type YearCalculation = {
   endingAnnuity: number;
 };
 
-type ExcelDiagnosticRow = {
-  excelRow: number;
-  c: string;
-  d: string;
-  e: string;
-  eFormula: string;
-};
-
-type ExcelDiagnostics = {
-  fetchedUrl: string;
-  fetchedAt: string;
-  responseSize: number;
-  workbookSheetNames: string[];
-  expectedSheetNames: string[];
-  selectedSheet2026: string;
-  selectedSheet2026Exists: boolean;
-  sheet2026RowCount: number;
-  sheet2026ColumnCount: number;
-  janRows: ExcelDiagnosticRow[];
-  janParsedIncome: Array<{ name: string; value: number; sourceRow: number }>;
-  janParsedExpense: Array<{ name: string; value: number; sourceRow: number }>;
-};
 
 type ParsedExcel = {
   years: YearData[];
@@ -256,454 +240,6 @@ function isValidName(name: string) {
   return normalizeName(name).length > 0;
 }
 
-// ============================================================
-// Excel
-// ============================================================
-
-const MONTH_BLOCKS = [
-  {
-    baseRow: 5,
-    months: [1, 2, 3, 4],
-  },
-  {
-    baseRow: 26,
-    months: [5, 6, 7, 8],
-  },
-  {
-    baseRow: 47,
-    months: [9, 10, 11, 12],
-  },
-];
-
-const MONTH_COLS = [
-  {
-    categoryCol: 2,
-    labelCol: 3,
-    valueCol: 4,
-  },
-  {
-    categoryCol: 7,
-    labelCol: 8,
-    valueCol: 9,
-  },
-  {
-    categoryCol: 12,
-    labelCol: 13,
-    valueCol: 14,
-  },
-  {
-    categoryCol: 17,
-    labelCol: 18,
-    valueCol: 19,
-  },
-];
-
-type ResolvedRowCells = {
-  category: unknown;
-  detail: unknown;
-  value: unknown;
-  valueCol: number;
-  categoryCol: number;
-  detailCol: number;
-};
-
-/**
- * 2026 的 NEW.xlsx 在不同 Excel/Sheet 版本中可能因为合并单元格、
- * 空列或列偏移，导致 sheet_to_json 的数组位置与肉眼看到的 C/D/E 不一致。
- *
- * 2027–2037 保持原来的固定 C/D/E、H/I/J、M/N/O、R/S/T 读取规则。
- * 只有 2026 使用这个自动识别器：
- *   1. 在目标组左右各扩 1 列寻找文字/金额；
- *   2. 优先把“最像金额”的单元格作为金额；
- *   3. 金额左侧最近的文字作为 detail；
- *   4. 如果还有更左侧文字，则作为 category；
- *   5. 如果目标 value 列有明确值，则优先使用目标 value 列。
- */
-function isNumericLikeCell(value: unknown): boolean {
-  if (typeof value === "number") {
-    return Number.isFinite(value);
-  }
-
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  const text = value.trim();
-
-  if (!text || text.startsWith("#")) {
-    return false;
-  }
-
-  if (text.startsWith("=")) {
-    return false;
-  }
-
-  const normalized = text
-    .replace(/[¥$,￥\s]/g, "")
-    .replace(/,/g, "");
-
-  return normalized !== "" && Number.isFinite(Number(normalized));
-}
-
-function isMeaningfulTextCell(value: unknown): boolean {
-  if (value === null || value === undefined) {
-    return false;
-  }
-
-  const text = String(value).trim();
-
-  if (!text) {
-    return false;
-  }
-
-  if (text.startsWith("#")) {
-    return false;
-  }
-
-  return !isNumericLikeCell(text);
-}
-
-function getSheetCellValue(
-  sheet: XLSX.WorkSheet,
-  rowIndex: number,
-  colIndex: number
-): unknown {
-  const cell =
-    sheet[
-      XLSX.utils.encode_cell({
-        r: rowIndex,
-        c: colIndex,
-      })
-    ];
-
-  if (!cell) {
-    return "";
-  }
-
-  return cell.v ?? "";
-}
-
-function resolve2026RowCells(
-  sheet: XLSX.WorkSheet,
-  rowIndex: number,
-  col: {
-    categoryCol: number;
-    labelCol: number;
-    valueCol: number;
-  }
-): ResolvedRowCells {
-  const startCol = Math.max(0, col.categoryCol - 1);
-  const endCol = Math.min(
-    64,
-    col.valueCol + 1
-  );
-
-  const candidates: Array<{
-    colIndex: number;
-    value: unknown;
-    cell: XLSX.CellObject | undefined;
-  }> = [];
-
-  for (
-    let c = startCol;
-    c <= endCol;
-    c++
-  ) {
-    const cell =
-      sheet[
-        XLSX.utils.encode_cell({
-          r: rowIndex,
-          c,
-        })
-      ];
-
-    candidates.push({
-      colIndex: c,
-      value: cell?.v ?? "",
-      cell,
-    });
-  }
-
-  // 优先使用模板定义的金额列，只要该格确实有内容。
-  const expectedValue =
-    candidates.find(
-      (x) =>
-        x.colIndex === col.valueCol &&
-        x.value !== "" &&
-        x.value !== null &&
-        x.value !== undefined
-    );
-
-  let valueCandidate =
-    expectedValue;
-
-  // 如果模板金额列为空，则在相邻列寻找真正的数字。
-  if (!valueCandidate) {
-    const numericCandidates =
-      candidates.filter((x) =>
-        isNumericLikeCell(x.value)
-      );
-
-    if (numericCandidates.length > 0) {
-      valueCandidate =
-        numericCandidates.reduce(
-          (best, current) =>
-            Math.abs(
-              current.colIndex -
-                col.valueCol
-            ) <
-            Math.abs(
-              best.colIndex -
-                col.valueCol
-            )
-              ? current
-              : best
-        );
-    }
-  }
-
-  const resolvedValueCol =
-    valueCandidate?.colIndex ??
-    col.valueCol;
-
-  const textCandidates =
-    candidates
-      .filter(
-        (x) =>
-          x.colIndex !==
-            resolvedValueCol &&
-          isMeaningfulTextCell(x.value)
-      )
-      .sort(
-        (a, b) =>
-          Math.abs(
-            a.colIndex -
-              resolvedValueCol
-          ) -
-          Math.abs(
-            b.colIndex -
-              resolvedValueCol
-          )
-      );
-
-  // 项目名优先选择金额左边的最近文字。
-  const beforeValue =
-    textCandidates.filter(
-      (x) =>
-        x.colIndex <
-        resolvedValueCol
-    );
-
-  const afterValue =
-    textCandidates.filter(
-      (x) =>
-        x.colIndex >
-        resolvedValueCol
-    );
-
-  const orderedTexts =
-    beforeValue.length > 0
-      ? beforeValue
-      : textCandidates;
-
-  const nearestText =
-    orderedTexts[0];
-
-  // 如果同一行存在两个文字单元格，例如：
-  // C=还信用卡 / D=招行朝朝宝还差 / E=2000
-  // 则更左边的是 category，更靠近金额的是 detail。
-  const leftTexts =
-    textCandidates
-      .filter(
-        (x) =>
-          x.colIndex <
-          resolvedValueCol
-      )
-      .sort(
-        (a, b) =>
-          a.colIndex -
-          b.colIndex
-      );
-
-  let category = "";
-  let detail = "";
-
-  if (leftTexts.length >= 2) {
-    category =
-      leftTexts[0].value;
-    detail =
-      leftTexts[leftTexts.length - 1]
-        .value;
-  } else if (leftTexts.length === 1) {
-    category =
-      leftTexts[0].value;
-  } else if (nearestText) {
-    category =
-      nearestText.value;
-  }
-
-  // 收入区典型结构可能只有：
-  // D=LP / E=15000
-  // 自动识别器会得到 category=LP。
-  //
-  // 如果存在金额右侧文字，则只在 category/detail 都为空时使用。
-  if (
-    !category &&
-    !detail &&
-    afterValue.length > 0
-  ) {
-    category =
-      afterValue[0].value;
-  }
-
-  return {
-    category,
-    detail,
-    value:
-      valueCandidate?.value ?? "",
-    valueCol: resolvedValueCol,
-    categoryCol:
-      leftTexts[0]?.colIndex ??
-      nearestText?.colIndex ??
-      col.categoryCol,
-    detailCol:
-      leftTexts.length >= 2
-        ? leftTexts[
-            leftTexts.length - 1
-          ].colIndex
-        : nearestText?.colIndex ??
-          col.labelCol,
-  };
-}
-
-function getRoleFromOffset(
-  offset: number
-): Role | null {
-  if (offset >= 2 && offset <= 5) {
-    return "income";
-  }
-
-  if (offset >= 7 && offset <= 16) {
-    return "expense";
-  }
-
-  return null;
-}
-
-function getAnnuityFlag(offset: number) {
-  return offset === 12;
-}
-
-const PENSION_PAYMENT_SCHEDULE: Record<number, { july?: number; october?: number }> = {
-  2026: { july: 503000, october: 221000 },
-  2027: { july: 503000, october: 221000 },
-  2028: { july: 393000, october: 221000 },
-  2029: { july: 393000, october: 221000 },
-  2030: { july: 393000, october: 221000 },
-  2031: { july: 393000, october: 221000 },
-  2032: { july: 393000, october: 221000 },
-  2033: { july: 130000, october: 221000 },
-  2034: { july: 130000, october: 129000 },
-  2035: { july: 130000, october: 129000 },
-  2036: { july: 130000, october: 129000 },
-  2037: { july: 130000, october: 129000 },
-  2038: { october: 129000 },
-  2039: { october: 39000 },
-  2040: { october: 39000 },
-  2041: { october: 39000 },
-  2042: { october: 39000 },
-};
-
-function getPensionPayment(year: number, month: number) {
-  const schedule = PENSION_PAYMENT_SCHEDULE[year];
-  if (!schedule) return 0;
-  if (month === 7) return schedule.july ?? 0;
-  if (month === 10) return schedule.october ?? 0;
-  return 0;
-}
-
-function ensurePensionPaymentItems(years: YearData[], projects: Project[]) {
-  const projectId = "fixed:pension-payment";
-  let project = projects.find((item) => item.projectId === projectId);
-
-  if (!project) {
-    project = {
-      projectId,
-      role: "expense",
-      name: "本月交养老保险",
-      custom: false,
-      isAnnuityContribution: false,
-      isPensionPayment: true,
-    };
-    projects.push(project);
-  }
-
-  for (const year of years) {
-    for (const month of year.months) {
-      const amount = getPensionPayment(year.year, month.month);
-
-      // 清理历史版本可能已经生成的重复“本月交养老保险”项目。
-      // 同一个月份只允许存在一个固定养老保险项目。
-      const pensionItems = month.expense.filter(
-        (item) =>
-          item.isPensionPayment === true ||
-          (
-            item.name.trim() === "本月交养老保险" &&
-            item.projectId === projectId
-          )
-      );
-
-      const existing = pensionItems[0];
-
-      // 删除同月多余的养老保险项目，避免 221000 / 221000 重复显示和重复扣年金。
-      for (const duplicate of pensionItems.slice(1)) {
-        const index = month.expense.indexOf(duplicate);
-        if (index >= 0) {
-          month.expense.splice(index, 1);
-        }
-      }
-
-      if (amount > 0) {
-        // 养老保险缴费直接从“积累年金”扣除。
-        // 清除旧的 manualAnnuity，确保新的扣款能够真正进入计算。
-        delete month.manualAnnuity;
-
-        if (existing) {
-          existing.name = "本月交养老保险";
-          existing.projectId = projectId;
-          existing.role = "expense";
-          existing.value = amount;
-          existing.independent = false;
-          existing.fromExcel = false;
-          existing.isPensionPayment = true;
-          existing.isAnnuityContribution = false;
-          existing.deleted = false;
-        } else {
-          month.expense.push({
-            id: uid("pension"),
-            year: year.year,
-            month: month.month,
-            role: "expense",
-            projectId,
-            name: "本月交养老保险",
-            value: amount,
-            independent: false,
-            fromExcel: false,
-            isAnnuityContribution: false,
-            isPensionPayment: true,
-          });
-        }
-      } else if (existing) {
-        const index = month.expense.indexOf(existing);
-        if (index >= 0) {
-          month.expense.splice(index, 1);
-        }
-      }
-    }
-  }
-
-  return { years, projects };
-}
 
 function extractFormulaAdjustment(
   value: unknown
@@ -748,577 +284,7 @@ function extractFormulaAdjustment(
   return sign * n;
 }
 
-// ============================================================
-// 读取 Excel
-// ============================================================
 
-async function loadExcel(): Promise<ParsedExcel> {
-  const cacheBuster = `?t=${Date.now()}`;
-  const fetchedUrl = `${EXCEL_FILE}${cacheBuster}`;
-
-  const response = await fetch(
-    fetchedUrl,
-    {
-      cache: "no-store",
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(
-      `无法读取 ${EXCEL_FILE}`
-    );
-  }
-
-  const buffer =
-    await response.arrayBuffer();
-
-  const workbook = XLSX.read(buffer, {
-    type: "array",
-    cellFormula: true,
-    cellNF: true,
-    cellStyles: true,
-  });
-
-  // ============================================================
-  // 年度 Sheet 选择：严格使用固定 Sheet 名。
-  // 2026：2026每月估算111
-  // 2027–2037：{年份}每月估算(3)
-  // 不自动寻找其它版本，也不接受空格/其它括号版本。
-  // ============================================================
-  function pickYearSheet(year: number): string | null {
-    const exactName =
-      year === 2026
-        ? "2026每月估算111"
-        : `${year}每月估算(3)`;
-
-    return workbook.SheetNames.includes(exactName)
-      ? exactName
-      : null;
-  }
-
-  const sheetNames: string[] = [];
-  for (let year = TARGET_START_YEAR; year <= EXCEL_END_YEAR; year++) {
-    const selectedName = pickYearSheet(year);
-    if (!selectedName) {
-      throw new Error(
-        `NEW.xlsx 缺少严格指定的 Sheet：${
-          year === 2026
-            ? "2026每月估算111"
-            : `${year}每月估算(3)`
-        }\n请不要使用其它版本的“每月估算”Sheet。`
-      );
-    }
-    sheetNames.push(selectedName);
-  }
-
-  const diagnostics: ExcelDiagnostics = {
-    fetchedUrl: response.url || fetchedUrl,
-    fetchedAt: new Date().toISOString(),
-    responseSize: buffer.byteLength,
-    workbookSheetNames: [...workbook.SheetNames],
-    expectedSheetNames: [...sheetNames],
-    selectedSheet2026: "2026每月估算111",
-    selectedSheet2026Exists: workbook.SheetNames.includes("2026每月估算111"),
-    sheet2026RowCount: 0,
-    sheet2026ColumnCount: 0,
-    janRows: [],
-    janParsedIncome: [],
-    janParsedExpense: [],
-  };
-
-  const projects: Project[] = [];
-
-  const projectMap = new Map<
-    string,
-    string
-  >();
-
-  const years: YearData[] = [];
-
-  for (const sheetName of sheetNames) {
-    const year = Number(
-      sheetName.slice(0, 4)
-    );
-
-    const sheet =
-      workbook.Sheets[sheetName];
-
-    const rows =
-      XLSX.utils.sheet_to_json(
-        sheet,
-        {
-          header: 1,
-          raw: true,
-          defval: "",
-        }
-      ) as unknown[][];
-
-    if (year === 2026) {
-      diagnostics.sheet2026RowCount = rows.length;
-      diagnostics.sheet2026ColumnCount = Math.max(
-        0,
-        ...rows.map((row) => row.length)
-      );
-
-      // 2026 年 1 月的 Excel 原始 C/D/E 数据。
-      // Excel 行号 5–24 对应 rows[4]–rows[23]。
-      const diagnosticStartRow =
-        MONTH_BLOCKS[2].baseRow + 2 - 1;
-
-      diagnostics.janRows = Array.from(
-        { length: 20 },
-        (_, index) => {
-          const rowIndex = diagnosticStartRow + index;
-          const excelRow = rowIndex + 1;
-          const row = rows[rowIndex] ?? [];
-          const resolved =
-            resolve2026RowCells(
-              sheet,
-              rowIndex,
-              MONTH_COLS[2]
-            );
-
-          const cCell =
-            sheet[
-              XLSX.utils.encode_cell({
-                r: rowIndex,
-                c: 2,
-              })
-            ];
-
-          const dCell =
-            sheet[
-              XLSX.utils.encode_cell({
-                r: rowIndex,
-                c: 3,
-              })
-            ];
-
-          const eCell =
-            sheet[
-              XLSX.utils.encode_cell({
-                r: rowIndex,
-                c: 4,
-              })
-            ];
-
-          const valueCell =
-            sheet[
-              XLSX.utils.encode_cell({
-                r: rowIndex,
-                c: resolved.valueCol,
-              })
-            ];
-
-          return {
-            excelRow,
-            c: String(cCell?.v ?? ""),
-            d: String(dCell?.v ?? ""),
-            e: String(eCell?.v ?? ""),
-            eFormula: String(eCell?.f ?? ""),
-            detectedProject: String(
-              resolved.category ?? ""
-            ),
-            detectedDetail: String(
-              resolved.detail ?? ""
-            ),
-            detectedValue: String(
-              resolved.value ?? ""
-            ),
-            detectedValueColumn:
-              XLSX.utils.encode_col(
-                resolved.valueCol
-              ),
-            detectedValueFormula:
-              String(valueCell?.f ?? ""),
-          };
-        }
-      );
-    }
-
-    const months: MonthData[] = [];
-
-    const monthAnnuityAdjustments =
-      new Map<number, number>();
-
-    for (const block of MONTH_BLOCKS) {
-      for (let i = 0; i < 4; i++) {
-        const month =
-          block.months[i];
-
-        // 2026 从 9 月开始使用 Excel 数据；1–8 月完全忽略。
-        // 2027–2037 保持原来的全年读取逻辑。
-        if (year === 2026 && month < TARGET_2026_START_MONTH) {
-          continue;
-        }
-
-        const col =
-          MONTH_COLS[i];
-
-        const income: CellItem[] =
-          [];
-
-        const expense: CellItem[] =
-          [];
-
-        for (
-          let offset = 2;
-          offset <= 16;
-          offset++
-        ) {
-          const rowIndex =
-            block.baseRow +
-            offset -
-            1;
-
-          const row =
-            rows[rowIndex] ?? [];
-
-          /*
-           * 2027–2037：继续严格按原来的固定列读取。
-           *
-           * 2026：使用自动识别器，避免 2026 Sheet 因合并单元格/
-           * 空列/列偏移导致“金额跑到项目名称”的问题。
-           */
-          const resolved =
-            year === 2026
-              ? resolve2026RowCells(
-                  sheet,
-                  rowIndex,
-                  col
-                )
-              : null;
-
-          const rawCategory =
-            resolved?.category ??
-            row[col.categoryCol] ??
-            "";
-
-          const rawDetail =
-            resolved?.detail ??
-            row[col.labelCol] ??
-            "";
-
-          const rawValue =
-            resolved?.value ??
-            row[col.valueCol] ??
-            "";
-
-          const categoryLabel =
-            String(rawCategory ?? "").trim();
-
-          const detailLabel =
-            String(rawDetail ?? "").trim();
-
-          let label =
-            categoryLabel || detailLabel;
-
-          // NEW.xlsx 中的 JJ 对应页面项目“买入基金 015736”。
-          if (normalizeName(label) === "jj") {
-            label = "买入基金 015736";
-          }
-
-          // NEW.xlsx 中的“转去养老保险”直接进入积累年金滚动。
-          const isTransferToPension =
-            normalizeName(label) === "转去养老保险";
-
-          if (
-            !label &&
-            rawValue === ""
-          ) {
-            continue;
-          }
-
-          const excludedNames =
-            new Set([
-              "收入",
-              "本月剩下",
-              "总现金剩下",
-              "积累年金",
-            ]);
-
-          if (
-            excludedNames.has(
-              label
-            )
-          ) {
-            continue;
-          }
-
-          const role =
-            getRoleFromOffset(
-              offset
-            );
-
-          if (!role) {
-            continue;
-          }
-
-          if (!isValidName(label)) {
-            label = `项目${offset}`;
-          }
-
-          const key =
-            `${role}::${normalizeName(
-              label
-            )}`;
-
-          let pid =
-            projectMap.get(key);
-
-          if (!pid) {
-            pid =
-              projectUid(role);
-
-            projectMap.set(
-              key,
-              pid
-            );
-
-            projects.push({
-              projectId: pid,
-              role,
-              name: label,
-              custom: false,
-              sourceOffset:
-                offset,
-              isAnnuityContribution:
-                isTransferToPension ||
-                getAnnuityFlag(offset),
-            });
-          }
-
-          const item: CellItem = {
-            id: uid("cell"),
-
-            year,
-
-            month,
-
-            role,
-
-            projectId: pid,
-
-            name: label,
-
-            value:
-              numberValue(
-                rawValue
-              ),
-
-            independent: false,
-
-            fromExcel: true,
-
-            sourceRow:
-              rowIndex,
-
-            sourceCol:
-              resolved?.valueCol ??
-              col.valueCol,
-
-            sourceOffset:
-              offset,
-
-            isAnnuityContribution:
-              isTransferToPension ||
-              getAnnuityFlag(offset),
-          };
-
-          if (role === "income") {
-            income.push(item);
-          } else {
-            expense.push(item);
-          }
-
-          if (
-            offset === 12
-          ) {
-            const formulaCell =
-              sheet[
-                XLSX.utils.encode_cell(
-                  {
-                    r: rowIndex,
-                    c:
-                      resolved?.valueCol ??
-                      col.valueCol,
-                  }
-                )
-              ];
-
-            const formula =
-              formulaCell?.f;
-
-            const adjustment =
-              extractFormulaAdjustment(
-                formula
-              );
-
-            monthAnnuityAdjustments.set(
-              month,
-              adjustment
-            );
-          }
-        }
-
-        months.push({
-          year,
-          month,
-          income,
-          expense,
-        });
-      }
-    }
-
-    let originalOpeningCash = 0;
-
-    let originalOpeningAnnuity = 0;
-
-    const firstMonth =
-      months[0];
-
-    if (firstMonth) {
-      // 2026 从 9 月开始，因此 opening cash / annuity 也必须从 9 月对应的
-      // Excel 月块读取；2027–2037 继续使用原来的 1 月起点。
-      const firstBlockIndex =
-        year === 2026
-          ? MONTH_BLOCKS.findIndex((block) =>
-              block.months.includes(firstMonth.month)
-            )
-          : 0;
-
-      const safeFirstBlockIndex =
-        firstBlockIndex >= 0
-          ? firstBlockIndex
-          : 0;
-
-      const firstBlock =
-        MONTH_BLOCKS[safeFirstBlockIndex];
-
-      const firstCol =
-        MONTH_COLS[firstMonth.month >= 1 && firstMonth.month <= 4
-          ? 0
-          : firstMonth.month <= 8
-          ? 1
-          : firstMonth.month <= 12
-          ? 2
-          : 0];
-
-      const baseRow =
-        firstBlock.baseRow;
-
-      const remainingRow =
-        baseRow + 17 - 1;
-
-      const totalCashRow =
-        baseRow + 18 - 1;
-
-      const annuityRow =
-        baseRow + 19 - 1;
-
-      const remainingCell =
-        sheet[
-          XLSX.utils.encode_cell(
-            {
-              r: remainingRow,
-              c: firstCol.valueCol,
-            }
-          )
-        ];
-
-      const totalCashCell =
-        sheet[
-          XLSX.utils.encode_cell(
-            {
-              r: totalCashRow,
-              c: firstCol.valueCol,
-            }
-          )
-        ];
-
-      const annuityCell =
-        sheet[
-          XLSX.utils.encode_cell(
-            {
-              r: annuityRow,
-              c: firstCol.valueCol,
-            }
-          )
-        ];
-
-      const remainingValue =
-        numberValue(
-          remainingCell?.v
-        );
-
-      const totalCashValue =
-        numberValue(
-          totalCashCell?.v
-        );
-
-      const annuityValue =
-        numberValue(
-          annuityCell?.v
-        );
-
-      originalOpeningCash =
-        totalCashValue -
-        remainingValue;
-
-      const annuityItem =
-        firstMonth.expense.find(
-          (item) =>
-            item.isAnnuityContribution
-        );
-
-      const contribution =
-        annuityItem?.value ?? 0;
-
-      const adjustment =
-        monthAnnuityAdjustments.get(
-          1
-        ) ?? 0;
-
-      originalOpeningAnnuity =
-        annuityValue -
-        contribution -
-        adjustment;
-    }
-
-    if (year === 2026) {
-      const september = months.find((m) => m.month === 9);
-
-      diagnostics.janParsedIncome =
-        (september?.income ?? []).map((item) => ({
-          name: item.name,
-          value: item.value,
-          sourceRow: (item.sourceRow ?? 0) + 1,
-        }));
-
-      diagnostics.janParsedExpense =
-        (september?.expense ?? []).map((item) => ({
-          name: item.name,
-          value: item.value,
-          sourceRow: (item.sourceRow ?? 0) + 1,
-        }));
-    }
-
-    years.push({
-      year,
-      months,
-      originalOpeningCash,
-      originalOpeningAnnuity,
-    });
-  }
-
-  ensurePensionPaymentItems(years, projects);
-
-  return {
-    years,
-    projects,
-    diagnostics,
-  };
-}
 
 // ============================================================
 // 项目
@@ -1457,6 +423,15 @@ function addGlobalProject(
 // 单月新增项目
 // ============================================================
 
+// ============================================================
+// 单月新增项目
+//
+// 特殊规则：
+// 1. SAL：同一年 + 同一个月只能存在 1 条有效记录
+// 2. 转去养老保险：同一年 + 同一个月只能存在 1 条有效记录
+//
+// 普通项目保持原来的“单月独立新增”逻辑。
+// ============================================================
 function addMonthlyProject(
   years: YearData[],
   yearValue: number,
@@ -1471,46 +446,169 @@ function addMonthlyProject(
     return years;
   }
 
+  const normalizedName =
+    normalizeName(cleanName);
+
+  const isSAL =
+    role === "income" &&
+    normalizedName === "sal";
+
   const isTransferToPension =
     role === "expense" &&
-    normalizeName(cleanName) ===
-      "转去养老保险";
+    normalizedName === "转去养老保险";
 
   for (const year of years) {
-    if (year.year !== yearValue) continue;
+    if (year.year !== yearValue) {
+      continue;
+    }
 
     for (const month of year.months) {
-      if (month.month !== monthValue) continue;
+      if (month.month !== monthValue) {
+        continue;
+      }
 
       const list =
         role === "income"
           ? month.income
           : month.expense;
 
-      list.push({
-        id: uid("cell"),
-        year: yearValue,
-        month: monthValue,
-        role,
-        projectId: projectUid(role),
-        name: cleanName,
-        value,
+      // ======================================================
+      // SAL / 转去养老保险：
+      //
+      // 无论 projectId 是什么，只要：
+      // 年 + 月 + role + name 相同
+      //
+      // 就认为是同一条业务记录。
+      // ======================================================
+      if (
+        isSAL ||
+        isTransferToPension
+      ) {
+        const matches =
+          list.filter(
+            (item) =>
+              !item.deleted &&
+              item.role === role &&
+              normalizeName(item.name) ===
+                normalizedName
+          );
 
-        // 单月新增 = 只属于当前年月，不同步其他月份
-        independent: true,
-        fromExcel: false,
+        // 已经有有效记录：
+        // 不再 push 新记录，而是直接更新第一条。
+        if (matches.length > 0) {
+          const target =
+            matches[0];
 
-        // “转去养老保险”必须进入累计年金
-        isAnnuityContribution:
-          isTransferToPension,
-      });
+          target.name =
+            cleanName;
+
+          target.value =
+            Number.isFinite(value)
+              ? value
+              : 0;
+
+          target.deleted =
+            false;
+
+          if (isTransferToPension) {
+            target.isAnnuityContribution =
+              true;
+          }
+
+          // 同时把同月其余重复记录从页面状态清掉。
+          for (
+            const duplicate of matches.slice(1)
+          ) {
+            const index =
+              list.indexOf(
+                duplicate
+              );
+
+            if (index >= 0) {
+              list.splice(
+                index,
+                1
+              );
+            }
+          }
+        } else {
+          list.push({
+            id: uid("cell"),
+
+            year:
+              yearValue,
+
+            month:
+              monthValue,
+
+            role,
+
+            projectId:
+              projectUid(role),
+
+            name:
+              cleanName,
+
+            value:
+              Number.isFinite(value)
+                ? value
+                : 0,
+
+            independent:
+              true,
+
+            fromExcel:
+              false,
+
+            isAnnuityContribution:
+              isTransferToPension,
+          });
+        }
+      } else {
+        // ====================================================
+        // 普通单月项目：
+        // 保持原来的逻辑。
+        // ====================================================
+        list.push({
+          id: uid("cell"),
+
+          year:
+            yearValue,
+
+          month:
+            monthValue,
+
+          role,
+
+          projectId:
+            projectUid(role),
+
+          name:
+            cleanName,
+
+          value:
+            Number.isFinite(value)
+              ? value
+              : 0,
+
+          // 单月新增 = 只属于当前年月
+          independent:
+            true,
+
+          fromExcel:
+            false,
+
+          isAnnuityContribution:
+            false,
+        });
+      }
     }
   }
 
   // ==========================================================
-  // 关键：
-  // 新增“转去养老保险”以后，
-  // 当前月及后续月份不能继续使用旧的 manualAnnuity。
+  // “转去养老保险”以后：
+  //
+  // 当前月及后续月份不能继续使用旧 manualAnnuity。
   // ==========================================================
   if (isTransferToPension) {
     for (const year of years) {
@@ -1541,36 +639,42 @@ function deleteProject(
   projects: Project[],
   item: CellItem
 ) {
-  /**
+  /*
+   * DEL 不再真正从数组删除。
+   *
+   * 原因：
+   * POST 保存的是 Supabase 快照，但 POST 不 DELETE 数据库记录。
+   * 如果这里只从 React state 删除，重新打开页面时，
+   * Supabase 里的旧记录会再次回来。
+   *
+   * 所以统一使用 deleted=true 做软删除。
+   */
+
+  /*
    * 独立项目：
-   * 只删除当前 occurrence
+   * 只删除当前 occurrence。
    */
   if (item.independent) {
     for (const year of years) {
       for (const month of year.months) {
         if (
-          year.year !==
-            item.year ||
-          month.month !==
-            item.month
+          year.year !== item.year ||
+          month.month !== item.month
         ) {
           continue;
         }
 
-        if (
+        const list =
           item.role === "income"
-        ) {
-          month.income =
-            month.income.filter(
-              (x) =>
-                x.id !== item.id
-            );
-        } else {
-          month.expense =
-            month.expense.filter(
-              (x) =>
-                x.id !== item.id
-            );
+            ? month.income
+            : month.expense;
+
+        const target = list.find(
+          (x) => x.id === item.id
+        );
+
+        if (target) {
+          target.deleted = true;
         }
       }
     }
@@ -1581,36 +685,38 @@ function deleteProject(
     };
   }
 
-  /**
+  /*
    * 非独立项目：
-   * 全部年月删除
+   * 全部年月软删除。
    */
   for (const year of years) {
     for (const month of year.months) {
-      month.income =
-        month.income.filter(
-          (x) =>
-            x.projectId !==
-            item.projectId
-        );
-
-      month.expense =
-        month.expense.filter(
-          (x) =>
-            x.projectId !==
-            item.projectId
-        );
+      for (const x of [
+        ...month.income,
+        ...month.expense,
+      ]) {
+        if (
+          x.projectId === item.projectId &&
+          x.role === item.role
+        ) {
+          x.deleted = true;
+        }
+      }
     }
   }
 
+  /*
+   * 项目本身从当前 projects 列表移除。
+   *
+   * 数据库里的 CellItem 仍然保留，
+   * 但 deleted=true。
+   */
   return {
     years,
-    projects:
-      projects.filter(
-        (p) =>
-          p.projectId !==
-          item.projectId
-      ),
+    projects: projects.filter(
+      (p) =>
+        p.projectId !== item.projectId
+    ),
   };
 }
 
@@ -1830,43 +936,43 @@ function renameItem(
 // 金额
 // ============================================================
 
+// ============================================================
+// 金额
+// ============================================================
+//
+// propagate = true
+//   用户确认“同步后续月份”
+//
+// propagate = false
+//   用户取消同步，只修改当前月份
+//
+// 无论是否同步：
+// 当前月份金额变化后，后续现金/年金计算都必须重新计算。
+// ============================================================
 function updateItemValue(
   years: YearData[],
   item: CellItem,
-  value: number
+  value: number,
+  propagate = true
 ) {
   const safeValue =
     Number.isFinite(value)
       ? value
       : 0;
 
-  /*
-   * “下月定投”是连续的计划项目。
-   * 从用户修改的这个月份开始，后面的所有月份
-   * 都沿用新的定投金额。
-   *
-   * 例如：
-   * 9月下月定投改成 5000
-   * → 10月、11月、12月……后续月份也同步为 5000。
-   *
-   * 前面的月份保持原来的历史数据不变。
-   */
-  // 普通买入 / 支出从修改月份开始同步同一项目；固定养老保险除外。
+  // 固定“本月交养老保险”仍然不能通过普通金额修改
+  // 去同步后面的月份。
   const shouldPropagate =
+    propagate &&
     item.isPensionPayment !== true;
 
   /*
-   * “转去养老保险”是积累年金的唯一月度新增来源。
-   * 如果用户修改了它，就必须从这个月开始重新计算年金滚动链。
+   * “转去养老保险”：
+   * 修改当前月份以后，积累年金必须重新滚动。
    *
-   * 旧数据可能存在 manualAnnuity（用户以前手动修改过“积累年金”），
-   * 如果不清掉，calculateYears() 会优先使用旧的 manualAnnuity，
-   * 导致修改“转去养老保险”后，下面的“积累年金”看起来不变。
-   *
-   * 因此：只要修改的是标记为 isAnnuityContribution 的项目，
-   * 就清除当前月及所有后续月份的 manualAnnuity，让新的金额重新
-   * 按“上个月积累年金 + 当月转去养老保险”向后滚动。
-   * 前面的月份完全不受影响。
+   * 即使用户选择“不同步后续金额”，
+   * 当前月份的金额发生变化后，
+   * 后面的积累年金计算仍然必须重新计算。
    */
   const shouldResetAnnuity =
     item.role === "expense" &&
@@ -1893,7 +999,10 @@ function updateItemValue(
           x.role === item.role;
 
         const shouldUpdate =
+          // 当前这一条永远修改
           x.id === item.id ||
+          // 用户确认同步以后，
+          // 当前月份之后的同项目一起修改
           (
             shouldPropagate &&
             sameProject &&
@@ -1905,24 +1014,214 @@ function updateItemValue(
         }
       }
 
-      // 修改收入 / 普通支出后，本月“本月剩下”必须重新按
-      // 收入 - 普通支出实时计算，不能继续被旧的手工值卡住。
-      // 同时清掉从本月开始的“总现金剩下”手工覆盖，
-      // 让它重新沿着“上月总现金剩下 + 本月剩下”滚动。
+      /*
+       * 当前金额发生变化以后：
+       *
+       * 本月剩下
+       * 总现金剩下
+       *
+       * 从当前月份开始重新计算。
+       *
+       * 注意：
+       * 这里不能使用 shouldPropagate，
+       * 因为即使用户取消“同步其他月份”，
+       * 当前月份金额变化仍然会影响后面的现金滚动。
+       */
       if (
-        shouldPropagate &&
         isAfterOrEqual &&
-        (item.role === "income" || item.role === "expense")
+        (
+          item.role === "income" ||
+          item.role === "expense"
+        ) &&
+        item.isPensionPayment !== true
       ) {
         delete month.manualRemaining;
         delete month.manualTotalCash;
       }
 
-      if (shouldResetAnnuity && isAfterOrEqual) {
+      /*
+       * 转去养老保险 / 本月交养老保险
+       * 修改后重新计算后续积累年金。
+       */
+      if (
+        shouldResetAnnuity &&
+        isAfterOrEqual
+      ) {
         delete month.manualAnnuity;
       }
     }
   }
+}
+
+
+
+// ============================================================
+// 固定养老保险缴费
+//
+// 规则：
+// 2026：从现有 Supabase 数据读取，不自动新增
+// 2027：7月 503000，10月 221000
+// 2028-2032：7月 393000，10月 221000
+// 2033：7月 130000，10月 221000
+// 2034-2037：7月 130000，10月 129000
+// 2038：10月 129000
+// 2039-2042：10月 39000
+//
+// “本月交养老保险”只影响积累年金，
+// 不进入普通家庭现金支出。
+// ============================================================
+
+function getPensionPayment(
+  year: number,
+  month: number
+): number {
+  if (year === 2026) {
+   
+    if (month === 10) return 221000;
+    return 0;
+  }
+
+  if (year === 2027) {
+    if (month === 7) return 503000;
+    if (month === 10) return 221000;
+    return 0;
+  }
+
+  if (year >= 2028 && year <= 2032) {
+    if (month === 7) return 393000;
+    if (month === 10) return 221000;
+    return 0;
+  }
+
+  if (year === 2033) {
+    if (month === 7) return 130000;
+    if (month === 10) return 221000;
+    return 0;
+  }
+
+  if (year >= 2034 && year <= 2037) {
+    if (month === 7) return 130000;
+    if (month === 10) return 129000;
+    return 0;
+  }
+
+  if (year === 2038) {
+    if (month === 10) return 129000;
+    return 0;
+  }
+
+  if (year >= 2039 && year <= 2042) {
+    if (month === 10) return 39000;
+    return 0;
+  }
+
+  return 0;
+}
+
+function ensurePensionPaymentItems(
+  years: YearData[],
+  projects: Project[]
+) {
+  const nextYears = clone(years);
+  const nextProjects = clone(projects);
+
+  // 固定项目 ID。
+  // 必须稳定，不能每次初始化都生成新的 projectId，
+  // 否则会造成重复项目。
+  const projectId = "fixed:pension-payment";
+
+  let project =
+    nextProjects.find(
+      (item) =>
+        item.projectId === projectId
+    );
+
+  if (!project) {
+    project = {
+      projectId,
+      role: "expense",
+      name: "本月交养老保险",
+      custom: false,
+      isPensionPayment: true,
+      isAnnuityContribution: false,
+    };
+
+    nextProjects.push(project);
+  } else {
+    // 确保旧数据也具有正确标记
+    project.role = "expense";
+    project.name = "本月交养老保险";
+    project.isPensionPayment = true;
+    project.isAnnuityContribution = false;
+  }
+
+  for (const year of nextYears) {
+    for (const month of year.months) {
+      const amount = getPensionPayment(
+        year.year,
+        month.month
+      );
+
+      // 找到这个月现有的养老保险项目
+      const existingIndex =
+        month.expense.findIndex(
+          (item) =>
+            item.projectId ===
+              projectId ||
+            (
+              item.role === "expense" &&
+              item.isPensionPayment === true
+            )
+        );
+
+      if (amount > 0) {
+        const item =
+          existingIndex >= 0
+            ? month.expense[existingIndex]
+            : null;
+
+        if (item) {
+          item.projectId = projectId;
+          item.name = "本月交养老保险";
+          item.role = "expense";
+          item.value = amount;
+          item.independent = false;
+          item.fromExcel = false;
+          item.isPensionPayment = true;
+          item.isAnnuityContribution = false;
+          item.deleted = false;
+        } else {
+          month.expense.push({
+            id: `pension-${year.year}-${month.month}`,
+            year: year.year,
+            month: month.month,
+            role: "expense",
+            projectId,
+            name: "本月交养老保险",
+            value: amount,
+            independent: false,
+            fromExcel: false,
+            isPensionPayment: true,
+            isAnnuityContribution: false,
+          });
+        }
+      } else {
+        // 非缴费月份：
+        // 如果以前有自动生成的养老保险项目，则删除。
+        if (existingIndex >= 0) {
+          month.expense.splice(
+            existingIndex,
+            1
+          );
+        }
+      }
+    }
+  }
+
+  return {
+    years: nextYears,
+    projects: nextProjects,
+  };
 }
 
 // ============================================================
@@ -1978,13 +1277,13 @@ function calculateYears(
     const months: CalculationMonth[] =
       [];
 
-    let runningCash =
-      previousCash ??
-      year.originalOpeningCash;
+    let runningCash: number =
+  previousCash ??
+  year.originalOpeningCash;
 
-    let runningAnnuity =
-      previousAnnuity ??
-      year.originalOpeningAnnuity;
+   let runningAnnuity: number =
+  previousAnnuity ??
+  year.originalOpeningAnnuity;
 
     for (const month of year.months) {
       const income =
@@ -2084,14 +1383,14 @@ function calculateYears(
       });
     }
 
-    const endingCash =
+    const endingCash: number = 
       months.length > 0
         ? months[
             months.length - 1
           ].totalCash
         : runningCash;
 
-    const endingAnnuity =
+    const endingAnnuity: number  =
       months.length > 0
         ? months[
             months.length - 1
@@ -2669,8 +1968,10 @@ return (
         无收入项目
       </div>
     ) : (
-      month.income.map((item) => (
-        <ProjectRow
+      month.income
+  .filter((item) => !item.deleted)
+  .map((item) => (
+    <ProjectRow
           key={item.id}
           item={item}
           editingId={editingId}
@@ -3244,42 +2545,230 @@ const style = {
 // 年份清洗
 // ============================================================
 // 防止旧版本 localStorage 中残留 2025 或重复年份。
-function sanitizeYears(years: YearData[]) {
-  const map = new Map<number, YearData>();
+// ============================================================
+// 年份清洗
+//
+// 目标：
+// 1. 只保留 2026 ~ 2042
+// 2. deleted=true 的记录不进入页面
+// 3. SAL：同一年 + 同一个月只保留 1 条
+// 4. 转去养老保险：同一年 + 同一个月只保留 1 条
+// 5. 本月交养老保险：同一年 + 同一个月只保留 1 条
+// 6. 普通共享项目：仍按 projectId 去重
+// 7. 普通 independent 项目：保持允许同名
+// ============================================================
+function sanitizeYears(
+  years: YearData[]
+) {
+  const map =
+    new Map<number, YearData>();
 
-  for (const year of years) {
+  for (const sourceYear of years) {
     if (
-      year.year < TARGET_START_YEAR ||
-      year.year > TARGET_END_YEAR
+      sourceYear.year <
+        TARGET_START_YEAR ||
+      sourceYear.year >
+        TARGET_END_YEAR
     ) {
       continue;
     }
 
-    if (!map.has(year.year)) {
-      // 清理旧版本/迁移数据中同一共享项目在同一月份重复出现的问题。
-      // independent=true 的项目允许同名，因此只清理共享项目。
-      for (const month of year.months) {
-        const dedupe = (items: CellItem[]) => {
-          const seen = new Set<string>();
-          return items.filter((item) => {
-            if (item.independent) return true;
-            const key = `${item.role}::${item.projectId}::${normalizeName(item.name)}`;
-            if (seen.has(key)) return false;
+    if (
+      map.has(
+        sourceYear.year
+      )
+    ) {
+      continue;
+    }
+
+    const year =
+      sourceYear;
+
+    for (const month of year.months) {
+      // ======================================================
+      // 第一步：
+      // 先删除 deleted=true
+      // ======================================================
+      month.income =
+        month.income.filter(
+          (item) =>
+            item.deleted !== true
+        );
+
+      month.expense =
+        month.expense.filter(
+          (item) =>
+            item.deleted !== true
+        );
+
+      // ======================================================
+      // 第二步：
+      // 特殊项目去重
+      // ======================================================
+      const dedupeSpecial =
+        (
+          items: CellItem[]
+        ) => {
+          const seen =
+            new Set<string>();
+
+          const result: CellItem[] =
+            [];
+
+          for (const item of items) {
+            const normalized =
+              normalizeName(
+                item.name
+              );
+
+            const isSAL =
+              item.role ===
+                "income" &&
+              normalized ===
+                "sal";
+
+            const isTransferToPension =
+              item.role ===
+                "expense" &&
+              normalized ===
+                "转去养老保险";
+
+            const isPensionPayment =
+              item.role ===
+                "expense" &&
+              (
+                item.projectId ===
+                  "fixed:pension-payment" ||
+                item.isPensionPayment ===
+                  true
+              );
+
+            // =================================================
+            // SAL
+            // =================================================
+            if (isSAL) {
+              const key =
+                `${item.year}::${item.month}::income::sal`;
+
+              if (
+                seen.has(key)
+              ) {
+                continue;
+              }
+
+              seen.add(key);
+              result.push(item);
+              continue;
+            }
+
+            // =================================================
+            // 转去养老保险
+            // =================================================
+            if (
+              isTransferToPension
+            ) {
+              const key =
+                `${item.year}::${item.month}::expense::转去养老保险`;
+
+              if (
+                seen.has(key)
+              ) {
+                continue;
+              }
+
+              // 确保这个项目始终计入积累年金
+              item.isAnnuityContribution =
+                true;
+
+              seen.add(key);
+              result.push(item);
+              continue;
+            }
+
+            // =================================================
+            // 本月交养老保险
+            // =================================================
+            if (
+              isPensionPayment
+            ) {
+              const key =
+                `${item.year}::${item.month}::expense::fixed:pension-payment`;
+
+              if (
+                seen.has(key)
+              ) {
+                continue;
+              }
+
+              item.projectId =
+                "fixed:pension-payment";
+
+              item.isPensionPayment =
+                true;
+
+              item.isAnnuityContribution =
+                false;
+
+              seen.add(key);
+              result.push(item);
+              continue;
+            }
+
+            // =================================================
+            // 普通项目
+            //
+            // independent=true：
+            // 允许同名，不处理。
+            // =================================================
+            if (
+              item.independent
+            ) {
+              result.push(item);
+              continue;
+            }
+
+            // =================================================
+            // 普通共享项目：
+            // role + projectId + name
+            // =================================================
+            const key =
+              `${item.role}::${item.projectId}::${normalized}`;
+
+            if (
+              seen.has(key)
+            ) {
+              continue;
+            }
+
             seen.add(key);
-            return true;
-          });
+            result.push(item);
+          }
+
+          return result;
         };
 
-        month.income = dedupe(month.income);
-        month.expense = dedupe(month.expense);
-      }
+      month.income =
+        dedupeSpecial(
+          month.income
+        );
 
-      map.set(year.year, year);
+      month.expense =
+        dedupeSpecial(
+          month.expense
+        );
     }
+
+    map.set(
+      year.year,
+      year
+    );
   }
 
-  return Array.from(map.values()).sort(
-    (a, b) => a.year - b.year
+  return Array.from(
+    map.values()
+  ).sort(
+    (a, b) =>
+      a.year - b.year
   );
 }
 
@@ -3315,10 +2804,15 @@ function parseQuickEntry(text: string) {
     scheduleRegex.lastIndex = 0;
     if (!firstMatch) continue;
 
-    const name = line
-      .slice(roleMatch.index + roleMatch[0].length, firstMatch.index)
-      .replace(/^[\s:：\-—]+|[\s:：\-—]+$/g, "")
-      .trim();
+const roleIndex = roleMatch.index ?? 0;
+
+const name = line
+  .slice(
+    roleIndex + roleMatch[0].length,
+    firstMatch.index
+  )
+  .replace(/^[\s:：\-—]+|[\s:：\-—]+$/g, "")
+  .trim();
 
     if (!name) continue;
 
@@ -3418,15 +2912,134 @@ function applyQuickEntry(
             ? month.income
             : month.expense;
 
-        const matches = list.filter(
-          (item) =>
-            !item.independent &&
-            item.projectId ===
-              project!.projectId &&
-            item.role === entry.role
-        );
+        // ======================================================
+        // 找当前月份真正应该使用的记录
+        //
+        // SAL / 转去养老保险：
+        // 不再使用 projectId 判断唯一性。
+        //
+        // 只认：
+        // year + month + role + name
+        // ======================================================
+        const normalizedEntryName =
+          normalizeName(
+            entry.name
+          );
 
-        let target = matches[0];
+        const isSAL =
+          entry.role ===
+            "income" &&
+          normalizedEntryName ===
+            "sal";
+
+        const isTransferToPension =
+          entry.role ===
+            "expense" &&
+          normalizedEntryName ===
+            "转去养老保险";
+
+        let matches: CellItem[];
+
+        if (
+          isSAL ||
+          isTransferToPension
+        ) {
+          matches =
+            list.filter(
+              (item) =>
+                !item.deleted &&
+                item.role ===
+                  entry.role &&
+                normalizeName(
+                  item.name
+                ) ===
+                  normalizedEntryName
+            );
+        } else {
+          matches =
+            list.filter(
+              (item) =>
+                !item.deleted &&
+                !item.independent &&
+                item.projectId ===
+                  project!.projectId &&
+                item.role ===
+                  entry.role
+            );
+        }
+
+        let target =
+          matches[0];
+
+        // ======================================================
+        // 同一个月出现多个重复：
+        // 页面只保留第一条。
+        // ======================================================
+        for (
+          const duplicate of
+            matches.slice(1)
+        ) {
+          const index =
+            list.indexOf(
+              duplicate
+            );
+
+          if (
+            index >= 0
+          ) {
+            list.splice(
+              index,
+              1
+            );
+          }
+        }
+
+        if (!target) {
+          target = {
+            id:
+              uid("quick"),
+
+            year:
+              year.year,
+
+            month:
+              month.month,
+
+            role:
+              entry.role,
+
+            projectId:
+              project!.projectId,
+
+            name:
+              project!.name,
+
+            value:
+              0,
+
+            independent:
+              false,
+
+            fromExcel:
+              false,
+
+            isAnnuityContribution:
+              isTransferToPension,
+          };
+
+          list.push(
+            target
+          );
+        }
+
+        // “转去养老保险”无论原来是什么状态，
+        // 都必须进入积累年金。
+        if (
+          isTransferToPension
+        ) {
+          target.isAnnuityContribution =
+            true;
+        }
 
         // 快速录入时，同一共享项目同一月份只保留一条
         for (const duplicate of matches.slice(1)) {
@@ -3572,8 +3185,7 @@ export default function CashflowPlanningPage() {
   const [quickEntryMessage, setQuickEntryMessage] =
     useState<string | null>(null);
 
-  const [quickSeeded, setQuickSeeded] =
-    useState(false);
+
 
   const [editingId, setEditingId] =
     useState<string | null>(
@@ -3582,6 +3194,22 @@ export default function CashflowPlanningPage() {
 
   const [editingValue, setEditingValue] =
     useState("");
+
+    // ==========================================================
+// 金额修改同步确认
+// ==========================================================
+//
+// 用户修改一个月份的金额后，
+// 如果后面存在同项目月份，先弹窗确认。
+// ==========================================================
+const [
+  pendingValueChange,
+  setPendingValueChange,
+] = useState<{
+  item: CellItem;
+  value: number;
+  affectedMonths: string[];
+} | null>(null);
 
   const [editingCalcKey, setEditingCalcKey] =
     useState<string | null>(null);
@@ -3602,79 +3230,32 @@ export default function CashflowPlanningPage() {
   const [copied, setCopied] =
     useState(false);
 
+  
+
+    // ==========================================================
+  // Supabase 保存控制
+  //
+  // 关键规则：
+  // 1. 首次从 Supabase 读取时，绝不自动反写。
+  // 2. 用户真正修改 state 后才保存。
+  // 3. 保存请求严格串行，避免旧 POST 晚于新 POST 完成，
+  //    用旧快照把新数据（例如 2037）覆盖掉。
   // ==========================================================
-  // NEW.xlsx 项目标准化 / 云端缺失年份补齐
-  // ==========================================================
-  function normalizeImportedExcelSource(source: ParsedExcel) {
-    const importedYears = clone(source.years);
-    const importedProjects = clone(source.projects);
 
-    for (const project of importedProjects) {
-      if (normalizeName(project.name) === "jj") {
-        project.name = "买入基金 015736";
-      }
-      if (normalizeName(project.name) === "转去养老保险") {
-        project.isAnnuityContribution = true;
-      }
-    }
+  const skipInitialSaveRef = useRef(true);
 
-    for (const year of importedYears) {
-      for (const month of year.months) {
-        for (const item of [...month.income, ...month.expense]) {
-          if (normalizeName(item.name) === "jj") {
-            item.name = "买入基金 015736";
-          }
-          if (normalizeName(item.name) === "转去养老保险") {
-            item.isAnnuityContribution = true;
-          }
-        }
-      }
-    }
-
-    return { years: importedYears, projects: importedProjects };
-  }
-
-  function mergeExcelIntoStoredState(
-    storedYears: YearData[],
-    storedProjects: Project[],
-    source: ParsedExcel
-  ) {
-    const imported = normalizeImportedExcelSource(source);
-    const nextYears = clone(storedYears);
-    const nextProjects = clone(storedProjects);
-    const existingYears = new Set(nextYears.map((year) => year.year));
-
-    // 云端已有年份保留；NEW.xlsx 负责补齐 2031–2037 等缺失年份。
-    for (const excelYear of imported.years) {
-      if (excelYear.year < TARGET_START_YEAR || excelYear.year > EXCEL_END_YEAR) continue;
-      if (!existingYears.has(excelYear.year)) {
-        nextYears.push(excelYear);
-      }
-    }
-
-    for (const excelProject of imported.projects) {
-      const existing = nextProjects.find(
-        (project) =>
-          project.role === excelProject.role &&
-          normalizeName(project.name) === normalizeName(excelProject.name)
-      );
-      if (existing) {
-        if (excelProject.isAnnuityContribution) {
-          existing.isAnnuityContribution = true;
-        }
-      } else {
-        nextProjects.push(excelProject);
-      }
-    }
-
-    return {
-      years: sanitizeYears(nextYears),
-      projects: nextProjects,
-    };
-  }
+  const saveChainRef = useRef<Promise<void>>(
+    Promise.resolve()
+  );
 
   // ==========================================================
-  // 初始化
+  // Supabase 初始化
+  //
+  // 唯一数据来源：
+  // 页面打开 → Supabase
+  //
+  // 不再从 NEW.xlsx 初始化
+  // 不再从 localStorage 恢复业务数据
   // ==========================================================
 
   useEffect(() => {
@@ -3683,132 +3264,106 @@ export default function CashflowPlanningPage() {
     async function init() {
       try {
         setLoading(true);
+        setError(null);
 
-        const source =
-          await loadExcel();
+        console.log(
+          "[CASHFLOW] 开始读取 Supabase..."
+        );
+
+        const cloud = await Promise.race([
+          loadCashflowPlanning(),
+
+          new Promise<never>((_, reject) => {
+            window.setTimeout(() => {
+              reject(
+                new Error(
+                  "读取 Supabase 现金流数据超过 15 秒，请检查 /api/cashflow-planning"
+                )
+              );
+            }, 15000);
+          }),
+        ]);
 
         if (!mounted) {
           return;
         }
 
-        setExcelDiagnostics(source.diagnostics);
+        console.log(
+          "[CASHFLOW] Supabase 返回：",
+          cloud
+        );
 
-        // Supabase 优先；没有云端数据时兼容旧 localStorage 并自动迁移。
-        let cloudLoaded = false;
+console.log(
+  "[CASHFLOW] 原始 Supabase 年份明细：",
+  [...new Set((cloud.state?.years ?? []).map((y) => y.year))]
+);
 
-        try {
-          const cloud = await loadCashflowPlanning();
+        console.log(
+  "[CASHFLOW] loadCashflowPlanning 年份：",
+  cloud.state?.years?.map((y) => y.year)
+);
 
-          if (cloud.hasData && cloud.state) {
-            const merged = mergeExcelIntoStoredState(
-              sanitizeYears(cloud.state.years),
-              cloud.state.projects,
-              source
-            );
-
-            const rebuilt = rebuildProjectLinks(
-              merged.years,
-              merged.projects
-            );
-
-            const withPension = ensurePensionPaymentItems(
-              rebuilt.years,
-              rebuilt.projects
-            );
-
-            if (withPension.years.length > 0) {
-              setYears(withPension.years);
-              setProjects(withPension.projects);
-              localStorage.setItem(
-                STORAGE_KEY,
-                JSON.stringify({ years: withPension.years, projects: withPension.projects })
-              );
-              setSelectedYear(
-                withPension.years.find((x) => x.year === 2026)?.year ??
-                  withPension.years[0]?.year ??
-                  null
-              );
-
-              // 把 NEW.xlsx 补进来的 2031–2037 一并保存到云端。
-              try {
-                await saveCashflowPlanning({
-                  years: withPension.years,
-                  projects: withPension.projects,
-                } as CashflowState);
-              } catch (mergeSaveError) {
-                console.warn("NEW.xlsx 新增年份同步到 Supabase 失败：", mergeSaveError);
-              }
-
-              cloudLoaded = true;
-            }
-          }
-        } catch (cloudError) {
-          console.warn("Supabase 读取失败，暂时使用本地缓存：", cloudError);
+        if (
+          !cloud.hasData ||
+          !cloud.state ||
+          !Array.isArray(
+            cloud.state.years
+          ) ||
+          cloud.state.years.length === 0
+        ) {
+          throw new Error(
+            "Supabase 中没有现金流规划数据，请先完成一次初始化。"
+          );
         }
 
-        if (cloudLoaded) {
-          setLoading(false);
+        // ======================================================
+        // 从 Supabase 恢复数据
+        // ======================================================
+
+        const rebuilt =
+          rebuildProjectLinks(
+            sanitizeYears(
+              clone(
+                cloud.state.years
+              )
+            ),
+            clone(
+              cloud.state.projects ?? []
+            )
+          );
+
+          console.log(
+  "[CASHFLOW] rebuildProjectLinks 后年份：",
+  rebuilt.years.map((y) => y.year)
+);
+        // ======================================================
+        // 自动确保养老保险项目存在
+        // ======================================================
+
+        const withPension =
+          ensurePensionPaymentItems(
+            rebuilt.years,
+            rebuilt.projects
+          );
+
+   
+        console.log(
+  "[CASHFLOW] ensurePensionPaymentItems 后年份：",
+  withPension.years.map((y) => y.year)
+);
+
+        if (!mounted) {
           return;
         }
 
-        const stored = localStorage.getItem(STORAGE_KEY);
+        // ======================================================
+        // 非常重要：
+        // 第一次从 Supabase 读取以后，
+        // 不允许初始化数据立即反向 POST。
+        // ======================================================
 
-        if (stored) {
-          try {
-            const parsed = JSON.parse(stored);
-
-            if (parsed?.years && parsed?.projects) {
-              const storedYears = sanitizeYears(parsed.years);
-
-              if (storedYears.length > 0) {
-                const merged = mergeExcelIntoStoredState(
-                  storedYears,
-                  parsed.projects,
-                  source
-                );
-
-                const rebuilt = rebuildProjectLinks(
-                  merged.years,
-                  merged.projects
-                );
-
-                const withPension = ensurePensionPaymentItems(
-                  rebuilt.years,
-                  rebuilt.projects
-                );
-
-                setYears(withPension.years);
-                setProjects(withPension.projects);
-                setSelectedYear(
-                  rebuilt.years.find((x) => x.year === 2026)?.year ??
-                    rebuilt.years[0]?.year ??
-                    null
-                );
-
-                try {
-                  await saveCashflowPlanning({
-                    years: withPension.years,
-                    projects: withPension.projects,
-                  } as CashflowState);
-                } catch (migrationError) {
-                  console.warn("旧数据迁移到 Supabase 失败，继续使用 localStorage：", migrationError);
-                }
-
-                setLoading(false);
-                return;
-              }
-            }
-          } catch {
-            localStorage.removeItem(STORAGE_KEY);
-          }
-        }
-
-        const normalizedSource = normalizeImportedExcelSource(source);
-
-        const withPension = ensurePensionPaymentItems(
-          normalizedSource.years,
-          normalizedSource.projects
-        );
+        skipInitialSaveRef.current =
+          true;
 
         setYears(
           withPension.years
@@ -3818,18 +3373,39 @@ export default function CashflowPlanningPage() {
           withPension.projects
         );
 
+        // 默认打开 2026
         setSelectedYear(
-          withPension.years[0]
-            ?.year ?? null
+          withPension.years.find(
+            (year) =>
+              year.year === 2026
+          )?.year ??
+            withPension.years[0]
+              ?.year ??
+            null
+        );
+
+        console.log(
+          "[CASHFLOW] Supabase 读取完成：",
+          {
+            years:
+              withPension.years.map(
+                (year) => year.year
+              ),
+            projectCount:
+              withPension.projects.length,
+          }
         );
       } catch (err) {
-        console.error(err);
+        console.error(
+          "[CASHFLOW] Supabase 初始化失败：",
+          err
+        );
 
         if (mounted) {
           setError(
             err instanceof Error
               ? err.message
-              : "读取现金流模板失败"
+              : "读取现金流规划数据失败"
           );
         }
       } finally {
@@ -3847,18 +3423,29 @@ export default function CashflowPlanningPage() {
   }, []);
 
   // ==========================================================
-  // 自动保存：localStorage 缓存 + Supabase 正式数据
+  // 自动保存：Supabase 正式数据
+  //
+  // 注意：API POST 是“整套快照 DELETE + INSERT”。
+  // 因此这里必须保证：
+  // - 初始化读取不能触发保存；
+  // - 同一时间只能有一个保存请求；
+  // - 后来的快照必须排在前一个保存完成之后。
   // ==========================================================
 
   useEffect(() => {
     if (loading || years.length === 0) return;
 
-    const state = { years, projects };
+    // 首次从 Supabase 加载出来的数据，只是初始化快照，不能立即 POST。
+    if (skipInitialSaveRef.current) {
+      skipInitialSaveRef.current = false;
+      return;
+    }
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state)
-    );
+    // 在 effect 中立即复制，避免后续 state 变化影响本次快照。
+    const snapshot: CashflowState = clone({
+      years,
+      projects,
+    });
 
     setSaved(true);
 
@@ -3866,15 +3453,28 @@ export default function CashflowPlanningPage() {
       setSaved(false);
     }, 1000);
 
-    const saveTimer = window.setTimeout(async () => {
-      try {
-        await saveCashflowPlanning(state as CashflowState);
-      } catch (saveError) {
-        console.error(
-          "CASHFLOW-PLANNING Supabase 保存失败：",
-          saveError
-        );
-      }
+    const saveTimer = window.setTimeout(() => {
+      // 严格串行保存。
+      // 如果旧请求还没结束，新请求必须等旧请求完成后再执行，
+      // 防止旧快照最后完成并覆盖最新数据。
+      saveChainRef.current = saveChainRef.current
+        .catch((previousError) => {
+          console.error(
+            "CASHFLOW-PLANNING 上一次 Supabase 保存失败：",
+            previousError
+          );
+        })
+        .then(async () => {
+          try {
+            await saveCashflowPlanning(snapshot);
+          } catch (saveError) {
+            console.error(
+              "CASHFLOW-PLANNING Supabase 保存失败：",
+              saveError
+            );
+            throw saveError;
+          }
+        });
     }, 700);
 
     return () => {
@@ -3883,42 +3483,7 @@ export default function CashflowPlanningPage() {
     };
   }, [years, projects, loading]);
 
-  // ==========================================================
-  // 默认快速填写：按用户当前要求首次自动写入
-  // 2026 只有 9-12 月，因此 2026 年只会实际填写可见月份。
-  // 后续年份按完整 1-12 月填写。
-  // ==========================================================
 
-  useEffect(() => {
-    if (loading || years.length === 0 || quickSeeded) return;
-
-    const seedKey =
-      "ai-wealth-os-cashflow-quick-seed-v2";
-
-    if (localStorage.getItem(seedKey) === "1") {
-      setQuickSeeded(true);
-      return;
-    }
-
-    const nextYears = clone(years);
-    const nextProjects = clone(projects);
-    const result = applyQuickEntry(
-      nextYears,
-      nextProjects,
-      DEFAULT_QUICK_ENTRY
-    );
-
-    if (result.count > 0) {
-      setYears(result.years);
-      setProjects(result.projects);
-      setQuickEntryMessage(
-        "已按你的规则自动填写：报销 1-11 月 4596、12 月 6396；房租 1/4/7/10 月 6000。"
-      );
-    }
-
-    localStorage.setItem(seedKey, "1");
-    setQuickSeeded(true);
-  }, [loading, years, projects, quickSeeded]);
 
   // ==========================================================
   // 计算
@@ -4195,40 +3760,173 @@ function handleReorderItems(
   // 金额
   // ==========================================================
 
-  function commitValue(
-    item: CellItem
-  ) {
-    const value =
-      Number(
-        editingValue
-          .replace(/,/g, "")
-          .trim()
-      );
+  
+  // ==========================================================
+// 金额修改
+// ==========================================================
+//
+// 修改一个月份后：
+//
+// 1. 如果后面没有同项目
+//    → 直接修改
+//
+// 2. 如果后面存在同项目
+//    → 弹窗询问
+//
+//    取消：
+//      只修改当前月份
+//
+//    确认同步：
+//      当前月份 + 后续同项目月份一起修改
+// ==========================================================
+function commitValue(
+  item: CellItem
+) {
+  const value =
+    Number(
+      editingValue
+        .replace(/,/g, "")
+        .trim()
+    );
 
+  const safeValue =
+    Number.isFinite(value)
+      ? value
+      : 0;
+
+  /*
+   * 找出当前月份之后，
+   * 同一个 projectId + role 的项目。
+   */
+  const affectedMonths: string[] = [];
+
+  for (const year of years) {
+    for (const month of year.months) {
+      const isAfter =
+        year.year > item.year ||
+        (
+          year.year === item.year &&
+          month.month > item.month
+        );
+
+      if (!isAfter) {
+        continue;
+      }
+
+      const list =
+        item.role === "income"
+          ? month.income
+          : month.expense;
+
+      const exists =
+        list.some(
+          (x) =>
+            x.projectId ===
+              item.projectId &&
+            x.role === item.role &&
+            !x.deleted
+        );
+
+      if (exists) {
+        affectedMonths.push(
+          `${year.year}年${month.month}月`
+        );
+      }
+    }
+  }
+
+  /*
+   * 关闭当前编辑状态。
+   */
+  setEditingId(null);
+  setEditingValue("");
+
+  /*
+   * 如果没有后续月份，
+   * 不需要弹窗，直接修改。
+   */
+  if (affectedMonths.length === 0) {
     const nextYears =
       clone(years);
 
     updateItemValue(
       nextYears,
       item,
-      Number.isFinite(value)
-        ? value
-        : 0
+      safeValue,
+      false
     );
 
-    setYears(
-      nextYears
-    );
+    setYears(nextYears);
 
-    setEditingId(
-      null
-    );
-
-    setEditingValue(
-      ""
-    );
+    return;
   }
 
+  /*
+   * 有后续月份：
+   * 暂时不修改任何数据。
+   *
+   * 等用户在弹窗里选择：
+   *
+   * 取消
+   * 或
+   * 确认同步
+   */
+  setPendingValueChange({
+    item,
+    value: safeValue,
+    affectedMonths,
+  });
+}
+
+// ==========================================================
+// 取消同步
+//
+// 只修改当前月份。
+// ==========================================================
+function handleCancelValuePropagation() {
+  if (!pendingValueChange) {
+    return;
+  }
+
+  const nextYears =
+    clone(years);
+
+  updateItemValue(
+    nextYears,
+    pendingValueChange.item,
+    pendingValueChange.value,
+    false
+  );
+
+  setYears(nextYears);
+
+  setPendingValueChange(null);
+}
+
+// ==========================================================
+// 确认同步
+//
+// 当前月份 + 后续同项目月份一起修改。
+// ==========================================================
+function handleConfirmValuePropagation() {
+  if (!pendingValueChange) {
+    return;
+  }
+
+  const nextYears =
+    clone(years);
+
+  updateItemValue(
+    nextYears,
+    pendingValueChange.item,
+    pendingValueChange.value,
+    true
+  );
+
+  setYears(nextYears);
+
+  setPendingValueChange(null);
+}
   // ==========================================================
   // 计算结果手动修改
   // ==========================================================
@@ -4480,114 +4178,31 @@ function handleReorderItems(
     );
   }
 
-  // ==========================================================
-  // 恢复当前年份
-  // ==========================================================
 
-  async function restoreCurrentYear() {
-    if (
-      selectedYear ==
-      null
-    ) {
-      return;
-    }
 
-    const source =
-      await loadExcel();
+ 
 
-    const original =
-      source.years.find(
-        (x) =>
-          x.year ===
-          selectedYear
-      );
-
-    if (!original) {
-      return;
-    }
-
-    const nextYears =
-      clone(years);
-
-    const index =
-      nextYears.findIndex(
-        (x) =>
-          x.year ===
-          selectedYear
-      );
-
-    if (index >= 0) {
-      nextYears[index] =
-        original;
-    }
-
-    const rebuilt =
-      rebuildProjectLinks(
-        nextYears,
-        projects
-      );
-
-    setYears(
-      rebuilt.years
-    );
-
-    setProjects(
-      rebuilt.projects
-    );
-
-    setAiGenerated(
-      false
-    );
-
-    setAiText("");
-  }
-
-  // ==========================================================
-  // 恢复全部
-  // ==========================================================
-
-  async function restoreAll() {
-    const source =
-      await loadExcel();
-
-    setExcelDiagnostics(source.diagnostics);
-
-    setYears(
-      source.years
-    );
-
-    setProjects(
-      source.projects
-    );
-
-    localStorage.removeItem(
-      STORAGE_KEY
-    );
-
-    setAiGenerated(
-      false
-    );
-
-    setAiText("");
-  }
 
   // ==========================================================
   // 清除保存
   // ==========================================================
 
-  async function clearSaved() {
-    try {
-      await clearCashflowPlanning();
-    } catch (clearError) {
-      console.error(
-        "清除 Supabase CASHFLOW-PLANNING 失败：",
-        clearError
-      );
-    }
-
-    localStorage.removeItem(STORAGE_KEY);
+ async function clearSaved() {
+  try {
+    await clearCashflowPlanning();
     window.location.reload();
+  } catch (clearError) {
+    console.error(
+      "清除 Supabase CASHFLOW-PLANNING 失败：",
+      clearError
+    );
+    setError(
+      clearError instanceof Error
+        ? clearError.message
+        : "清除 Supabase 数据失败"
+    );
   }
+}
 
   // ==========================================================
   // Loading
@@ -4597,7 +4212,7 @@ function handleReorderItems(
     return (
       <main className="min-h-screen bg-white p-6">
         <div className="text-sm text-gray-500">
-          正在读取现金流模板……
+          正在读取 Supabase 现金流数据……
         </div>
       </main>
     );
@@ -4822,25 +4437,6 @@ function handleReorderItems(
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={
-                restoreCurrentYear
-              }
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50"
-            >
-              恢复当前年份
-            </button>
-
-            <button
-              type="button"
-              onClick={
-                restoreAll
-              }
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm hover:bg-gray-50"
-            >
-              恢复全部
-            </button>
 
             <button
               type="button"
@@ -4860,136 +4456,7 @@ function handleReorderItems(
           </div>
         </div>
 
-        {/* ====================================================
-            Excel 数据源诊断模式
-        ==================================================== */}
 
-        <section className="mb-5 rounded-xl border border-gray-200 bg-white">
-          <button
-            type="button"
-            onClick={() =>
-              setShowExcelDiagnostics((value) => !value)
-            }
-            className="flex w-full items-center justify-between px-4 py-3 text-left"
-          >
-            <div>
-              <div className="text-sm font-semibold">
-                Excel 数据源诊断
-              </div>
-              <div className="mt-0.5 text-xs text-gray-500">
-                用来确认页面到底读取了哪个 NEW.xlsx、哪个 Sheet，以及 2026 年 1 月原始数据是否正确。
-              </div>
-            </div>
-            <span className="text-xs text-gray-400">
-              {showExcelDiagnostics ? "收起" : "展开"}
-            </span>
-          </button>
-
-          {showExcelDiagnostics && excelDiagnostics && (
-            <div className="border-t border-gray-200 px-4 py-4 text-xs">
-              <div className="grid gap-3 lg:grid-cols-2">
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-2 font-semibold text-gray-700">
-                    ① 实际数据源
-                  </div>
-                  <div>文件：{EXCEL_FILE}</div>
-                  <div>实际 URL：{excelDiagnostics.fetchedUrl}</div>
-                  <div>读取时间：{excelDiagnostics.fetchedAt}</div>
-                  <div>文件大小：{excelDiagnostics.responseSize.toLocaleString()} bytes</div>
-                  <div className="mt-2 font-medium">
-                    2026 Sheet：{excelDiagnostics.selectedSheet2026}
-                  </div>
-                  <div>
-                    是否存在：{excelDiagnostics.selectedSheet2026Exists ? "YES" : "NO"}
-                  </div>
-                  <div>
-                    行数：{excelDiagnostics.sheet2026RowCount}　列数：{excelDiagnostics.sheet2026ColumnCount}
-                  </div>
-                </div>
-
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-2 font-semibold text-gray-700">
-                    ② 程序实际选择的 Sheet
-                  </div>
-                  <div className="break-all">
-                    {excelDiagnostics.expectedSheetNames.join(" / ")}
-                  </div>
-                  <div className="mt-2 text-gray-500">
-                    规则：2026 必须是 2026每月估算111；2027–2037 必须是 {"{年份}每月估算(3)"}。
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 rounded-lg bg-gray-50 p-3">
-                <div className="mb-2 font-semibold text-gray-700">
-                  ③ 2026 年 9 月 Excel 原始 C / D / E
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="min-w-[760px] border-collapse">
-                    <thead>
-                      <tr className="border-b border-gray-200 text-left">
-                        <th className="px-2 py-1">Excel行</th>
-                        <th className="px-2 py-1">C 主项目</th>
-                        <th className="px-2 py-1">D 说明/收入项目</th>
-                        <th className="px-2 py-1">E 金额</th>
-                        <th className="px-2 py-1">E公式</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelDiagnostics.janRows.map((row) => (
-                        <tr key={row.excelRow} className="border-b border-gray-100">
-                          <td className="px-2 py-1">{row.excelRow}</td>
-                          <td className="px-2 py-1 whitespace-pre-wrap">{row.c || "—"}</td>
-                          <td className="px-2 py-1 whitespace-pre-wrap">{row.d || "—"}</td>
-                          <td className="px-2 py-1 whitespace-pre-wrap">{row.e || "—"}</td>
-                          <td className="px-2 py-1 whitespace-pre-wrap text-gray-500">{row.eFormula || "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-2 font-semibold text-gray-700">
-                    ④ 程序解析后的 2026/9 收入
-                  </div>
-                  {excelDiagnostics.janParsedIncome.length === 0 ? (
-                    <div className="text-red-600">没有解析到收入项目</div>
-                  ) : (
-                    excelDiagnostics.janParsedIncome.map((item) => (
-                      <div key={`${item.sourceRow}-${item.name}`} className="flex justify-between gap-3 border-b border-gray-100 py-1">
-                        <span>{item.name} <span className="text-gray-400">(第{item.sourceRow}行)</span></span>
-                        <span>{formatMoney(item.value)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-
-                <div className="rounded-lg bg-gray-50 p-3">
-                  <div className="mb-2 font-semibold text-gray-700">
-                    ⑤ 程序解析后的 2026/9 支出
-                  </div>
-                  {excelDiagnostics.janParsedExpense.length === 0 ? (
-                    <div className="text-red-600">没有解析到支出项目</div>
-                  ) : (
-                    excelDiagnostics.janParsedExpense.map((item) => (
-                      <div key={`${item.sourceRow}-${item.name}`} className="flex justify-between gap-3 border-b border-gray-100 py-1">
-                        <span>{item.name} <span className="text-gray-400">(第{item.sourceRow}行)</span></span>
-                        <span>{formatMoney(item.value)}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-white p-3 text-gray-500">
-                <b>判断方法：</b>如果这里的“③ Excel 原始 C/D/E”已经是你现在的正确数据，说明 Excel 读取正确，问题在后面的页面状态/计算；如果这里仍然出现旧数据，说明浏览器/Vercel 实际拿到的仍是旧版 NEW.xlsx。
-              </div>
-            </div>
-          )}
-        </section>
 
         {/* ====================================================
             规则
@@ -5453,6 +4920,108 @@ function handleReorderItems(
           </div>
         </section>
 
+        {/* ====================================================
+            金额同步确认弹窗
+        ==================================================== */}
+        {pendingValueChange && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 px-4">
+            <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white shadow-2xl">
+              
+              {/* Header */}
+              <div className="border-b border-gray-200 px-5 py-4">
+                <div className="text-base font-semibold text-gray-900">
+                  确认同步修改？
+                </div>
+
+                <div className="mt-1 text-xs text-gray-500">
+                  你修改了一个月份的金额，
+                  系统发现后面还有相同项目。
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="px-5 py-4">
+
+                <div className="rounded-xl bg-gray-50 px-4 py-3">
+                  <div className="text-sm font-medium text-gray-800">
+                    {pendingValueChange.item.name}
+                  </div>
+
+                  <div className="mt-1 text-xs text-gray-500">
+                    {pendingValueChange.item.year}年
+                    {pendingValueChange.item.month}月
+                  </div>
+
+                  <div className="mt-2 text-sm">
+                    修改为：
+                    <span className="ml-1 font-semibold text-gray-900">
+                      ¥
+                      {formatMoney(
+                        pendingValueChange.value
+                      )}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <div className="text-xs font-medium text-gray-700">
+                    后续以下月份也存在这个项目：
+                  </div>
+
+                  <div className="mt-2 max-h-32 overflow-y-auto rounded-lg border border-gray-200 bg-white px-3 py-2">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                      {pendingValueChange.affectedMonths.map(
+                        (month) => (
+                          <span
+                            key={month}
+                            className="text-xs text-gray-600"
+                          >
+                            {month}
+                          </span>
+                        )
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-xs leading-5 text-gray-500">
+                    <span className="font-medium text-gray-700">
+                      取消
+                    </span>
+                    ：只修改当前月份。
+                    <br />
+                    <span className="font-medium text-gray-700">
+                      确认同步
+                    </span>
+                    ：当前月份及以上列出的后续月份一起修改。
+                  </div>
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
+                <button
+                  type="button"
+                  onClick={
+                    handleCancelValuePropagation
+                  }
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  取消
+                </button>
+
+                <button
+                  type="button"
+                  onClick={
+                    handleConfirmValuePropagation
+                  }
+                  className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
+                >
+                  确认同步
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
@@ -5547,4 +5116,3 @@ function rebuildProjectLinks(
     projects,
   };
 }
-
