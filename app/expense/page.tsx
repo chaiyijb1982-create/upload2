@@ -610,6 +610,9 @@ export default function ExpensePage() {
     setExpenseDetailYear,
   ] = useState<number | null>(null);
 
+  const [bookMonthlyYear, setBookMonthlyYear] = useState<number>(
+  new Date().getFullYear()
+);
   // ===================================================
   // 展开的项目
   //
@@ -1110,7 +1113,505 @@ export default function ExpensePage() {
         ),
       [transactions]
     );
+// =====================================================
+// ★ 今年各账本月度统计
+//
+// 行 = 月份
+// 列 = 实际账本
+// 最后一列 = 月合计
+// 最后一行 = 全年合计
+//
+// 直接使用 unifiedExpenseRecords，保证与页面和 AI
+// 使用完全相同的消费口径。
+// =====================================================
+const yearlyBookMonthlyStats = useMemo(() => {
+  const year = bookMonthlyYear;
 
+  // 只取当前选择年份的数据
+  const yearRecords = unifiedExpenseRecords.filter(
+    record => Number(record.year) === year
+  );
+
+  // 只显示这个年份实际出现过的账本
+  const bookSet = new Set<string>();
+
+  for (const record of yearRecords) {
+    if (record.bookName) {
+      bookSet.add(record.bookName);
+    }
+  }
+
+  const books = Array.from(bookSet).sort((a, b) =>
+    a.localeCompare(b, "zh-CN")
+  );
+
+  // 12个月
+  const rows = Array.from({ length: 12 }, (_, index) => {
+    const month = index + 1;
+
+    const amounts: Record<string, number> = {};
+
+    for (const book of books) {
+      amounts[book] = yearRecords
+        .filter(
+          record =>
+            Number(record.month) === month &&
+            record.bookName === book
+        )
+        .reduce(
+          (sum, record) => sum + Number(record.amount || 0),
+          0
+        );
+    }
+
+    const total = Object.values(amounts).reduce(
+      (sum, amount) => sum + amount,
+      0
+    );
+
+    return {
+      month,
+      amounts,
+      total,
+    };
+  });
+
+  // 全年各账本合计
+  const totals: Record<string, number> = {};
+
+  for (const book of books) {
+    totals[book] = yearRecords
+      .filter(record => record.bookName === book)
+      .reduce(
+        (sum, record) => sum + Number(record.amount || 0),
+        0
+      );
+  }
+
+  // 全年总消费
+  const grandTotal = Object.values(totals).reduce(
+    (sum, amount) => sum + amount,
+    0
+  );
+
+  return {
+    year,
+    books,
+    rows,
+    totals,
+    grandTotal,
+  };
+}, [unifiedExpenseRecords, bookMonthlyYear]);
+const handleExportExpenseAnalysisData = () => {
+  try {
+    // 只保留 2023-2026 年 1-9 月
+    const analysisRecords = unifiedExpenseRecords
+      .filter(record => {
+        const year = Number(record.year);
+        const month = Number(record.month);
+
+        return (
+          year >= 2023 &&
+          year <= 2026 &&
+          month >= 1 &&
+          month <= 9
+        );
+      })
+      .map(record => ({
+        year: Number(record.year),
+        month: Number(record.month),
+        bookName: record.bookName,
+        category: record.category,
+        group: record.group,
+        amount: Number(record.amount || 0),
+      }));
+
+    // 实际出现过的账本
+    const bookSet = new Set<string>();
+
+    for (const record of analysisRecords) {
+      if (record.bookName) {
+        bookSet.add(record.bookName);
+      }
+    }
+
+    const books = Array.from(bookSet).sort((a, b) =>
+      a.localeCompare(b, "zh-CN")
+    );
+
+    // 按 年份 + 月份 + 账本 汇总
+    const monthlyData: Record<
+      string,
+      Record<string, number>
+    > = {};
+
+    for (const record of analysisRecords) {
+      const key = `${record.year}-${String(record.month).padStart(
+        2,
+        "0"
+      )}`;
+
+      if (!monthlyData[key]) {
+        monthlyData[key] = {};
+      }
+
+      monthlyData[key][record.bookName] =
+        (monthlyData[key][record.bookName] || 0) +
+        record.amount;
+    }
+const handleExportExpenseAnalysisData = () => {
+  try {
+    const validRecords = unifiedExpenseRecords
+      .map(record => ({
+        ...record,
+        year: Number(record.year),
+        month: Number(record.month),
+        amount: Number(record.amount || 0),
+      }))
+      .filter(
+        record =>
+          Number.isFinite(record.year) &&
+          Number.isFinite(record.month) &&
+          record.month >= 1 &&
+          record.month <= 12
+      );
+
+    if (validRecords.length === 0) {
+      alert("没有可导出的消费数据。");
+      return;
+    }
+
+    // 自动确定实际数据范围
+    const startYear = Math.min(
+      ...validRecords.map(record => record.year)
+    );
+
+    const endYear = Math.max(
+      ...validRecords.map(record => record.year)
+    );
+
+    // 找到最后一个实际存在数据的月份
+    const endYearRecords = validRecords.filter(
+      record => record.year === endYear
+    );
+
+    const endMonth = Math.max(
+      ...endYearRecords.map(record => record.month)
+    );
+
+    const startMonth = 1;
+
+    // 只导出实际数据范围
+    const analysisRecords = validRecords.filter(record => {
+      if (record.year < startYear || record.year > endYear) {
+        return false;
+      }
+
+      if (record.year === endYear) {
+        return (
+          record.month >= startMonth &&
+          record.month <= endMonth
+        );
+      }
+
+      return record.month >= startMonth;
+    });
+
+    // =================================================
+    // 实际出现过的账本名称
+    // =================================================
+
+    const bookSet = new Set<string>();
+
+    for (const record of analysisRecords) {
+      if (record.bookName) {
+        bookSet.add(record.bookName);
+      }
+    }
+
+    const books = Array.from(bookSet).sort((a, b) =>
+      a.localeCompare(b, "zh-CN")
+    );
+
+    // =================================================
+    // 月度汇总
+    // =================================================
+
+    const monthlyData: Record<
+      string,
+      Record<string, number>
+    > = {};
+
+    for (const record of analysisRecords) {
+      const key = `${record.year}-${String(
+        record.month
+      ).padStart(2, "0")}`;
+
+      if (!monthlyData[key]) {
+        monthlyData[key] = {};
+      }
+
+      monthlyData[key][record.bookName] =
+        (monthlyData[key][record.bookName] || 0) +
+        record.amount;
+    }
+
+    const monthlySummary = [];
+
+    for (let year = startYear; year <= endYear; year++) {
+      const lastMonth =
+        year === endYear ? endMonth : 12;
+
+      for (
+        let month = startMonth;
+        month <= lastMonth;
+        month++
+      ) {
+        const key = `${year}-${String(
+          month
+        ).padStart(2, "0")}`;
+
+        const booksData: Record<string, number> = {};
+        let total = 0;
+
+        for (const book of books) {
+          const amount =
+            monthlyData[key]?.[book] || 0;
+
+          booksData[book] = amount;
+          total += amount;
+        }
+
+        monthlySummary.push({
+          year,
+          month,
+          period: key,
+          books: booksData,
+          total,
+        });
+      }
+    }
+
+    // =================================================
+    // 年度汇总
+    // =================================================
+
+    const yearlySummary = [];
+
+    for (
+      let year = startYear;
+      year <= endYear;
+      year++
+    ) {
+      const yearRecords = analysisRecords.filter(
+        record => record.year === year
+      );
+
+      const booksData: Record<string, number> = {};
+      let total = 0;
+
+      for (const book of books) {
+        const amount = yearRecords
+          .filter(
+            record => record.bookName === book
+          )
+          .reduce(
+            (sum, record) =>
+              sum + record.amount,
+            0
+          );
+
+        booksData[book] = amount;
+        total += amount;
+      }
+
+      yearlySummary.push({
+        year,
+        books: booksData,
+        total,
+      });
+    }
+
+    // =================================================
+    // 导出数据
+    // =================================================
+
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+
+      source: "AI-Wealth-OS / expense",
+
+      description: `${startYear}-${endYear}年1-${endMonth}月消费分析数据`,
+
+      period: {
+        startYear,
+        endYear,
+        startMonth,
+        endMonth,
+      },
+
+      books,
+
+      monthlySummary,
+
+      yearlySummary,
+
+      records: analysisRecords.map(record => ({
+        year: record.year,
+        month: record.month,
+        bookName: record.bookName,
+        category: record.category,
+        group: record.group,
+        amount: record.amount,
+      })),
+    };
+
+    const json = JSON.stringify(
+      exportData,
+      null,
+      2
+    );
+
+    const blob = new Blob([json], {
+      type: "application/json;charset=utf-8",
+    });
+
+    const url =
+      URL.createObjectURL(blob);
+
+    const link =
+      document.createElement("a");
+
+    link.href = url;
+
+    link.download =
+      `expense-analysis-${startYear}-${endYear}-to-${String(
+        endMonth
+      ).padStart(2, "0")}.json`;
+
+    document.body.appendChild(link);
+
+    link.click();
+
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error(
+      "导出消费分析数据失败:",
+      error
+    );
+
+    alert(
+      "导出消费分析数据失败，请查看控制台。"
+    );
+  }
+};
+
+   const exportData = {
+  exportedAt: new Date().toISOString(),
+
+  source: "AI-Wealth-OS / expense",
+
+  description: "消费分析数据",
+
+
+  // 实际出现过的账本
+  books,
+
+  // 每个月各账本消费
+  monthlySummary: [],
+
+  // 每年各账本消费
+  yearlySummary: [],
+
+  // 原始统一消费记录
+  records: analysisRecords,
+};
+
+    const json = JSON.stringify(
+      exportData,
+      null,
+      2
+    );
+
+    const blob = new Blob([json], {
+      type: "application/json;charset=utf-8",
+    });
+
+    const url =
+      URL.createObjectURL(blob);
+
+    const link =
+      document.createElement("a");
+
+    link.href = url;
+
+    link.download =
+      "expense-analysis-2023-2026-jan-sep.json";
+
+    document.body.appendChild(link);
+
+    link.click();
+
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error(
+      "导出消费分析数据失败:",
+      error
+    );
+
+    alert(
+      "导出消费分析数据失败，请查看控制台。"
+    );
+  }
+};
+const handleExportExpenseData = () => {
+  try {
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      source: "AI-Wealth-OS / expense",
+
+      // 全部原始消费数据
+      transactions,
+
+      // 统一后的消费记录
+      unifiedExpenseRecords,
+
+      // 页面实际存在的年份
+      availableYears,
+
+      // 消费统计排除规则
+      excludedBooks: Array.from(EXCLUDED_BOOK_NAMES),
+
+      // 当前选择年份的账本月度统计
+      bookMonthlyStats: yearlyBookMonthlyStats,
+    };
+
+    const json = JSON.stringify(exportData, null, 2);
+
+    const blob = new Blob([json], {
+      type: "application/json;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "expense-export.json";
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("导出消费数据失败:", error);
+    alert("导出消费数据失败，请查看控制台。");
+  }
+};
   // ===================================================
   // ★ 生成 aiExpenseYears
   // ===================================================
@@ -1496,6 +1997,8 @@ export default function ExpensePage() {
     expenseDetailMode,
     expenseDetailYear,
   ]);
+
+
 
   // ===================================================
   // ★ 月度 xx / 其他统计
@@ -4587,6 +5090,7 @@ export default function ExpensePage() {
                     const xxRate = total > 0 ? (row.xx / total) * 100 : 0;
                     const otherRate = total > 0 ? (row.other / total) * 100 : 0;
 
+
                     return (
                       <tr key={row.period} className="hover:bg-gray-50">
                         <td className="px-5 py-3 font-medium">
@@ -4625,6 +5129,129 @@ export default function ExpensePage() {
           </div>
         </div>
 
+
+  {/* =================================================
+    ★ 各账本月度消费
+================================================= */}
+<div className="rounded-xl border bg-white shadow-sm">
+  <div className="flex items-center justify-between gap-4 border-b px-5 py-4">
+    <div>
+      <div className="font-semibold">
+        {yearlyBookMonthlyStats.year} 年各账本月度消费
+      </div>
+
+      <div className="mt-1 text-xs text-gray-500">
+        行为月份，列为实际账本
+      </div>
+    </div>
+
+    <div className="flex items-center gap-2">
+
+
+      {/* 导出 2023-2026 年 1-9 月分析数据 */}
+      <button
+        type="button"
+        onClick={handleExportExpenseAnalysisData}
+        className="rounded-lg border bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+      >
+        📊 导出消费分析
+      </button>
+
+      {/* 月度账本统计年份 */}
+      <select
+        value={bookMonthlyYear}
+        onChange={e =>
+          setBookMonthlyYear(Number(e.target.value))
+        }
+        className="rounded-lg border px-3 py-2 text-sm"
+      >
+        {availableYears.map(year => (
+          <option key={year} value={year}>
+            {year} 年
+          </option>
+        ))}
+      </select>
+    </div>
+  </div>
+
+  <div className="overflow-x-auto">
+    <table className="w-full min-w-[900px] text-sm">
+      <thead className="border-b bg-gray-50">
+        <tr>
+          <th className="sticky left-0 z-10 bg-gray-50 px-5 py-3 text-left font-semibold text-gray-600">
+            月份
+          </th>
+
+          {yearlyBookMonthlyStats.books.map(book => (
+            <th
+              key={book}
+              className="px-5 py-3 text-right font-semibold text-gray-600 whitespace-nowrap"
+            >
+              {book}
+            </th>
+          ))}
+
+          <th className="px-5 py-3 text-right font-semibold text-gray-600 whitespace-nowrap">
+            月合计
+          </th>
+        </tr>
+      </thead>
+
+      <tbody className="divide-y">
+        {yearlyBookMonthlyStats.rows.map(row => (
+          <tr
+            key={row.month}
+            className="hover:bg-gray-50"
+          >
+            <td className="sticky left-0 z-10 bg-white px-5 py-3 font-medium">
+              {row.month}月
+            </td>
+
+            {yearlyBookMonthlyStats.books.map(book => (
+              <td
+                key={book}
+                className="px-5 py-3 text-right font-medium whitespace-nowrap"
+              >
+                {formatMoney(
+                  row.amounts[book] || 0
+                )}
+              </td>
+            ))}
+
+            <td className="px-5 py-3 text-right font-semibold whitespace-nowrap">
+              {formatMoney(row.total)}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+
+      <tfoot>
+        <tr className="border-t bg-gray-50">
+          <td className="sticky left-0 z-10 bg-gray-50 px-5 py-3 font-bold">
+            全年
+          </td>
+
+          {yearlyBookMonthlyStats.books.map(book => (
+            <td
+              key={book}
+              className="px-5 py-3 text-right font-bold whitespace-nowrap"
+            >
+              {formatMoney(
+                yearlyBookMonthlyStats.totals[book] || 0
+              )}
+            </td>
+          ))}
+
+          <td className="px-5 py-3 text-right font-bold whitespace-nowrap">
+            {formatMoney(
+              yearlyBookMonthlyStats.grandTotal
+            )}
+          </td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
         {/* =================================================
             ★ AI 消费分析
         ================================================= */}
