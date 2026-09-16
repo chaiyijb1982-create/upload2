@@ -75,13 +75,18 @@ type HongbaoEvent = {
   event_year: number;
   start_date: string | null;
   end_date: string | null;
+  temple_id: string | null;
 };
 
 type HongbaoPacket = {
   id: string;
   event_id: string;
-  days: number[];
   packet_amount: number;
+  denominations: {
+    denomination: number;
+    quantity: number;
+  }[];
+  days: number[];
 };
 
 type CostForm = {
@@ -916,11 +921,11 @@ setHongbaoPackets(
 <section
   className="
     relative
-    -ml-[200px]
-    -mr-[200px]
+    -ml-[300px]
+    -mr-[300px]
     mt-6
     mb-6
-    w-[calc(100%+400px)]
+    w-[calc(100%+600px)]
     rounded-2xl
     border
     border-gray-200
