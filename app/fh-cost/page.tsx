@@ -70,6 +70,20 @@ type Cost = {
   created_at: string;
 };
 
+type HongbaoEvent = {
+  id: string;
+  event_year: number;
+  start_date: string | null;
+  end_date: string | null;
+};
+
+type HongbaoPacket = {
+  id: string;
+  event_id: string;
+  days: number[];
+  packet_amount: number;
+};
+
 type CostForm = {
   id?: string;
   temple_id: string;
@@ -225,8 +239,16 @@ export default function FHCostPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [temples, setTemples] = useState<Temple[]>([]);
-  const [costs, setCosts] = useState<Cost[]>([]);
-  const [selectedYear, setSelectedYear] = useState(currentYear);
+const [costs, setCosts] = useState<Cost[]>([]);
+
+const [hongbaoEvents, setHongbaoEvents] =
+  useState<HongbaoEvent[]>([]);
+
+const [hongbaoPackets, setHongbaoPackets] =
+  useState<HongbaoPacket[]>([]);
+
+const [selectedYear, setSelectedYear] =
+  useState(currentYear);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<CostForm>(emptyForm(currentYear));
   const [copyTargetYear, setCopyTargetYear] = useState(String(currentYear + 1));
@@ -258,7 +280,17 @@ export default function FHCostPage() {
   async function loadAll() {
     try {
       setLoading(true); setError("");
-      const [templeRows, costRows] = await Promise.all([fetchAllRows("fh_temples"), fetchAllRows("fh_costs")]);
+      const [
+  templeRows,
+  costRows,
+  hongbaoEventRows,
+  hongbaoPacketRows,
+] = await Promise.all([
+  fetchAllRows("fh_temples"),
+  fetchAllRows("fh_costs"),
+  fetchAllRows("fh_events"),
+  fetchAllRows("fh_red_packets"),
+]);
       setTemples((templeRows || []).map((r: any) => ({ id: r.id, name: r.name })));
       setCosts((costRows || []).map((r: any) => ({ 
         ...r, 
@@ -278,6 +310,31 @@ export default function FHCostPage() {
         xibo_bags: Number(r.xibo_bags || 0),
         xibo_price: r.xibo_price != null ? Number(r.xibo_price) : 18
       })) as Cost[]);
+
+      setHongbaoEvents(
+  (hongbaoEventRows || []).map((r: any) => ({
+    id: r.id,
+    event_year:
+      Number(r.event_year) ||
+      new Date().getFullYear(),
+    start_date: r.start_date || null,
+    end_date: r.end_date || null,
+  }))
+);
+
+setHongbaoPackets(
+  (hongbaoPacketRows || []).map((r: any) => ({
+    id: r.id,
+    event_id: r.event_id,
+    days: Array.isArray(r.days)
+      ? r.days
+          .map((d: any) => Number(d))
+          .filter((d: number) => Number.isFinite(d))
+      : [],
+    packet_amount:
+      Number(r.packet_amount) || 0,
+  }))
+);
     } catch (e: any) { setError(e?.message || "读取法会费用失败"); }
     finally { setLoading(false); }
   }
@@ -943,6 +1000,8 @@ export default function FHCostPage() {
   <div className="w-full">
     <table className="w-full table-fixed border-collapse">
       <colgroup>
+        {/* 本月红包 */}
+  <col style={{ width: "100px" }} />
         {/* 本月费用 */}
         <col style={{ width: "100px" }} />
 
@@ -962,6 +1021,23 @@ export default function FHCostPage() {
           ========================= */}
       <thead>
         <tr className="bg-gray-50">
+          {/* 本月红包 */}
+<th
+  className="
+    h-[40px]
+    border-b
+    border-r
+    border-gray-200
+    px-1
+    py-2
+    text-center
+    text-sm
+    font-bold
+    text-gray-700
+  "
+>
+  本月红包
+</th>
           {/* 本月费用 */}
           <th
             className="
@@ -1040,7 +1116,59 @@ export default function FHCostPage() {
               month,
               0
             ).getDate();
+/* =========================
+    本月红包
+    ========================= */
+const monthHongbaoEventIds =
+  new Set(
+    hongbaoEvents
+      .filter((event) => {
+        if (!event.start_date) {
+          return false;
+        }
 
+        const start =
+          event.start_date;
+
+        const end =
+          event.end_date ||
+          event.start_date;
+
+        const monthStart =
+          `${selectedYear}-${String(
+            month
+          ).padStart(2, "0")}-01`;
+
+        const monthEnd =
+          `${selectedYear}-${String(
+            month
+          ).padStart(2, "0")}-${String(
+            daysInMonth
+          ).padStart(2, "0")}`;
+
+        return (
+          start <= monthEnd &&
+          end >= monthStart
+        );
+      })
+      .map((event) => event.id)
+  );
+
+const monthHongbaoTotal =
+  hongbaoPackets
+    .filter((packet) =>
+      monthHongbaoEventIds.has(
+        packet.event_id
+      )
+    )
+    .reduce(
+      (sum, packet) =>
+        sum +
+        Number(
+          packet.packet_amount || 0
+        ),
+      0
+    );
             {/* =========================
                 本月日期范围
                 ========================= */}
@@ -1086,6 +1214,42 @@ export default function FHCostPage() {
 
             return (
               <tr key={month}>
+                {/* =========================
+    本月红包
+    ========================= */}
+<td
+  className="
+    h-[64px]
+    border-b
+    border-r
+    border-gray-200
+    bg-gray-50
+    px-1
+    text-center
+    align-middle
+  "
+>
+  <div
+    className="
+      whitespace-nowrap
+      text-sm
+      font-bold
+      text-gray-900
+    "
+  >
+    {money(monthHongbaoTotal)}
+  </div>
+
+  <div
+    className="
+      mt-0.5
+      text-xs
+      text-gray-500
+    "
+  >
+    红包
+  </div>
+</td>
                 {/* =========================
                     本月费用
                     ========================= */}
