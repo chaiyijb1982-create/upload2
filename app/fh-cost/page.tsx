@@ -21,6 +21,124 @@ const FALLBACK_COLORS = [
   { bg: "bg-orange-50 text-orange-800 border-orange-200" },
 ];
 
+const CHINA_HOLIDAYS: Record<
+  number,
+  {
+    holiday: string;
+    dates: string[];
+    workdays: string[];
+  }[]
+> = {
+  2026: [
+    {
+      holiday: "元旦",
+      dates: [
+        "2026-01-01",
+        "2026-01-02",
+        "2026-01-03",
+      ],
+      workdays: ["2026-01-04"],
+    },
+    {
+      holiday: "春节",
+      dates: [
+        "2026-02-15",
+        "2026-02-16",
+        "2026-02-17",
+        "2026-02-18",
+        "2026-02-19",
+        "2026-02-20",
+        "2026-02-21",
+        "2026-02-22",
+        "2026-02-23",
+      ],
+      workdays: [
+        "2026-02-14",
+        "2026-02-28",
+      ],
+    },
+    {
+      holiday: "清明节",
+      dates: [
+        "2026-04-04",
+        "2026-04-05",
+        "2026-04-06",
+      ],
+      workdays: [],
+    },
+    {
+      holiday: "劳动节",
+      dates: [
+        "2026-05-01",
+        "2026-05-02",
+        "2026-05-03",
+        "2026-05-04",
+        "2026-05-05",
+      ],
+      workdays: ["2026-05-09"],
+    },
+    {
+      holiday: "端午节",
+      dates: [
+        "2026-06-19",
+        "2026-06-20",
+        "2026-06-21",
+      ],
+      workdays: [],
+    },
+    {
+      holiday: "中秋节",
+      dates: [
+        "2026-09-25",
+        "2026-09-26",
+        "2026-09-27",
+      ],
+      workdays: [],
+    },
+    {
+      holiday: "国庆节",
+      dates: [
+        "2026-10-01",
+        "2026-10-02",
+        "2026-10-03",
+        "2026-10-04",
+        "2026-10-05",
+        "2026-10-06",
+        "2026-10-07",
+      ],
+      workdays: [
+        "2026-09-20",
+        "2026-10-10",
+      ],
+    },
+  ],
+};
+
+function getCalendarDayInfo(date: string) {
+  const year = Number(date.slice(0, 4));
+
+  const holidays = CHINA_HOLIDAYS[year] || [];
+
+  const holiday = holidays.find((item) =>
+    item.dates.includes(date)
+  );
+
+  const isWorkday = holidays.some((item) =>
+    item.workdays.includes(date)
+  );
+
+  const dateObj = new Date(`${date}T00:00:00`);
+  const weekDay = dateObj.getDay();
+
+  return {
+    holidayName: holiday?.holiday || null,
+    isHoliday: Boolean(holiday),
+    isWorkday,
+    isSaturday: weekDay === 6,
+    isSunday: weekDay === 0,
+  };
+}
+
 function getTempleColor(templeName: string) {
   if (templeName.includes("龙华寺")) {
     return { bg: "bg-amber-100 text-amber-900 border-amber-300" }; // 黄色
@@ -189,6 +307,7 @@ function solarToLunar(date: string) {
   try {
     const [y, m, d] = date.split("-").map(Number);
     const lunar = Solar.fromYmd(y, m, d).getLunar();
+
     return { year: Number(lunar.getYear()), month: Number(lunar.getMonth()), day: Number(lunar.getDay()), leap: false };
   } catch { return null; }
 }
@@ -268,6 +387,35 @@ const [selectedYear, setSelectedYear] =
   
   const totalAmount = useMemo(() => costs.reduce((s, c) => s + Number(c.amount || 0), 0), [costs]);
   const yearTotal = useMemo(() => yearCosts.reduce((s, c) => s + Number(c.amount || 0), 0), [yearCosts]);
+  const yearHongbaoTotal = useMemo(
+  () =>
+    hongbaoEvents.reduce((total, event) => {
+      if (
+        Number(event.event_year) !==
+        Number(selectedYear)
+      ) {
+        return total;
+      }
+
+      const eventTotal = hongbaoPackets
+        .filter(
+          (packet) =>
+            packet.event_id === event.id
+        )
+        .reduce(
+          (sum, packet) =>
+            sum + Number(packet.packet_amount || 0),
+          0
+        );
+
+      return total + eventTotal;
+    }, 0),
+  [
+    hongbaoEvents,
+    hongbaoPackets,
+    selectedYear,
+  ]
+);
   const yearXiboTotal = useMemo(() => yearCosts.reduce((s, c) => s + (c.need_xibo ? (c.xibo_bags * (c.xibo_price || 18)) : 0), 0), [yearCosts]);
   
   const templeStats = useMemo(() => {
@@ -554,7 +702,7 @@ setHongbaoPackets(
     try {
       const lunar =
         solarToLunar(sch.date);
-
+   
       if (
         !lunar ||
         !lunar.month ||
@@ -918,6 +1066,38 @@ setHongbaoPackets(
 {/* =========================
     全年法会费用日历
     ========================= */}
+<div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+  <h2 className="text-lg font-bold text-gray-900">
+    法会费用日历
+  </h2>
+
+  <select
+    value={selectedYear}
+    onChange={(e) =>
+      setSelectedYear(Number(e.target.value))
+    }
+    className="
+      rounded-lg
+      border
+      border-gray-300
+      bg-white
+      px-3
+      py-2
+      text-sm
+      font-medium
+      text-gray-700
+      outline-none
+      focus:border-gray-500
+    "
+  >
+    {years.map((year) => (
+      <option key={year} value={year}>
+        {year}年
+      </option>
+    ))}
+  </select>
+</div>
+
 <section
   className="
     relative
@@ -950,7 +1130,7 @@ setHongbaoPackets(
     {/* =========================
         焰 / 蒙图例
         ========================= */}
-    <div className="flex items-center gap-5 text-sm">
+    <div className="ml-auto flex items-center gap-5 text-sm">
       <div className="flex items-center gap-2">
         <span
           className="
@@ -1027,6 +1207,7 @@ setHongbaoPackets(
       <thead>
         <tr className="bg-gray-50">
           {/* 本月红包 */}
+{/* 本月红包 */}
 <th
   className="
     h-[40px]
@@ -1034,32 +1215,49 @@ setHongbaoPackets(
     border-r
     border-gray-200
     px-1
-    py-2
+    py-1
     text-center
-    text-sm
-    font-bold
     text-gray-700
   "
 >
-  本月红包
+  <div className="text-xs font-normal text-gray-500">
+    本年共
+  </div>
+
+  <div className="text-sm font-bold text-gray-900">
+    {money(yearHongbaoTotal)}
+  </div>
+
+  <div className="text-sm font-bold text-gray-700">
+    本月红包
+  </div>
 </th>
           {/* 本月费用 */}
-          <th
-            className="
-              h-[40px]
-              border-b
-              border-r
-              border-gray-200
-              px-1
-              py-2
-              text-center
-              text-sm
-              font-bold
-              text-gray-700
-            "
-          >
-            本月费用
-          </th>
+          {/* 本月费用 */}
+<th
+  className="
+    h-[40px]
+    border-b
+    border-r
+    border-gray-200
+    px-1
+    py-1
+    text-center
+    text-gray-700
+  "
+>
+  <div className="text-xs font-normal text-gray-500">
+    本年共
+  </div>
+
+  <div className="text-sm font-bold text-gray-900">
+    {money(yearTotal)}
+  </div>
+
+  <div className="text-sm font-bold text-gray-700">
+    本月费用
+  </div>
+</th>
 
           {/* 月 */}
           <th
@@ -1355,6 +1553,13 @@ const monthHongbaoTotal =
                         "0"
                       )}`;
 
+const dayInfo = getCalendarDayInfo(date);
+                      const lunar = solarToLunar(date);
+
+const isImportantLunarDay =
+  lunar?.day === 1 ||
+  lunar?.day === 12 ||
+  lunar?.day === 15;
                     {/* 找出当天所有法会 */}
                     const dayCosts =
                       yearCosts.filter((c) => {
@@ -1384,21 +1589,48 @@ const monthHongbaoTotal =
                           align-top
                         "
                       >
-                        {/* =========================
-                            阳历日期
-                            ========================= */}
-                        <div className="mb-0.5 text-center">
-                          <span
-                            className="
-                              text-sm
-                              font-bold
-                              leading-4
-                              text-gray-800
-                            "
-                          >
-                            {day}
-                          </span>
-                        </div>
+{/* =========================
+   阳历日期
+   ========================= */}
+<div className="mb-0.5 flex min-h-[40px] flex-col items-center justify-start">
+  <span
+    className={`
+      inline-flex
+      h-6
+      min-w-6
+      items-center
+      justify-center
+      rounded
+      px-1
+      text-sm
+      font-bold
+      leading-4
+      ${
+        dayInfo.isHoliday
+          ? "bg-red-50 text-red-600"
+          : !dayInfo.isWorkday &&
+              (dayInfo.isSaturday ||
+                dayInfo.isSunday)
+            ? "bg-gray-200 text-gray-700"
+            : "text-gray-800"
+      }
+    `}
+  >
+    {day}
+  </span>
+
+  <div className="h-4 whitespace-nowrap text-[11px] font-medium leading-4 text-amber-600">
+    {isImportantLunarDay
+      ? `${MONTH_NAMES[lunar.month]}${
+          lunar.day === 1
+            ? "初一"
+            : lunar.day === 12
+              ? "十二"
+              : "十五"
+        }`
+      : ""}
+  </div>
+</div>
 
                         {/* =========================
                             法会
