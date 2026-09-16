@@ -1312,46 +1312,85 @@ setHongbaoPackets(
       <tbody>
         {Array.from({ length: 12 }).map(
           (_, monthIndex) => {
-            const month = monthIndex + 1;
+          const month = monthIndex + 1;
 
-            const daysInMonth = new Date(
-              selectedYear,
-              month,
-              0
-            ).getDate();
+const daysInMonth = new Date(
+  selectedYear,
+  month,
+  0
+).getDate();
+
 /* =========================
-    本月红包
-    ========================= */
+   本月日期范围
+   ========================= */
+const monthStart =
+  `${selectedYear}-${String(
+    month
+  ).padStart(2, "0")}-01`;
+
+const monthEnd =
+  `${selectedYear}-${String(
+    month
+  ).padStart(2, "0")}-${String(
+    daysInMonth
+  ).padStart(2, "0")}`;
+
+/* =========================
+   本月所有法会
+   ========================= */
+const monthCosts =
+  yearCosts.filter((c) => {
+    const start =
+      c.expense_date;
+
+    const end =
+      c.expense_end_date ||
+      c.expense_date;
+
+    return (
+      start <= monthEnd &&
+      end >= monthStart
+    );
+  });
+
+/* =========================
+   本月费用合计
+   ========================= */
+const monthTotal =
+  monthCosts.reduce(
+    (sum, c) =>
+      sum + Number(c.amount || 0),
+    0
+  );
+
+/* =========================
+   本月红包
+   ========================= */
 const monthHongbaoEventIds =
   new Set(
     hongbaoEvents
       .filter((event) => {
+        if (
+          Number(event.event_year) !==
+          Number(selectedYear)
+        ) {
+          return false;
+        }
+
         if (!event.start_date) {
           return false;
         }
 
-        const start =
+        const eventStart =
           event.start_date;
 
-        const end =
+        const eventEnd =
           event.end_date ||
           event.start_date;
 
-        const monthStart =
-          `${selectedYear}-${String(
-            month
-          ).padStart(2, "0")}-01`;
-
-        const monthEnd =
-          `${selectedYear}-${String(
-            month
-          ).padStart(2, "0")}-${String(
-            daysInMonth
-          ).padStart(2, "0")}`;
-
         return (
-          start <= monthEnd &&
-          end >= monthStart
+          eventStart <= monthEnd &&
+          eventEnd >= monthStart
         );
       })
       .map((event) => event.id)
@@ -1372,48 +1411,6 @@ const monthHongbaoTotal =
         ),
       0
     );
-            {/* =========================
-                本月日期范围
-                ========================= */}
-            const monthStart =
-              `${selectedYear}-${String(
-                month
-              ).padStart(2, "0")}-01`;
-
-            const monthEnd =
-              `${selectedYear}-${String(
-                month
-              ).padStart(2, "0")}-${String(
-                daysInMonth
-              ).padStart(2, "0")}`;
-
-            {/* =========================
-                本月所有法会
-                ========================= */}
-            const monthCosts =
-              yearCosts.filter((c) => {
-                const start =
-                  c.expense_date;
-
-                const end =
-                  c.expense_end_date ||
-                  c.expense_date;
-
-                return (
-                  start <= monthEnd &&
-                  end >= monthStart
-                );
-              });
-
-            {/* =========================
-                本月费用合计
-                ========================= */}
-            const monthTotal =
-              monthCosts.reduce(
-                (sum, c) =>
-                  sum + Number(c.amount || 0),
-                0
-              );
 
             return (
               <tr key={month}>
