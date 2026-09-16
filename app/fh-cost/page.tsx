@@ -97,6 +97,74 @@ type CostForm = {
 function money(value: number) {
   return `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 }
+
+function shortEventName(name: string) {
+  const value = String(name || "").trim();
+
+  // 延生普佛 / 往生普佛
+  if (
+    value.includes("延生普佛") &&
+    value.includes("往生普佛")
+  ) {
+    return "延/往";
+  }
+
+  // 如果名称中只出现其中一个
+  if (value.includes("延生普佛")) {
+    return "延生普";
+  }
+
+  if (value.includes("往生普佛")) {
+    return "往生普";
+  }
+
+ if (value.includes("法华法会")) {
+    return "法华";
+  }
+  // 春季水陆
+  if (value.includes("春季水陆")) {
+    return "春水陆";
+  }
+
+  // 秋季水陆 / 秋水陆
+  if (
+    value.includes("秋季水陆") ||
+    value.includes("秋水陆")
+  ) {
+    return "秋水陆";
+  }
+
+  // 观音七法会
+  if (value.includes("观音七法会")) {
+    return "观音七";
+  }
+
+  // 浴佛节
+  if (value.includes("浴佛节")) {
+    return "浴佛节";
+  }
+
+  // 观世音菩萨成道日法会
+  if (value.includes("观世音菩萨成道日法会")) {
+    return "观音道";
+  }
+
+  // 观世音菩萨出家日
+  if (value.includes("观世音菩萨出家日")) {
+    return "观音家";
+  }
+
+if (value.includes("文殊菩萨圣诞")) {
+    return "文殊";
+  }
+  
+
+  if (value.includes("地藏法会")) {
+    return "地藏";
+  }
+  // 其他法会：固定取前三个字
+  return value.slice(0, 3);
+}
 function solarToLunar(date: string) {
   if (!date) return null;
   try {
@@ -417,11 +485,37 @@ export default function FHCostPage() {
         const startLunar = targetDate ? solarToLunar(targetDate) : null;
         const endLunar = targetEndDate ? solarToLunar(targetEndDate) : null;
 
-        const newSchedules = (c.schedules || []).map(sch => {
-          if (!sch.date) return sch;
-          const [, m, d] = sch.date.split("-");
-          return { ...sch, date: `${targetYear}-${m}-${d}` };
-        });
+       const newSchedules = (c.schedules || []).map(
+  (sch) => {
+    if (!sch.date) return sch;
+
+    try {
+      const lunar =
+        solarToLunar(sch.date);
+
+      if (
+        !lunar ||
+        !lunar.month ||
+        !lunar.day
+      ) {
+        return sch;
+      }
+
+      const newDate = lunarToSolar(
+        targetYear,
+        lunar.month,
+        lunar.day
+      );
+
+      return {
+        ...sch,
+        date: newDate || sch.date,
+      };
+    } catch {
+      return sch;
+    }
+  }
+);
 
         inserts.push({ 
           temple_id: c.temple_id, 
@@ -455,6 +549,147 @@ export default function FHCostPage() {
     finally { setSaving(false); }
   }
 
+  async function fixCopiedSchedules(
+  sourceYear: number,
+  targetYear: number
+) {
+  clearMsg();
+
+  const sourceCosts = costs.filter(
+    (c) => c.expense_year === sourceYear
+  );
+
+  const targetCosts = costs.filter(
+    (c) => c.expense_year === targetYear
+  );
+
+  if (!sourceCosts.length) {
+    return setError(
+      `${sourceYear} 年没有费用记录`
+    );
+  }
+
+  if (!targetCosts.length) {
+    return setError(
+      `${targetYear} 年没有费用记录`
+    );
+  }
+
+  if (
+    !confirm(
+      `确定根据 ${sourceYear} 年的农历日期，修复 ${targetYear} 年所有焰口 / 蒙山日期吗？`
+    )
+  ) {
+    return;
+  }
+
+  try {
+    setSaving(true);
+    clearMsg();
+
+    let updateCount = 0;
+
+    for (const source of sourceCosts) {
+      /*
+       * 找对应的目标法会
+       *
+       * COPY 时这些字段保持一致，
+       * 所以用寺庙 + 名称 + 金额 + 农历月日匹配
+       */
+      const target = targetCosts.find(
+        (x) =>
+          x.temple_id === source.temple_id &&
+          x.event_name === source.event_name &&
+          Number(x.amount || 0) ===
+            Number(source.amount || 0) &&
+          x.lunar_month === source.lunar_month &&
+          x.lunar_day === source.lunar_day
+      );
+
+      if (!target) continue;
+
+      const sourceSchedules =
+        source.schedules || [];
+
+      if (!sourceSchedules.length) continue;
+
+      /*
+       * 根据 2026 的阳历 schedule
+       * 找出它对应的农历日期，
+       * 再转换成 2027 阳历
+       */
+      const newSchedules =
+        sourceSchedules.map((sch) => {
+          if (!sch.date) {
+            return sch;
+          }
+
+          try {
+            const lunar =
+              solarToLunar(sch.date);
+
+            if (
+              !lunar ||
+              !lunar.month ||
+              !lunar.day
+            ) {
+              return sch;
+            }
+
+            const newDate =
+              lunarToSolar(
+                targetYear,
+                lunar.month,
+                lunar.day
+              );
+
+            if (!newDate) {
+              return sch;
+            }
+
+            return {
+              ...sch,
+              date: newDate,
+            };
+          } catch {
+            return sch;
+          }
+        });
+
+      const { error } =
+        await supabase
+          .from("fh_costs")
+          .update({
+            schedules: newSchedules,
+          })
+          .eq("id", target.id);
+
+      if (error) {
+        throw error;
+      }
+
+      updateCount++;
+    }
+
+    /*
+     * 重新读取数据库
+     */
+    await loadAll();
+
+    setSelectedYear(targetYear);
+
+    setMessage(
+      `已修复 ${updateCount} 条 ${targetYear} 年法会的焰口 / 蒙山日期`
+    );
+  } catch (e: any) {
+    setError(
+      e?.message ||
+        "修复焰口 / 蒙山日期失败"
+    );
+  } finally {
+    setSaving(false);
+  }
+}
   if (loading) return <main className="min-h-screen bg-gray-50 p-8"><div className="mx-auto max-w-7xl rounded-2xl bg-white p-8 shadow-sm">正在读取法会费用……</div></main>;
 
   return (
@@ -612,6 +847,637 @@ export default function FHCostPage() {
             })
           )}
         </section>
+
+
+  
+
+
+
+{/* =========================
+    全年法会费用日历
+    ========================= */}
+<section
+  className="
+    relative
+    -ml-[200px]
+    -mr-[200px]
+    mt-6
+    mb-6
+    w-[calc(100%+400px)]
+    rounded-2xl
+    border
+    border-gray-200
+    bg-white
+    shadow-sm
+  "
+>
+  {/* =========================
+      标题
+      ========================= */}
+  <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 px-5 py-3">
+    <div className="w-full text-center">
+  <h2 className="text-xl font-bold text-gray-900">
+    {selectedYear}年法会费用日历
+  </h2>
+
+  <p className="mt-1 text-sm text-gray-500">
+    点击法会可以直接编辑
+  </p>
+</div>
+
+    {/* =========================
+        焰 / 蒙图例
+        ========================= */}
+    <div className="flex items-center gap-5 text-sm">
+      <div className="flex items-center gap-2">
+        <span
+          className="
+            inline-flex
+            rounded
+            border
+            border-orange-300
+            bg-orange-100
+            px-2
+            py-1
+            text-xs
+            font-bold
+            text-orange-700
+          "
+        >
+          焰
+        </span>
+
+        <span className="text-gray-600">
+          焰口
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span
+          className="
+            inline-flex
+            rounded
+            border
+            border-blue-300
+            bg-blue-100
+            px-2
+            py-1
+            text-xs
+            font-bold
+            text-blue-700
+          "
+        >
+          蒙
+        </span>
+
+        <span className="text-gray-600">
+          蒙山
+        </span>
+      </div>
+    </div>
+  </div>
+
+  {/* =========================
+      日历主体
+      ========================= */}
+  <div className="w-full">
+    <table className="w-full table-fixed border-collapse">
+      <colgroup>
+        {/* 本月费用 */}
+        <col style={{ width: "100px" }} />
+
+        {/* 月份 */}
+        <col style={{ width: "72px" }} />
+
+        {/* 31天 */}
+        {Array.from({ length: 31 }).map(
+          (_, index) => (
+            <col key={index} />
+          )
+        )}
+      </colgroup>
+
+      {/* =========================
+          日期表头
+          ========================= */}
+      <thead>
+        <tr className="bg-gray-50">
+          {/* 本月费用 */}
+          <th
+            className="
+              h-[40px]
+              border-b
+              border-r
+              border-gray-200
+              px-1
+              py-2
+              text-center
+              text-sm
+              font-bold
+              text-gray-700
+            "
+          >
+            本月费用
+          </th>
+
+          {/* 月 */}
+          <th
+            className="
+              h-[40px]
+              border-b
+              border-r
+              border-gray-200
+              px-1
+              py-2
+              text-center
+              text-sm
+              font-bold
+              text-gray-700
+            "
+          >
+            月
+          </th>
+
+          {/* 1 - 31 */}
+          {Array.from({ length: 31 }).map(
+            (_, index) => {
+              const day = index + 1;
+
+              return (
+                <th
+                  key={day}
+                  className="
+                    h-[40px]
+                    border-b
+                    border-r
+                    border-gray-200
+                    px-0
+                    py-2
+                    text-center
+                    text-sm
+                    font-bold
+                    text-gray-700
+                  "
+                >
+                  {day}
+                </th>
+              );
+            }
+          )}
+        </tr>
+      </thead>
+
+      {/* =========================
+          12个月
+          ========================= */}
+      <tbody>
+        {Array.from({ length: 12 }).map(
+          (_, monthIndex) => {
+            const month = monthIndex + 1;
+
+            const daysInMonth = new Date(
+              selectedYear,
+              month,
+              0
+            ).getDate();
+
+            {/* =========================
+                本月日期范围
+                ========================= */}
+            const monthStart =
+              `${selectedYear}-${String(
+                month
+              ).padStart(2, "0")}-01`;
+
+            const monthEnd =
+              `${selectedYear}-${String(
+                month
+              ).padStart(2, "0")}-${String(
+                daysInMonth
+              ).padStart(2, "0")}`;
+
+            {/* =========================
+                本月所有法会
+                ========================= */}
+            const monthCosts =
+              yearCosts.filter((c) => {
+                const start =
+                  c.expense_date;
+
+                const end =
+                  c.expense_end_date ||
+                  c.expense_date;
+
+                return (
+                  start <= monthEnd &&
+                  end >= monthStart
+                );
+              });
+
+            {/* =========================
+                本月费用合计
+                ========================= */}
+            const monthTotal =
+              monthCosts.reduce(
+                (sum, c) =>
+                  sum + Number(c.amount || 0),
+                0
+              );
+
+            return (
+              <tr key={month}>
+                {/* =========================
+                    本月费用
+                    ========================= */}
+                <td
+                  className="
+                    h-[64px]
+                    border-b
+                    border-r
+                    border-gray-200
+                    bg-gray-50
+                    px-1
+                    text-center
+                    align-middle
+                  "
+                >
+                  <div
+                    className="
+                      whitespace-nowrap
+                      text-sm
+                      font-bold
+                      text-gray-900
+                    "
+                  >
+                    {money(monthTotal)}
+                  </div>
+
+                  <div
+                    className="
+                      mt-0.5
+                      text-xs
+                      text-gray-500
+                    "
+                  >
+                    {monthCosts.length} 场
+                  </div>
+                </td>
+
+                {/* =========================
+                    月份
+                    ========================= */}
+                <td
+                  className="
+                    h-[64px]
+                    border-b
+                    border-r
+                    border-gray-200
+                    bg-gray-50
+                    px-1
+                    text-center
+                    align-middle
+                  "
+                >
+                  <div className="text-sm font-bold text-gray-900">
+                    {String(month).padStart(
+                      2,
+                      "0"
+                    )}
+                    月
+                  </div>
+
+                  <div className="mt-0.5 text-xs text-gray-500">
+                    {MONTH_NAMES[month]}
+                  </div>
+                </td>
+
+                {/* =========================
+                    每一天
+                    ========================= */}
+                {Array.from({ length: 31 }).map(
+                  (_, dayIndex) => {
+                    const day = dayIndex + 1;
+
+                    {/* 不存在的日期 */}
+                    if (day > daysInMonth) {
+                      return (
+                        <td
+                          key={day}
+                          className="
+                            h-[64px]
+                            border-b
+                            border-r
+                            border-gray-200
+                            bg-gray-100
+                          "
+                        />
+                      );
+                    }
+
+                    {/* YYYY-MM-DD */}
+                    const date =
+                      `${selectedYear}-${String(
+                        month
+                      ).padStart(
+                        2,
+                        "0"
+                      )}-${String(day).padStart(
+                        2,
+                        "0"
+                      )}`;
+
+                    {/* 找出当天所有法会 */}
+                    const dayCosts =
+                      yearCosts.filter((c) => {
+                        const start =
+                          c.expense_date;
+
+                        const end =
+                          c.expense_end_date ||
+                          c.expense_date;
+
+                        return (
+                          date >= start &&
+                          date <= end
+                        );
+                      });
+
+                    return (
+                      <td
+                        key={day}
+                        className="
+                          h-[64px]
+                          border-b
+                          border-r
+                          border-gray-200
+                          bg-white
+                          p-0.5
+                          align-top
+                        "
+                      >
+                        {/* =========================
+                            阳历日期
+                            ========================= */}
+                        <div className="mb-0.5 text-center">
+                          <span
+                            className="
+                              text-sm
+                              font-bold
+                              leading-4
+                              text-gray-800
+                            "
+                          >
+                            {day}
+                          </span>
+                        </div>
+
+                        {/* =========================
+                            法会
+                            ========================= */}
+                        <div className="space-y-0.5">
+                          {dayCosts.map((c) => {
+                            const templeName =
+                              templeMap.get(
+                                c.temple_id
+                              ) ||
+                              "未设置寺庙";
+
+                            {/* 寺庙颜色 */}
+                            const templeColor =
+                              getTempleColor(
+                                templeName
+                              );
+
+                            {/* 找当天焰口 / 蒙山 */}
+                            const todaySchedules =
+                              (
+                                c.schedules || []
+                              ).filter(
+                                (s) =>
+                                  s.date === date
+                              );
+
+                            const hasYanKou =
+                              todaySchedules.some(
+                                (s) =>
+                                  s.type ===
+                                  "焰口"
+                              );
+
+                            const hasMengShan =
+                              todaySchedules.some(
+                                (s) =>
+                                  s.type ===
+                                  "蒙山"
+                              );
+
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() =>
+                                  openEdit(c)
+                                }
+                                title={`${c.event_name}｜${templeName}${
+                                  hasYanKou
+                                    ? "｜焰口"
+                                    : ""
+                                }${
+                                  hasMengShan
+                                    ? "｜蒙山"
+                                    : ""
+                                }｜${money(
+                                  Number(
+                                    c.amount || 0
+                                  )
+                                )}`}
+                                className={`
+                                  block
+                                  w-full
+                                  rounded
+                                  border
+                                  px-0
+                                  py-0.5
+                                  text-center
+                                  transition
+                                  hover:shadow-sm
+                                  ${templeColor.bg}
+                                `}
+                              >
+                                {/* 法会简称 */}
+                                <div
+                                  className="
+                                    whitespace-nowrap
+                                    text-center
+                                    text-sm
+                                    font-bold
+                                    leading-5
+                                  "
+                                >
+                                  {shortEventName(
+                                    c.event_name
+                                  )}
+                                </div>
+
+                                {/* 焰 / 蒙 */}
+                                {(
+                                  hasYanKou ||
+                                  hasMengShan
+                                ) && (
+                                  <div
+                                    className="
+                                      mt-0.5
+                                      flex
+                                      items-center
+                                      justify-center
+                                      gap-0.5
+                                    "
+                                  >
+                                    {hasYanKou && (
+                                      <span
+                                        className="
+                                          inline-flex
+                                          rounded
+                                          border
+                                          border-orange-300
+                                          bg-orange-100
+                                          px-1
+                                          text-xs
+                                          font-bold
+                                          leading-4
+                                          text-orange-700
+                                        "
+                                      >
+                                        焰
+                                      </span>
+                                    )}
+
+                                    {hasMengShan && (
+                                      <span
+                                        className="
+                                          inline-flex
+                                          rounded
+                                          border
+                                          border-blue-300
+                                          bg-blue-100
+                                          px-1
+                                          text-xs
+                                          font-bold
+                                          leading-4
+                                          text-blue-700
+                                        "
+                                      >
+                                        蒙
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    );
+                  }
+                )}
+              </tr>
+            );
+          }
+        )}
+      </tbody>
+    </table>
+  </div>
+
+  {/* =========================
+      寺庙颜色图例
+      ========================= */}
+  <div
+    className="
+      flex
+      flex-wrap
+      items-center
+      gap-4
+      border-t
+      border-gray-200
+      px-5
+      py-3
+    "
+  >
+    <span className="text-sm font-semibold text-gray-700">
+      寺庙颜色：
+    </span>
+
+    {temples.map((temple) => {
+      const templeColor =
+        getTempleColor(temple.name);
+
+      return (
+        <div
+          key={temple.id}
+          className={`
+            rounded-md
+            border
+            px-3
+            py-1
+            text-sm
+            font-medium
+            ${templeColor.bg}
+          `}
+        >
+          {temple.name}
+        </div>
+      );
+    })}
+
+    {/* =========================
+        焰 / 蒙图例
+        ========================= */}
+    <div className="ml-2 flex items-center gap-2 text-sm text-gray-600">
+      <span
+        className="
+          rounded
+          border
+          border-orange-300
+          bg-orange-100
+          px-1.5
+          py-0.5
+          text-xs
+          font-bold
+          text-orange-700
+        "
+      >
+        焰
+      </span>
+
+      <span>
+        焰口
+      </span>
+
+      <span
+        className="
+          ml-2
+          rounded
+          border
+          border-blue-300
+          bg-blue-100
+          px-1.5
+          py-0.5
+          text-xs
+          font-bold
+          text-blue-700
+        "
+      >
+        蒙
+      </span>
+
+      <span>
+        蒙山
+      </span>
+    </div>
+  </div>
+</section>
+
+
 
         {showForm && (
           <div className="fixed inset-0 z-50 overflow-y-auto bg-black/30 p-4">
