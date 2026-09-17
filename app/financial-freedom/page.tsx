@@ -609,6 +609,16 @@ export default function FinancialFreedomPage() {
     getInitialForecastInputs()
   );
 
+  // =====================================================
+// 一键设置全部年份资产增长率
+// =====================================================
+const [
+  bulkGrowthRate,
+  setBulkGrowthRate,
+] = useState<number>(
+  DEFAULT_GROWTH_RATE
+);
+
 
   // ===================================================
   // 是否已经从 Supabase 恢复
@@ -1596,6 +1606,50 @@ export default function FinancialFreedomPage() {
 
   }
 
+    // =====================================================
+  // 一键设置所有年份资产增长率
+  // =====================================================
+  function applyBulkGrowthRate() {
+
+    const value =
+      Number.isFinite(
+        Number(bulkGrowthRate)
+      )
+        ? Number(bulkGrowthRate)
+        : 0;
+
+    setForecastInputs(
+      (prev) => {
+
+        const next: ForecastInputs = {
+          ...prev,
+        };
+
+        for (
+          let year = FORECAST_BASE_YEAR;
+          year <= END_YEAR;
+          year++
+        ) {
+
+          next[year] = {
+            ...(
+              prev[year] ??
+              getDefaultForecastInput(
+                year
+              )
+            ),
+
+            growthRate: value,
+          };
+
+        }
+
+        return next;
+
+      }
+    );
+
+  }
 
   // =====================================================
   // 当前财务自由目标
@@ -2224,7 +2278,7 @@ export default function FinancialFreedomPage() {
 
           </div>
 
-
+  
           {/* =================================================
               公式说明
               ================================================= */}
@@ -2279,7 +2333,115 @@ export default function FinancialFreedomPage() {
 
           </div>
 
+{/* =================================================
+              一键设置资产增长率
+              ================================================= */}
 
+          <div
+            className="
+              mb-5
+              flex
+              flex-wrap
+              items-center
+              gap-3
+              rounded-xl
+              border
+              border-blue-100
+              bg-blue-50
+              px-4
+              py-3
+            "
+          >
+
+            <div
+              className="
+                text-sm
+                font-semibold
+                text-gray-700
+              "
+            >
+              资产增长率统一设置
+            </div>
+
+
+            <div
+              className="
+                flex
+                items-center
+                gap-2
+              "
+            >
+
+              <input
+                type="number"
+                step="0.1"
+                value={bulkGrowthRate}
+                onChange={(e) =>
+                  setBulkGrowthRate(
+                    Number(e.target.value)
+                  )
+                }
+                className="
+                  w-24
+                  rounded-lg
+                  border
+                  border-gray-200
+                  bg-white
+                  px-3
+                  py-2
+                  text-right
+                  text-sm
+                  font-medium
+                  text-gray-800
+                  outline-none
+                  focus:border-blue-400
+                  focus:ring-2
+                  focus:ring-blue-100
+                "
+              />
+
+              <span
+                className="
+                  text-sm
+                  text-gray-600
+                "
+              >
+                %
+              </span>
+
+
+              <button
+                type="button"
+                onClick={applyBulkGrowthRate}
+                className="
+                  rounded-lg
+                  bg-blue-600
+                  px-4
+                  py-2
+                  text-sm
+                  font-semibold
+                  text-white
+                  transition
+                  hover:bg-blue-700
+                  active:scale-[0.98]
+                "
+              >
+                一键应用到全部年份
+              </button>
+
+            </div>
+
+
+            <div
+              className="
+                text-xs
+                text-gray-500
+              "
+            >
+              2026–2042 全部统一修改
+            </div>
+
+          </div>
           {/* =================================================
               年度表
               ================================================= */}
