@@ -533,7 +533,18 @@ export default function FinancialFreedomPage() {
     setFixedIncomeTotal,
   ] = useState(0);
 
+// ===================================================
+// 年度资产估算：当前大陆 / 香港资产
+// ===================================================
+const [
+  currentMainlandAsset,
+  setCurrentMainlandAsset,
+] = useState(0);
 
+const [
+  currentHkAsset,
+  setCurrentHkAsset,
+] = useState(0);
   // ===================================================
   // Financial Freedom 贷款
   // ===================================================
@@ -619,7 +630,30 @@ const [
   DEFAULT_GROWTH_RATE
 );
 
+// =====================================================
+// 年度资产估算：统一增长率
+// =====================================================
+const [
+  mainlandGrowthRate,
+  setMainlandGrowthRate,
+] = useState<number>(
+  DEFAULT_GROWTH_RATE
+);
 
+const [
+  hkGrowthRate,
+  setHkGrowthRate,
+] = useState<number>(
+  DEFAULT_GROWTH_RATE
+);
+
+const [
+  fixedIncomeGrowthRate,
+  setFixedIncomeGrowthRate,
+] =
+  useState<number>(
+    DEFAULT_GROWTH_RATE
+  );
   // ===================================================
   // 是否已经从 Supabase 恢复
   // ===================================================
@@ -646,15 +680,43 @@ const [
         // =================================================
         // 1. 获取 Dashboard 最新资产
         // =================================================
+const latest =
+  await getLatestAsset();
 
-        const latest =
-          await getLatestAsset();
+const originalAsset =
+  Number(
+    latest?.total_asset
+  ) ||
+  START_ASSET;
 
-        const originalAsset =
-          Number(
-            latest?.total_asset
-          ) ||
-          START_ASSET;
+// =================================================
+// 年度资产估算：当前大陆 / 香港资产
+// =================================================
+const latestMainlandAsset =
+  Number(
+    latest?.cn_asset ?? 0
+  );
+
+const latestHkAsset =
+  Number(
+    latest?.hk_asset ?? 0
+  );
+
+setCurrentMainlandAsset(
+  Number.isFinite(
+    latestMainlandAsset
+  )
+    ? latestMainlandAsset
+    : 0
+);
+
+setCurrentHkAsset(
+  Number.isFinite(
+    latestHkAsset
+  )
+    ? latestHkAsset
+    : 0
+);
 
 
         // =================================================
@@ -3292,6 +3354,622 @@ const [
           </div>
 
         </section>
+
+        {/* =================================================
+            ★ 年度资产估算
+            ================================================= */}
+        <section
+          className="
+            bg-white
+            border
+            border-gray-100
+            rounded-2xl
+            p-6
+            shadow-sm
+          "
+        >
+          <div
+            className="
+              mb-5
+              flex
+              flex-col
+              gap-4
+            "
+          >
+            <div>
+              <h2
+                className="
+                  text-xl
+                  font-bold
+                  text-gray-900
+                "
+              >
+                📊 年度资产估算
+              </h2>
+
+              <p
+                className="
+                  mt-2
+                  text-sm
+                  text-gray-500
+                "
+              >
+                大陆、香港与 Fixed Income 分开估算，
+                投资金额自动读取上面的年度计划。
+              </p>
+            </div>
+
+            {/* =================================================
+                统一增长率设置
+                ================================================= */}
+            <div
+              className="
+                flex
+                flex-wrap
+                items-center
+                gap-4
+                rounded-xl
+                border
+                border-blue-100
+                bg-blue-50
+                px-4
+                py-4
+              "
+            >
+              <div
+                className="
+                  text-sm
+                  font-bold
+                  text-gray-700
+                "
+              >
+                统一增长率
+              </div>
+
+              {/* 大陆 */}
+              <div
+                className="
+                  flex
+                  items-center
+                  gap-2
+                "
+              >
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  大陆
+                </span>
+
+                <input
+                  type="number"
+                  step="0.1"
+                  value={
+                    mainlandGrowthRate
+                  }
+                  onChange={(e) =>
+                    setMainlandGrowthRate(
+                      Number(
+                        e.target.value
+                      )
+                    )
+                  }
+                  className="
+                    w-20
+                    rounded-lg
+                    border
+                    border-gray-200
+                    bg-white
+                    px-2
+                    py-2
+                    text-right
+                    text-sm
+                    font-medium
+                    text-gray-800
+                    outline-none
+                    focus:border-blue-400
+                    focus:ring-2
+                    focus:ring-blue-100
+                  "
+                />
+
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  %
+                </span>
+              </div>
+
+              {/* 香港 */}
+              <div
+                className="
+                  flex
+                  items-center
+                  gap-2
+                "
+              >
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  香港
+                </span>
+
+                <input
+                  type="number"
+                  step="0.1"
+                  value={
+                    hkGrowthRate
+                  }
+                  onChange={(e) =>
+                    setHkGrowthRate(
+                      Number(
+                        e.target.value
+                      )
+                    )
+                  }
+                  className="
+                    w-20
+                    rounded-lg
+                    border
+                    border-gray-200
+                    bg-white
+                    px-2
+                    py-2
+                    text-right
+                    text-sm
+                    font-medium
+                    text-gray-800
+                    outline-none
+                    focus:border-blue-400
+                    focus:ring-2
+                    focus:ring-blue-100
+                  "
+                />
+
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  %
+                </span>
+              </div>
+
+              {/* Fixed Income */}
+              <div
+                className="
+                  flex
+                  items-center
+                  gap-2
+                "
+              >
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  Fixed Income
+                </span>
+
+                <input
+                  type="number"
+                  step="0.1"
+                  value={
+                    fixedIncomeGrowthRate
+                  }
+                  onChange={(e) =>
+                    setFixedIncomeGrowthRate(
+                      Number(
+                        e.target.value
+                      )
+                    )
+                  }
+                  className="
+                    w-20
+                    rounded-lg
+                    border
+                    border-gray-200
+                    bg-white
+                    px-2
+                    py-2
+                    text-right
+                    text-sm
+                    font-medium
+                    text-gray-800
+                    outline-none
+                    focus:border-blue-400
+                    focus:ring-2
+                    focus:ring-blue-100
+                  "
+                />
+
+                <span
+                  className="
+                    text-sm
+                    text-gray-600
+                  "
+                >
+                  %
+                </span>
+              </div>
+
+              <div
+                className="
+                  text-xs
+                  text-gray-500
+                "
+              >
+                修改后 2027–2042 全部自动重新计算
+              </div>
+            </div>
+          </div>
+
+          {/* =================================================
+              年度资产计算
+              ================================================= */}
+          <div
+            className="
+              overflow-x-auto
+            "
+          >
+            <table
+              className="
+                w-full
+                min-w-[1100px]
+                border-collapse
+                text-sm
+              "
+            >
+              <thead>
+                <tr
+                  className="
+                    border-b
+                    border-gray-200
+                    bg-gray-50
+                    text-gray-600
+                  "
+                >
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-center
+                      font-bold
+                    "
+                  >
+                    年份
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-right
+                      font-bold
+                    "
+                  >
+                    大陆资产
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-center
+                      font-bold
+                    "
+                  >
+                    大陆增长率
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-right
+                      font-bold
+                    "
+                  >
+                    香港资产
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-center
+                      font-bold
+                    "
+                  >
+                    香港增长率
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-right
+                      font-bold
+                    "
+                  >
+                    Fixed Income
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-center
+                      font-bold
+                    "
+                  >
+                    固收增长率
+                  </th>
+
+                  <th
+                    className="
+                      px-3
+                      py-3
+                      text-right
+                      font-bold
+                    "
+                  >
+                    总资产
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {(() => {
+                  let mainlandAsset =
+                    currentMainlandAsset;
+
+                  let hkAsset =
+                    currentHkAsset;
+
+                  let fixedIncomeAsset =
+                    fixedIncomeTotal;
+
+                  return rows.map(
+                    (
+                      row: any
+                    ) => {
+                      const year =
+                        Number(
+                          row.year
+                        );
+
+                      const input =
+                        forecastInputs[
+                          year
+                        ] ??
+                        getDefaultForecastInput(
+                          year
+                        );
+
+                      const isBaseYear =
+                        year ===
+                        FORECAST_BASE_YEAR;
+
+                      if (
+                        !isBaseYear
+                      ) {
+                        mainlandAsset =
+                          mainlandAsset *
+                            (
+                              1 +
+                              mainlandGrowthRate /
+                                100
+                            ) +
+                          Number(
+                            input.mainlandInvestment ||
+                              0
+                          ) *
+                            10000;
+
+                        hkAsset =
+                          hkAsset *
+                            (
+                              1 +
+                              hkGrowthRate /
+                                100
+                            ) +
+                          Number(
+                            input.hkInvestment ||
+                              0
+                          ) *
+                            10000;
+
+                        const remainingCash =
+                          getAnnualRemainingCash(
+                            input
+                          );
+
+                        fixedIncomeAsset =
+                          fixedIncomeAsset *
+                            (
+                              1 +
+                              fixedIncomeGrowthRate /
+                                100
+                            ) +
+                          remainingCash *
+                            10000;
+                      }
+
+                      const totalAsset =
+                        mainlandAsset +
+                        hkAsset +
+                        fixedIncomeAsset;
+
+                      return (
+                        <tr
+                          key={
+                            year
+                          }
+                          className="
+                            border-b
+                            border-gray-100
+                            hover:bg-gray-50
+                          "
+                        >
+                          {/* 年份 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-center
+                              font-bold
+                              text-gray-800
+                            "
+                          >
+                            <div>
+                              {year}
+                            </div>
+
+                            {isBaseYear ? (
+                              <div
+                                className="
+                                  mt-1
+                                  text-xs
+                                  font-normal
+                                  text-gray-400
+                                "
+                              >
+                                当前资产
+                              </div>
+                            ) : null}
+                          </td>
+
+                          {/* 大陆资产 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-right
+                              font-bold
+                              text-gray-900
+                              whitespace-nowrap
+                            "
+                          >
+                            {money(
+                              mainlandAsset
+                            )}
+                          </td>
+
+                          {/* 大陆增长率 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-center
+                              font-semibold
+                              text-blue-700
+                            "
+                          >
+                            {isBaseYear
+                              ? "—"
+                              : `${mainlandGrowthRate}%`}
+                          </td>
+
+                          {/* 香港资产 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-right
+                              font-bold
+                              text-gray-900
+                              whitespace-nowrap
+                            "
+                          >
+                            {money(
+                              hkAsset
+                            )}
+                          </td>
+
+                          {/* 香港增长率 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-center
+                              font-semibold
+                              text-blue-700
+                            "
+                          >
+                            {isBaseYear
+                              ? "—"
+                              : `${hkGrowthRate}%`}
+                          </td>
+
+                          {/* Fixed Income */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-right
+                              font-bold
+                              text-gray-900
+                              whitespace-nowrap
+                            "
+                          >
+                            {money(
+                              fixedIncomeAsset
+                            )}
+                          </td>
+
+                          {/* 固收增长率 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-center
+                              font-semibold
+                              text-blue-700
+                            "
+                          >
+                            {isBaseYear
+                              ? "—"
+                              : `${fixedIncomeGrowthRate}%`}
+                          </td>
+
+                          {/* 总资产 */}
+                          <td
+                            className="
+                              px-3
+                              py-4
+                              text-right
+                              font-bold
+                              text-green-700
+                              whitespace-nowrap
+                            "
+                          >
+                            {money(
+                              totalAsset
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    }
+                  );
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+
+
 
 
         {/* =================================================
