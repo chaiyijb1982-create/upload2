@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useMemo,
   useState,
 } from "react";
 
@@ -533,6 +534,10 @@ export default function FinancialFreedomPage() {
     setFixedIncomeTotal,
   ] = useState(0);
 
+  
+
+
+  
 // ===================================================
 // 年度资产估算：当前大陆 / 香港资产
 // ===================================================
@@ -545,6 +550,22 @@ const [
   currentHkAsset,
   setCurrentHkAsset,
 ] = useState(0);
+
+const [
+  mainlandGrowthRate,
+  setMainlandGrowthRate,
+] = useState(DEFAULT_GROWTH_RATE);
+
+const [
+  hkGrowthRate,
+  setHkGrowthRate,
+] = useState(DEFAULT_GROWTH_RATE);
+
+const [
+  fixedIncomeGrowthRate,
+  setFixedIncomeGrowthRate,
+] = useState(DEFAULT_GROWTH_RATE);
+
   // ===================================================
   // Financial Freedom 贷款
   // ===================================================
@@ -588,6 +609,18 @@ const [
     >
   >({});
 
+  // Financial Freedom 贷款列表
+  const [
+    financialFreedomLoans,
+    setFinancialFreedomLoans,
+  ] = useState<any[]>([]);
+
+  // 宁波消费贷款 30 万：在哪一年还清
+  const [
+    ningboRepaymentYear,
+    setNingboRepaymentYear,
+  ] = useState<number>(2027);
+
 
   // ===================================================
   // 年度预测结果
@@ -630,30 +663,9 @@ const [
   DEFAULT_GROWTH_RATE
 );
 
-// =====================================================
-// 年度资产估算：统一增长率
-// =====================================================
-const [
-  mainlandGrowthRate,
-  setMainlandGrowthRate,
-] = useState<number>(
-  DEFAULT_GROWTH_RATE
-);
 
-const [
-  hkGrowthRate,
-  setHkGrowthRate,
-] = useState<number>(
-  DEFAULT_GROWTH_RATE
-);
 
-const [
-  fixedIncomeGrowthRate,
-  setFixedIncomeGrowthRate,
-] =
-  useState<number>(
-    DEFAULT_GROWTH_RATE
-  );
+
   // ===================================================
   // 是否已经从 Supabase 恢复
   // ===================================================
@@ -688,6 +700,14 @@ const originalAsset =
     latest?.total_asset
   ) ||
   START_ASSET;
+
+setCurrentMainlandAsset(
+  Number(latest?.cn_asset ?? 0)
+);
+
+setCurrentHkAsset(
+  Number(latest?.hk_asset ?? 0)
+);
 
 // =================================================
 // 年度资产估算：当前大陆 / 香港资产
@@ -812,6 +832,18 @@ setCurrentHkAsset(
 
         const ffLoans =
           await getFinancialFreedomLoans();
+
+        const ffLoanList =
+          Array.isArray(ffLoans)
+            ? ffLoans
+            : [];
+
+        setFinancialFreedomLoans(
+          ffLoanList
+        );
+
+        // 宁波消费贷款 30 万的还款年份由页面上方选择框控制。
+        // 不修改其他贷款的原有计算逻辑。
 
 
         const loanBalance =
@@ -1053,6 +1085,47 @@ setCurrentHkAsset(
         }
 
 
+        // =================================================
+        // 恢复年度资产估算的统一增长率
+        // =================================================
+        const savedAssetGrowthRates =
+          saved &&
+          typeof saved === "object" &&
+          !Array.isArray(saved) &&
+          (saved as Record<string, any>)
+            ._assetGrowthRates;
+
+        if (
+          savedAssetGrowthRates &&
+          typeof savedAssetGrowthRates === "object"
+        ) {
+          const savedMainlandGrowthRate =
+            Number(savedAssetGrowthRates.mainland);
+          const savedHkGrowthRate =
+            Number(savedAssetGrowthRates.hk);
+          const savedFixedIncomeGrowthRate =
+            Number(savedAssetGrowthRates.fixedIncome);
+
+          if (Number.isFinite(savedMainlandGrowthRate)) {
+            setMainlandGrowthRate(
+              savedMainlandGrowthRate
+            );
+          }
+
+          if (Number.isFinite(savedHkGrowthRate)) {
+            setHkGrowthRate(
+              savedHkGrowthRate
+            );
+          }
+
+          if (Number.isFinite(savedFixedIncomeGrowthRate)) {
+            setFixedIncomeGrowthRate(
+              savedFixedIncomeGrowthRate
+            );
+          }
+        }
+
+
         setForecastInputs(
           restored
         );
@@ -1066,9 +1139,14 @@ setCurrentHkAsset(
 
           window.localStorage.setItem(
             "financial_freedom_forecast_inputs_v1",
-            JSON.stringify(
-              restored
-            )
+            JSON.stringify({
+              ...restored,
+              _assetGrowthRates: {
+                mainland: mainlandGrowthRate,
+                hk: hkGrowthRate,
+                fixedIncome: fixedIncomeGrowthRate,
+              },
+            })
           );
 
         }
@@ -1119,8 +1197,11 @@ setCurrentHkAsset(
 
         // =================================================
         // 10. 年度贷款模型
+        //
+        // 恢复原有贷款计算，只额外增加：
+        // 宁波消费贷款 300,000 在选择的年份一次性计入
+        // “贷款(不包含房贷)”。
         // =================================================
-
         const loans:
           Record<
             number,
@@ -1130,14 +1211,12 @@ setCurrentHkAsset(
             }
           > = {};
 
-
         for (
           let year = FORECAST_BASE_YEAR;
           year <= END_YEAR;
           year++
         ) {
-
-          const payment =
+          const originalPayment =
             await getFinancialFreedomLoanPayment(
               year
             );
@@ -1147,23 +1226,13 @@ setCurrentHkAsset(
               year
             );
 
-
           loans[year] = {
-
             payment:
-              Number(
-                payment || 0
-              ),
-
+              Number(originalPayment || 0),
             pressure:
-              Number(
-                pressure || 0
-              ),
-
+              Number(pressure || 0),
           };
-
         }
-
 
         setLoanPressure(
           loans
@@ -1281,7 +1350,14 @@ setCurrentHkAsset(
                   freedomRate,
 
                 forecast_inputs:
-                  forecastInputs,
+                  {
+                    ...forecastInputs,
+                    _assetGrowthRates: {
+                      mainland: mainlandGrowthRate,
+                      hk: hkGrowthRate,
+                      fixedIncome: fixedIncomeGrowthRate,
+                    },
+                  },
               },
               {
                 onConflict:
@@ -1318,9 +1394,14 @@ setCurrentHkAsset(
 
             window.localStorage.setItem(
               "financial_freedom_forecast_inputs_v1",
-              JSON.stringify(
-                forecastInputs
-              )
+              JSON.stringify({
+                ...forecastInputs,
+                _assetGrowthRates: {
+                  mainland: mainlandGrowthRate,
+                  hk: hkGrowthRate,
+                  fixedIncome: fixedIncomeGrowthRate,
+                },
+              })
             );
 
           }
@@ -1346,6 +1427,9 @@ setCurrentHkAsset(
     forecastInputs,
     forecastInputsLoaded,
     currentFamilyAsset,
+    mainlandGrowthRate,
+    hkGrowthRate,
+    fixedIncomeGrowthRate,
   ]);
 
 
@@ -1614,17 +1698,34 @@ setCurrentHkAsset(
   function wan(
     num: number
   ) {
-
-    return Number(
-      num || 0
-    ).toLocaleString(
+    // 传入金额单位为“元”，这里统一转换成“万元”显示。
+    return (Number(num || 0) / 10000).toLocaleString(
       "zh-CN",
       {
         minimumFractionDigits: 1,
         maximumFractionDigits: 1,
       }
     );
+  }
 
+
+  // =====================================================
+  // 万元数值格式
+  // =====================================================
+  // 当年剩余现金、每年新增资产本身已经是“万元”，
+  // 这里不能再次除以 10000。
+  // =====================================================
+
+  function wanValue(
+    num: number
+  ) {
+    return Number(num || 0).toLocaleString(
+      "zh-CN",
+      {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }
+    );
   }
 
 
@@ -3168,7 +3269,7 @@ setCurrentHkAsset(
                             `}
                           >
 
-                            {wan(
+                            {wanValue(
                               remainingCash
                             )}
 
@@ -3196,7 +3297,7 @@ setCurrentHkAsset(
                             `}
                           >
 
-                            {wan(
+                            {wanValue(
                               newAsset
                             )}
 
@@ -3615,6 +3716,108 @@ setCurrentHkAsset(
           </div>
 
           {/* =================================================
+              宁波消费贷款还款年份
+              ================================================= */}
+          <section
+            className="
+              mb-6
+              rounded-2xl
+              border
+              border-gray-100
+              bg-white
+              p-6
+              shadow-sm
+            "
+          >
+            <div className="flex flex-col gap-1">
+              <h2 className="text-lg font-bold text-gray-900">
+                💳 宁波消费贷款
+              </h2>
+              <p className="text-sm text-gray-500">
+                贷款余额 ¥300,000，选择哪一年还清；该金额只在所选年份计入“贷款(不包含房贷)”一次。
+              </p>
+            </div>
+
+            <div
+              className="
+                mt-5
+                flex
+                flex-col
+                gap-3
+                rounded-xl
+                border
+                border-gray-200
+                bg-gray-50
+                p-4
+                md:flex-row
+                md:items-center
+                md:justify-between
+              "
+            >
+              <div>
+                <div className="font-semibold text-gray-900">
+                  宁波消费贷款
+                </div>
+                <div className="mt-1 text-sm text-gray-500">
+                  ¥ 300,000 · 银行消费贷款
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-gray-500">
+                  哪一年还清
+                </span>
+
+                <select
+                  value={ningboRepaymentYear}
+                  onChange={(event) => {
+                    setNingboRepaymentYear(
+                      Number(event.target.value)
+                    );
+                  }}
+                  className="
+                    rounded-lg
+                    border
+                    border-gray-300
+                    bg-white
+                    px-3
+                    py-2
+                    text-sm
+                    font-semibold
+                    text-gray-900
+                    outline-none
+                    focus:border-blue-500
+                  "
+                >
+                  {Array.from(
+                    {
+                      length:
+                        END_YEAR -
+                        FORECAST_BASE_YEAR +
+                        1,
+                    },
+                    (_, index) => {
+                      const year =
+                        FORECAST_BASE_YEAR +
+                        index;
+
+                      return (
+                        <option
+                          key={year}
+                          value={year}
+                        >
+                          {year} 年
+                        </option>
+                      );
+                    }
+                  )}
+                </select>
+              </div>
+            </div>
+          </section>
+
+
+          {/* =================================================
               年度资产计算
               ================================================= */}
           <div
@@ -3625,343 +3828,279 @@ setCurrentHkAsset(
             <table
               className="
                 w-full
-                min-w-[1100px]
-                border-collapse
-                text-sm
+                min-w-[1200px]
+                border-separate
+                border-spacing-0
+                text-base
               "
             >
+              <colgroup>
+                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "12.5%" }} />
+              </colgroup>
+
               <thead>
-                <tr
-                  className="
-                    border-b
-                    border-gray-200
-                    bg-gray-50
-                    text-gray-600
-                  "
-                >
+                <tr className="bg-gray-50 text-gray-700">
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-center
-                      font-bold
-                    "
+                    rowSpan={2}
+                    className="border border-gray-200 px-3 py-3 text-center font-bold"
                   >
                     年份
                   </th>
 
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-right
-                      font-bold
-                    "
+                    colSpan={3}
+                    className="border border-gray-200 bg-blue-50 px-3 py-2 text-center font-bold text-blue-800"
                   >
-                    大陆资产
+                    大陆
                   </th>
 
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-center
-                      font-bold
-                    "
+                    colSpan={3}
+                    className="border border-gray-200 bg-green-50 px-3 py-2 text-center font-bold text-green-800"
                   >
-                    大陆增长率
+                    香港
                   </th>
 
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-right
-                      font-bold
-                    "
-                  >
-                    香港资产
-                  </th>
-
-                  <th
-                    className="
-                      px-3
-                      py-3
-                      text-center
-                      font-bold
-                    "
-                  >
-                    香港增长率
-                  </th>
-
-                  <th
-                    className="
-                      px-3
-                      py-3
-                      text-right
-                      font-bold
-                    "
+                    colSpan={3}
+                    className="border border-gray-200 bg-purple-50 px-3 py-2 text-center font-bold text-purple-800"
                   >
                     Fixed Income
                   </th>
 
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-center
-                      font-bold
-                    "
+                    rowSpan={2}
+                    className="border border-gray-200 bg-orange-50 px-3 py-3 text-center font-bold text-orange-800"
                   >
-                    固收增长率
+                    贷款(不包含房贷)
                   </th>
 
                   <th
-                    className="
-                      px-3
-                      py-3
-                      text-right
-                      font-bold
-                    "
+                    rowSpan={2}
+                    className="border border-gray-200 bg-gray-50 px-3 py-3 text-center font-bold"
                   >
-                    总资产
+                    总资产（年末）
+                  </th>
+                </tr>
+
+                <tr className="bg-gray-50 text-gray-600">
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    大陆每年增加
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    大陆增长率
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    大陆资产（年末）
+                  </th>
+
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    香港每年增加
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    香港增长率
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    香港资产（年末）
+                  </th>
+
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    Fixed Income每年增加
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    固收增长率
+                  </th>
+                  <th className="border border-gray-200 px-2 py-2 text-center font-bold">
+                    Fixed Income（年末）
                   </th>
                 </tr>
               </thead>
 
               <tbody>
                 {(() => {
-                  let mainlandAsset =
-                    currentMainlandAsset;
+                  let mainlandAsset = currentMainlandAsset;
+                  let hkAsset = currentHkAsset;
+                  let fixedIncomeAsset = fixedIncomeTotal;
 
-                  let hkAsset =
-                    currentHkAsset;
+                  return rows.map((row: any) => {
+                    const year = Number(row.year);
 
-                  let fixedIncomeAsset =
-                    fixedIncomeTotal;
+                    const input =
+                      forecastInputs[year] ??
+                      getDefaultForecastInput(year);
 
-                  return rows.map(
-                    (
-                      row: any
-                    ) => {
-                      const year =
-                        Number(
-                          row.year
-                        );
+                    const isBaseYear =
+                      year === FORECAST_BASE_YEAR;
 
-                      const input =
-                        forecastInputs[
-                          year
-                        ] ??
-                        getDefaultForecastInput(
-                          year
-                        );
+                    const mainlandIncrease =
+                      isBaseYear
+                        ? 0
+                        : Number(input.mainlandInvestment || 0) * 10000;
 
-                      const isBaseYear =
-                        year ===
-                        FORECAST_BASE_YEAR;
+                    const hkIncrease =
+                      isBaseYear
+                        ? 0
+                        : Number(input.hkInvestment || 0) * 10000;
 
-                      if (
-                        !isBaseYear
-                      ) {
-                        mainlandAsset =
-                          mainlandAsset *
-                            (
-                              1 +
-                              mainlandGrowthRate /
-                                100
-                            ) +
-                          Number(
-                            input.mainlandInvestment ||
-                              0
-                          ) *
-                            10000;
+                    const fixedIncomeIncrease =
+                      isBaseYear
+                        ? 0
+                        : getAnnualRemainingCash(input) * 10000;
 
-                        hkAsset =
-                          hkAsset *
-                            (
-                              1 +
-                              hkGrowthRate /
-                                100
-                            ) +
-                          Number(
-                            input.hkInvestment ||
-                              0
-                          ) *
-                            10000;
+                    if (!isBaseYear) {
+                      mainlandAsset =
+                        mainlandAsset *
+                          (1 + mainlandGrowthRate / 100) +
+                        mainlandIncrease;
 
-                        const remainingCash =
-                          getAnnualRemainingCash(
-                            input
+                      hkAsset =
+                        hkAsset *
+                          (1 + hkGrowthRate / 100) +
+                        hkIncrease;
+
+                      fixedIncomeAsset =
+                        fixedIncomeAsset *
+                          (1 + fixedIncomeGrowthRate / 100) +
+                        fixedIncomeIncrease;
+                    }
+
+                    // 年度贷款：保持原有每年贷款计算不变。
+                    // 宁波消费贷款 300,000 只在所选还清年份额外计入一次。
+                    // 房贷不计入这里。
+                    const originalAnnualLoan =
+                      isBaseYear
+                        ? 0
+                        : Number(
+                            loanPressure[year]?.payment || 0
                           );
 
-                        fixedIncomeAsset =
-                          fixedIncomeAsset *
-                            (
-                              1 +
-                              fixedIncomeGrowthRate /
-                                100
-                            ) +
-                          remainingCash *
-                            10000;
-                      }
+                    const ningboLoan =
+                      year === ningboRepaymentYear
+                        ? 300000
+                        : 0;
 
-                      const totalAsset =
-                        mainlandAsset +
-                        hkAsset +
-                        fixedIncomeAsset;
+                    const annualLoan =
+                      originalAnnualLoan + ningboLoan;
 
-                      return (
-                        <tr
-                          key={
-                            year
-                          }
-                          className="
-                            border-b
-                            border-gray-100
-                            hover:bg-gray-50
-                          "
+                    // 总资产 = 大陆资产 + 香港资产 + 固收资产 - 年度贷款
+                    const totalAsset =
+                      mainlandAsset +
+                      hkAsset +
+                      fixedIncomeAsset -
+                      annualLoan;
+
+                    // 每一年年份旁边显示两个汇总数字，方便一眼看清：
+                    // 香港共有 = 香港资产（年末）
+                    // 大陆共有 = 其余所有项目相加（包括贷款的负数影响）
+                    const hkTotalForDisplay = hkAsset;
+                    const mainlandTotalForDisplay =
+                      mainlandAsset +
+                      fixedIncomeAsset -
+                      annualLoan;
+
+                    return (
+                      <tr
+                        key={year}
+                        className="hover:bg-gray-50"
+                      >
+                        <td
+                          className="border border-gray-200 px-3 py-4 text-center text-lg font-bold text-gray-800 align-middle"
                         >
-                          {/* 年份 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-center
-                              font-bold
-                              text-gray-800
-                            "
-                          >
-                            <div>
-                              {year}
+                          <div>{year}</div>
+
+                          <div className="mt-2 space-y-1 text-left text-sm font-semibold leading-tight">
+                            <div className="whitespace-nowrap text-green-700">
+                              香港共有：{wan(hkTotalForDisplay)}万
                             </div>
+                            <div className="whitespace-nowrap text-blue-700">
+                              大陆共有：{wan(mainlandTotalForDisplay)}万
+                            </div>
+                          </div>
 
-                            {isBaseYear ? (
-                              <div
-                                className="
-                                  mt-1
-                                  text-xs
-                                  font-normal
-                                  text-gray-400
-                                "
-                              >
-                                当前资产
-                              </div>
-                            ) : null}
-                          </td>
+                          {isBaseYear ? (
+                            <div className="mt-1 text-sm font-normal text-gray-400">
+                              当前资产
+                            </div>
+                          ) : null}
+                        </td>
 
-                          {/* 大陆资产 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-right
-                              font-bold
-                              text-gray-900
-                              whitespace-nowrap
-                            "
-                          >
-                            {money(
-                              mainlandAsset
-                            )}
-                          </td>
+                        <td
+                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {isBaseYear ? "—" : money(mainlandIncrease)}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-center text-lg font-semibold text-blue-700 whitespace-nowrap"
+                        >
+                          {isBaseYear ? "—" : `${mainlandGrowthRate}%`}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {money(mainlandAsset)}
+                        </td>
 
-                          {/* 大陆增长率 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-center
-                              font-semibold
-                              text-blue-700
-                            "
-                          >
-                            {isBaseYear
-                              ? "—"
-                              : `${mainlandGrowthRate}%`}
-                          </td>
+                        <td
+                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {isBaseYear ? "—" : money(hkIncrease)}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-center text-lg font-semibold text-green-700 whitespace-nowrap"
+                        >
+                          {isBaseYear ? "—" : `${hkGrowthRate}%`}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {money(hkAsset)}
+                        </td>
 
-                          {/* 香港资产 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-right
-                              font-bold
-                              text-gray-900
-                              whitespace-nowrap
-                            "
-                          >
-                            {money(
-                              hkAsset
-                            )}
-                          </td>
+                        <td
+                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {isBaseYear
+                            ? "—"
+                            : money(fixedIncomeIncrease)}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-center text-lg font-semibold text-purple-700 whitespace-nowrap"
+                        >
+                          {isBaseYear
+                            ? "—"
+                            : `${fixedIncomeGrowthRate}%`}
+                        </td>
+                        <td
+                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
+                        >
+                          {money(fixedIncomeAsset)}
+                        </td>
 
-                          {/* 香港增长率 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-center
-                              font-semibold
-                              text-blue-700
-                            "
-                          >
-                            {isBaseYear
-                              ? "—"
-                              : `${hkGrowthRate}%`}
-                          </td>
+                        <td
+                          className="border border-gray-200 bg-orange-50/50 px-3 py-4 text-right text-lg font-bold text-orange-700 whitespace-nowrap"
+                        >
+                          {money(annualLoan)}
+                        </td>
 
-                          {/* Fixed Income */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-right
-                              font-bold
-                              text-gray-900
-                              whitespace-nowrap
-                            "
-                          >
-                            {money(
-                              fixedIncomeAsset
-                            )}
-                          </td>
-
-                          {/* 固收增长率 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-center
-                              font-semibold
-                              text-blue-700
-                            "
-                          >
-                            {isBaseYear
-                              ? "—"
-                              : `${fixedIncomeGrowthRate}%`}
-                          </td>
-
-                          {/* 总资产 */}
-                          <td
-                            className="
-                              px-3
-                              py-4
-                              text-right
-                              font-bold
-                              text-green-700
-                              whitespace-nowrap
-                            "
-                          >
-                            {money(
-                              totalAsset
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    }
-                  );
+                        <td
+                          className="border border-gray-200 bg-gray-50 px-3 py-4 text-right text-lg font-bold text-green-700 whitespace-nowrap"
+                        >
+                          {money(totalAsset)}
+                        </td>
+                      </tr>
+                    );
+                  });
                 })()}
               </tbody>
             </table>
