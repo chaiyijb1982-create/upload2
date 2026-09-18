@@ -70,6 +70,12 @@ type Holding = {
 
   skip_update: boolean;
 
+   // 定期存款
+  asset_type?: string | null;
+  annual_rate?: number | null;
+  start_date?: string | null;
+  maturity_date?: string | null;
+
   native_currency?: string | null;
 
   native_cost?: number | null;
@@ -95,6 +101,13 @@ const emptyForm = {
   shares: "",
   platform: "",
 
+  // 定期存款
+  asset_type: "normal",
+  annual_rate: "",
+  start_date: "",
+  maturity_date: "",
+  
+  // 香港/非大陆资产本币
   native_currency: "USD",
   native_cost: "",
   native_amount: "",
@@ -116,6 +129,17 @@ const CATEGORY_OPTIONS = [
   "global_stock",
   "china_stock",
   "gold",
+];
+
+const ASSET_TYPE_OPTIONS = [
+  {
+    value: "normal",
+    label: "普通资产",
+  },
+  {
+    value: "fixed_deposit",
+    label: "定期存款",
+  },
 ];
 
 const CURRENCY_OPTIONS = [
@@ -246,6 +270,110 @@ function getProfitClass(
   }
 
   return "text-gray-500";
+}
+
+
+// =====================================================
+// 定期存款：计算当前应计金额
+//
+// 本金来自香港资产的 native_amount
+// 年利率例如 4% 保存为 0.04
+//
+// 当前金额 = 本金 + 本金 × 年利率 × 已计息天数 / 365
+//
+// 到期以后停止继续增加
+// =====================================================
+function getFixedDepositNativeAmount(
+  item: Holding
+) {
+  const principal = Number(
+    item.native_amount ?? 0
+  );
+
+  const annualRate = Number(
+    item.annual_rate ?? 0
+  );
+
+  if (
+    !Number.isFinite(principal) ||
+    principal <= 0
+  ) {
+    return 0;
+  }
+
+  if (
+    !Number.isFinite(annualRate) ||
+    annualRate <= 0 ||
+    !item.start_date
+  ) {
+    return principal;
+  }
+
+  const start = new Date(
+    `${item.start_date}T00:00:00`
+  );
+
+  if (Number.isNaN(start.getTime())) {
+    return principal;
+  }
+
+  start.setHours(0, 0, 0, 0);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let end = today;
+
+  if (item.maturity_date) {
+    const maturity = new Date(
+      `${item.maturity_date}T00:00:00`
+    );
+
+    if (!Number.isNaN(maturity.getTime())) {
+      maturity.setHours(0, 0, 0, 0);
+
+      if (end > maturity) {
+        end = maturity;
+      }
+    }
+  }
+
+  if (end <= start) {
+    return principal;
+  }
+
+  const days = Math.floor(
+    (
+      end.getTime() -
+      start.getTime()
+    ) /
+      (1000 * 60 * 60 * 24)
+  );
+
+  return (
+    principal +
+    principal *
+      annualRate *
+      days /
+      365
+  );
+}
+
+function getCurrentNativeAmount(
+  item: Holding
+) {
+  if (
+    item.asset_type ===
+    "fixed_deposit"
+  ) {
+    return getFixedDepositNativeAmount(
+      item
+    );
+  }
+
+  return Number(
+    item.native_amount ?? 0
+  );
 }
 
 // =====================================================
@@ -1768,6 +1896,20 @@ const mainlandPlatformStats = useMemo(() => {
 
       native_amount:
         item.native_amount ?? "",
+
+      asset_type:
+        item.asset_type ?? "normal",
+
+      annual_rate:
+        item.annual_rate != null
+          ? String(item.annual_rate * 100)
+          : "",
+
+      start_date:
+        item.start_date ?? "",
+
+      maturity_date:
+        item.maturity_date ?? "",  
     });
 
     setError("");
@@ -2001,6 +2143,29 @@ const mainlandPlatformStats = useMemo(() => {
 
         platform:
           form.platform.trim(),
+
+            // ==============================
+  // 定期存款
+  // ==============================
+          asset_type:
+  form.asset_type === "fixed_deposit"
+    ? "fixed_deposit"
+    : "normal",
+
+annual_rate:
+  form.asset_type === "fixed_deposit"
+    ? numberValue(form.annual_rate) / 100
+    : null,
+
+start_date:
+  form.asset_type === "fixed_deposit"
+    ? form.start_date || null
+    : null,
+
+maturity_date:
+  form.asset_type === "fixed_deposit"
+    ? form.maturity_date || null
+    : null,
       };
 
       // =================================================
@@ -2121,15 +2286,36 @@ const mainlandPlatformStats = useMemo(() => {
           .insert({
             ...payload,
 
-            active:
-              true,
+active:
+  true,
 
-            skip_update:
-              false,
+asset_type:
+  form.asset_type || "normal",
 
-            updated_at:
-              new Date()
-                .toISOString(),
+annual_rate:
+  form.asset_type === "fixed_deposit" &&
+  form.annual_rate !== ""
+    ? Number(form.annual_rate) / 100
+    : null,
+
+start_date:
+  form.asset_type === "fixed_deposit"
+    ? form.start_date || null
+    : null,
+
+maturity_date:
+  form.asset_type === "fixed_deposit"
+    ? form.maturity_date || null
+    : null,
+
+skip_update:
+  form.asset_type === "fixed_deposit"
+    ? true
+    : false,
+
+updated_at:
+  new Date()
+    .toISOString(),
           })
           .select("id")
           .single();
@@ -4019,6 +4205,96 @@ const mainlandPlatformStats = useMemo(() => {
                     required
                   />
 
+
+                  {/* Asset Type */}
+<div>
+  <label className="mb-1.5 block text-xs font-medium text-gray-600">
+    Asset Type
+  </label>
+
+  <select
+    value={form.asset_type || "normal"}
+    onChange={e =>
+      updateForm(
+        "asset_type",
+        e.target.value
+      )
+    }
+    className="
+      w-full
+      rounded-lg
+      border
+      border-gray-200
+      bg-white
+      px-3.5
+      py-2.5
+      text-sm
+      text-gray-900
+      outline-none
+      transition
+      focus:border-gray-400
+      focus:ring-2
+      focus:ring-gray-100
+    "
+  >
+    <option value="normal">
+      普通资产
+    </option>
+
+    <option value="fixed_deposit">
+      定期存款
+    </option>
+  </select>
+</div>
+
+{/* 定期存款专用字段 */}
+{form.asset_type === "fixed_deposit" && (
+  <>
+    <FormInput
+      label="年利率 (%)"
+      value={form.annual_rate}
+      onChange={
+        value =>
+          updateForm(
+            "annual_rate",
+            value
+          )
+      }
+      type="number"
+      step="0.01"
+      placeholder="例如 4"
+    />
+
+    <FormInput
+      label="起息日"
+      value={form.start_date}
+      onChange={
+        value =>
+          updateForm(
+            "start_date",
+            value
+          )
+      }
+      type="date"
+    />
+
+    <FormInput
+      label="到期日"
+      value={form.maturity_date}
+      onChange={
+        value =>
+          updateForm(
+            "maturity_date",
+            value
+          )
+      }
+      type="date"
+    />
+  </>
+)}
+
+
+
                   <FormInput
                     label="Currency"
                     value={form.currency}
@@ -5142,7 +5418,7 @@ function AssetRegionTable({
                               "USD"
                             } ${
                               formatNativeMoney(
-                                item.native_amount
+                                  getCurrentNativeAmount(item)
                               )
                             }`
 
