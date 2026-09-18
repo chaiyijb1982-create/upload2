@@ -283,81 +283,7 @@ function getProfitClass(
 //
 // 到期以后停止继续增加
 // =====================================================
-function getFixedDepositNativeAmount(
-  item: Holding
-) {
-  const principal = Number(
-    item.native_amount ?? 0
-  );
 
-  const annualRate = Number(
-    item.annual_rate ?? 0
-  );
-
-  if (
-    !Number.isFinite(principal) ||
-    principal <= 0
-  ) {
-    return 0;
-  }
-
-  if (
-    !Number.isFinite(annualRate) ||
-    annualRate <= 0 ||
-    !item.start_date
-  ) {
-    return principal;
-  }
-
-  const start = new Date(
-    `${item.start_date}T00:00:00`
-  );
-
-  if (Number.isNaN(start.getTime())) {
-    return principal;
-  }
-
-  start.setHours(0, 0, 0, 0);
-
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
-  let end = today;
-
-  if (item.maturity_date) {
-    const maturity = new Date(
-      `${item.maturity_date}T00:00:00`
-    );
-
-    if (!Number.isNaN(maturity.getTime())) {
-      maturity.setHours(0, 0, 0, 0);
-
-      if (end > maturity) {
-        end = maturity;
-      }
-    }
-  }
-
-  if (end <= start) {
-    return principal;
-  }
-
-  const days = Math.floor(
-    (
-      end.getTime() -
-      start.getTime()
-    ) /
-      (1000 * 60 * 60 * 24)
-  );
-
-  return (
-    principal +
-    principal *
-      annualRate *
-      days /
-      365
-  );
-}
 
 // =====================================================
 // 定期存款：计算截至今天的本币金额
@@ -561,6 +487,25 @@ function getCurrentCnyProfit(
   );
 }
 
+
+function getCurrentCnyProfitRate(
+  item: Holding
+) {
+  const cost =
+    Number(item.cost ?? 0);
+
+  if (
+    !Number.isFinite(cost) ||
+    cost === 0
+  ) {
+    return 0;
+  }
+
+  return (
+    getCurrentCnyProfit(item) /
+    cost
+  ) * 100;
+}
 // =====================================================
 // 页面
 // =====================================================
@@ -1368,19 +1313,17 @@ useEffect(() => {
     // Native Amount
     // =================================================
 
-    if (
-      key === "native_amount"
-    ) {
+if (
+  key === "native_amount"
+) {
+  const av =
+    getCurrentNativeAmount(a);
 
-      const av =
-        numberValue(
-          a.native_amount
-        );
+  const bv =
+    getCurrentNativeAmount(b);
 
-      const bv =
-        numberValue(
-          b.native_amount
-        );
+  return av - bv;
+}
 
       if (
         av === null &&
@@ -1689,11 +1632,11 @@ const hongKongStats = useMemo(() => {
     0
   );
 
-  const profit = hongKongHoldings.reduce(
-    (total, item) =>
-      total + Number(item.profit || 0),
-    0
-  );
+const profit = hongKongHoldings.reduce(
+  (total, item) =>
+    total + getCurrentCnyProfit(item),
+  0
+);
 
   const profitRate =
     cost > 0
@@ -1775,6 +1718,7 @@ const hongKongStats = useMemo(() => {
   };
 }, [
   hongKongHoldings,
+  currentDateTick,
 ]);
 
 // ===================================================
@@ -1891,9 +1835,7 @@ const mainlandPlatformStats = useMemo(() => {
         cost: 0,
       };
 
-      current.amount += Number(
-        holding.native_amount ?? 0
-      );
+       getCurrentNativeAmount(holding);
 
       current.cost += Number(
         holding.native_cost ?? 0
@@ -5651,12 +5593,12 @@ function AssetRegionTable({
                         font-medium
                         tabular-nums
                         ${getProfitClass(
-                          item.profit_rate
+                          getCurrentCnyProfitRate(item)
                         )}
                       `}
                     >
                       {formatPercent(
-                        item.profit_rate
+                         getCurrentCnyProfitRate(item)
                       )}
                     </td>
 
