@@ -359,20 +359,205 @@ function getFixedDepositNativeAmount(
   );
 }
 
+// =====================================================
+// 定期存款：计算截至今天的本币金额
+//
+// 数据库保存的是本金 native_amount
+// 不每天修改数据库
+// 页面打开/刷新时自动计算当前金额
+// =====================================================
 function getCurrentNativeAmount(
   item: Holding
 ) {
+  const principal =
+    Number(item.native_amount ?? 0);
+
   if (
-    item.asset_type ===
+    !Number.isFinite(principal) ||
+    principal <= 0
+  ) {
+    return 0;
+  }
+
+  if (
+    item.asset_type !==
     "fixed_deposit"
   ) {
-    return getFixedDepositNativeAmount(
+    return principal;
+  }
+
+  const annualRate =
+    Number(item.annual_rate ?? 0);
+
+  if (
+    !Number.isFinite(annualRate) ||
+    annualRate <= 0 ||
+    !item.start_date
+  ) {
+    return principal;
+  }
+
+  const start =
+    new Date(
+      `${item.start_date}T00:00:00`
+    );
+
+  if (
+    Number.isNaN(
+      start.getTime()
+    )
+  ) {
+    return principal;
+  }
+
+  start.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  const today =
+    new Date();
+
+  today.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  let end = today;
+
+  if (item.maturity_date) {
+    const maturity =
+      new Date(
+        `${item.maturity_date}T00:00:00`
+      );
+
+    if (
+      !Number.isNaN(
+        maturity.getTime()
+      )
+    ) {
+      maturity.setHours(
+        0,
+        0,
+        0,
+        0
+      );
+
+      if (
+        end > maturity
+      ) {
+        end = maturity;
+      }
+    }
+  }
+
+  if (
+    end <= start
+  ) {
+    return principal;
+  }
+
+  const days =
+    Math.floor(
+      (
+        end.getTime() -
+        start.getTime()
+      ) /
+        (
+          1000 *
+          60 *
+          60 *
+          24
+        )
+    );
+
+  return (
+    principal +
+    principal *
+      annualRate *
+      days /
+      365
+  );
+}
+
+// =====================================================
+// 定期存款：当前 CNY 金额
+//
+// item.amount = 保存时的 CNY 金额
+// item.native_amount = 保存时的本币本金
+//
+// 利息增加后，CNY 也同比增加。
+// =====================================================
+function getCurrentCnyAmount(
+  item: Holding
+) {
+  const currentNative =
+    getCurrentNativeAmount(
       item
+    );
+
+  if (
+    !Number.isFinite(
+      currentNative
+    )
+  ) {
+    return Number(
+      item.amount ?? 0
     );
   }
 
-  return Number(
-    item.native_amount ?? 0
+  if (
+    item.asset_type !==
+    "fixed_deposit"
+  ) {
+    return Number(
+      item.amount ?? 0
+    );
+  }
+
+  const originalNative =
+    Number(
+      item.native_amount ?? 0
+    );
+
+  const originalCny =
+    Number(
+      item.amount ?? 0
+    );
+
+  if (
+    !Number.isFinite(
+      originalNative
+    ) ||
+    originalNative <= 0 ||
+    !Number.isFinite(
+      originalCny
+    )
+  ) {
+    return originalCny || 0;
+  }
+
+  // 保存时的 Native → CNY 汇率
+  const fxRate =
+    originalCny /
+    originalNative;
+
+  return (
+    currentNative *
+    fxRate
+  );
+}
+
+function getCurrentCnyProfit(
+  item: Holding
+) {
+  return (
+    getCurrentCnyAmount(item) -
+    Number(item.cost ?? 0)
   );
 }
 
@@ -399,6 +584,11 @@ export default function AssetManagementPage() {
     loading,
     setLoading,
   ] = useState(true);
+
+  const [
+  currentDateTick,
+  setCurrentDateTick,
+] = useState(0);
 
   const [
     saving,
@@ -643,6 +833,21 @@ export default function AssetManagementPage() {
 
   }, []);
 
+
+  useEffect(() => {
+  const timer =
+    window.setInterval(() => {
+      setCurrentDateTick(
+        value => value + 1
+      );
+    }, 60 * 1000);
+
+  return () => {
+    window.clearInterval(
+      timer
+    );
+  };
+}, []);
   // ===================================================
   // 编辑非 CN 时：
   //
@@ -1410,29 +1615,20 @@ useEffect(() => {
   // 总资产
   // ===================================================
 
-  const activeTotal =
-    useMemo(() => {
-
-      return filteredActiveHoldings.reduce(
-        (
-          total,
-          item
-        ) => {
-
-          return (
-            total +
-            Number(
-              item.amount || 0
-            )
-          );
-
-        },
-        0
-      );
-
-    }, [
-      filteredActiveHoldings,
-    ]);
+const activeTotal =
+  useMemo(() => {
+    return filteredActiveHoldings.reduce(
+      (total, item) => {
+        return (
+          total +
+          getCurrentCnyAmount(item)
+        );
+      },
+      0
+    );
+  }, [
+    filteredActiveHoldings,
+  ]);
 
 
 // ===================================================
@@ -1479,11 +1675,12 @@ const mainlandStats = useMemo(() => {
 // ===================================================
 
 const hongKongStats = useMemo(() => {
-  const amount = hongKongHoldings.reduce(
-    (total, item) =>
-      total + Number(item.amount || 0),
-    0
-  );
+ const amount = hongKongHoldings.reduce(
+  (total, item) =>
+    total +
+    getCurrentCnyAmount(item),
+  0
+);
 
 
   const cost = hongKongHoldings.reduce(
@@ -1540,9 +1737,8 @@ const hongKongStats = useMemo(() => {
         cost: 0,
       };
 
-    current.amount += Number(
-      item.native_amount || 0
-    );
+    current.amount +=
+  getCurrentNativeAmount(item);
 
     current.cost += Number(
       item.native_cost || 0
@@ -3849,7 +4045,9 @@ updated_at:
                             text-gray-500
                           "
                         >
-                          ¥{formatMoney(item.amount)}
+                          ¥{formatMoney(
+                          getCurrentCnyAmount(item)
+                            )}
                         </td>
 
                         <td
@@ -3862,7 +4060,7 @@ updated_at:
                             ${getProfitClass(item.profit)}
                           `}
                         >
-                          ¥{formatMoney(item.profit)}
+                          ¥{formatMoney(getCurrentCnyProfit(item))}
                         </td>
 
                         <td
@@ -5341,7 +5539,7 @@ function AssetRegionTable({
                       "
                     >
                       ¥{formatMoney(
-                        item.amount
+                         getCurrentCnyAmount(item)
                       )}
                     </td>
 
@@ -5441,7 +5639,7 @@ function AssetRegionTable({
                       `}
                     >
                       ¥{formatMoney(
-                        item.profit
+                         getCurrentCnyProfit(item)
                       )}
                     </td>
 
