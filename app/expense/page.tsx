@@ -613,6 +613,15 @@ export default function ExpensePage() {
   const [bookMonthlyYear, setBookMonthlyYear] = useState<number>(
   new Date().getFullYear()
 );
+
+
+const [exportStartYear, setExportStartYear] = useState<number>(2023);
+  const [exportEndYear, setExportEndYear] = useState<number>(new Date().getFullYear());
+
+  // 大消费表格独立选择的账本
+  const [largeExpenseBook, setLargeExpenseBook] = useState<string>("日常账本");
+
+  
   // ===================================================
   // 展开的项目
   //
@@ -664,6 +673,27 @@ export default function ExpensePage() {
     setBudgetError,
   ] = useState<string | null>(null);
 
+  // 流水表格独立的年份和月份选择
+  const [tableYear, setTableYear] = useState<number | null>(null);
+  const [tableMonth, setTableMonth] = useState<number | null>(null);
+  // 流水表格独立账本选择
+
+  const [tableBook, setTableBook] = useState<string>("ALL"); // 默认全部账本
+
+ 
+// 将初始值设为当前年份（例如 2026），而不是 "ALL"
+  const [largeExpenseYear, setLargeExpenseYear] = useState<string>(String(new Date().getFullYear()));
+
+
+  
+  // 选中的月份：支持具体月份（如 "09"）或选择全年（如 "ALL"）
+  const [expenseDetailMonth, setExpenseDetailMonth] = useState<string>("ALL");
+  
+  // 选中的账本分类：支持具体分类（如 "餐饮"、"小宝"）或选择全部（"ALL"）
+  const [expenseDetailCategory, setExpenseDetailCategory] = useState<string>("ALL");
+
+  const [expenseDetailBook, setExpenseDetailBook] = useState<string>("ALL"); // 账本筛选
+  
   // ===================================================
   // 加载消费数据
   // ===================================================
@@ -688,6 +718,7 @@ export default function ExpensePage() {
       setTransactions(
         transactionData
       );
+
 
       const validDates =
         transactionData
@@ -732,6 +763,15 @@ export default function ExpensePage() {
         setExpenseDetailYear(
           latestYear
         );
+
+      setTableYear(latestYear);
+      
+      setTableMonth(latestMonth);
+      setSelectedMonthYear(latestYear);
+        setSelectedMonth(latestMonth);
+        setSelectedYear(latestYear);
+        setExpenseDetailYear(latestYear);
+        
       }
     } catch (err) {
       console.error(
@@ -1011,6 +1051,85 @@ export default function ExpensePage() {
     selectedYear,
   ]);
 
+// 获取所有出现过的账本名称列表
+  const availableBooks = useMemo(() => {
+    const books = new Set<string>();
+    transactions.forEach(item => {
+      const name = getNormalizedBookName(item);
+      if (name) books.add(name);
+    });
+    return Array.from(books).sort((a, b) => a.localeCompare(b, "zh-CN"));
+  }, [transactions]);
+
+  // 自由选择年月及账本的流水过滤逻辑
+  const filteredTableTransactions = useMemo(() => {
+    return transactions.filter(item => {
+      const date = getTransactionDate(item);
+      if (!date) return false;
+
+      // 1. 年月过滤
+      const matchYearMonth =
+        tableYear === null ||
+        tableMonth === null ||
+        (date.getFullYear() === tableYear && date.getMonth() + 1 === tableMonth);
+
+      if (!matchYearMonth) return false;
+
+      // 2. 账本过滤
+      if (tableBook !== "ALL") {
+        const bookName = getNormalizedBookName(item);
+        if (bookName !== tableBook) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [transactions, tableYear, tableMonth, tableBook]);
+
+
+  // 大消费数据过滤（金额 >= 2000，可按账本和年份筛选，按年降序显示）
+  const largeExpenseTransactions = useMemo(() => {
+    return transactions
+      .filter(item => {
+        if (!isConsumptionTransaction(item)) {
+          return false;
+        }
+
+        const amount = Math.abs(Number(item.amount || 0));
+        if (!Number.isFinite(amount) || amount < 2000) {
+          return false;
+        }
+
+        const date = getTransactionDate(item);
+        if (!date) return false;
+        const year = date.getFullYear();
+
+        // 1. 年份筛选
+        if (largeExpenseYear !== "ALL" && year !== Number(largeExpenseYear)) {
+          return false;
+        }
+
+        // 2. 账本筛选
+        if (largeExpenseBook !== "ALL") {
+          const bookName = getNormalizedBookName(item);
+          if (bookName !== largeExpenseBook) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const dateA = getTransactionDate(a)?.getTime() || 0;
+        const dateB = getTransactionDate(b)?.getTime() || 0;
+        return dateB - dateA;
+      });
+  }, [transactions, largeExpenseBook, largeExpenseYear]);
+
+
+
+
   // ===================================================
   // 月度交易
   // ===================================================
@@ -1113,6 +1232,199 @@ export default function ExpensePage() {
         ),
       [transactions]
     );
+
+  // 过滤后的消费明细流水
+// 4. 最终过滤后的消费明细流水
+  const filteredExpenseDetails = useMemo(() => {
+    if (!Array.isArray(unifiedExpenseRecords)) return [];
+
+    return unifiedExpenseRecords.filter(record => {
+      const bookName = record.bookName || record.book_name || "";
+      const rawYear = record.year || record.annee || "";
+      const rawDate = record.transaction_time || record.date || "";
+      const rawMonth = record.month || "";
+      const rawCategory = record.category || record.type || "";
+
+      // 1. 账本筛选
+      if (expenseDetailBook && expenseDetailBook !== "ALL" && bookName !== expenseDetailBook) {
+        return false;
+      }
+
+      // 2. 年份解析与筛选
+      let recordYear = String(rawYear).trim();
+      if (!recordYear && rawDate) {
+        const matchYear = String(rawDate).match(/^(\d{4})/);
+        if (matchYear) recordYear = matchYear[1];
+      }
+      if (expenseDetailYear && expenseDetailYear !== "ALL" && recordYear !== String(expenseDetailYear)) {
+        return false;
+      }
+
+      // 3. 月份解析与筛选（全年 vs 单月）
+      let recordMonth = String(rawMonth).trim();
+      if (!recordMonth && rawDate) {
+        const matchMonth = String(rawDate).match(/-(\d{1,2})-/);
+        if (matchMonth) {
+          recordMonth = matchMonth[1].padStart(2, "0");
+        }
+      } else if (recordMonth) {
+        recordMonth = recordMonth.padStart(2, "0");
+      }
+      if (expenseDetailMonth && expenseDetailMonth !== "ALL" && recordMonth !== String(expenseDetailMonth)) {
+        return false;
+      }
+
+      // 4. 分类筛选
+      const recordCategory = String(rawCategory).trim();
+      if (expenseDetailCategory && expenseDetailCategory !== "ALL" && recordCategory !== String(expenseDetailCategory)) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [unifiedExpenseRecords, expenseDetailBook, expenseDetailYear, expenseDetailMonth, expenseDetailCategory]);
+
+  // 动态计算当前可选的分类列表（根据当前选中的年份/账本动态生成，方便下拉框选择）
+const availableCategories = useMemo(() => {
+    const set = new Set<string>();
+    unifiedExpenseRecords.forEach(record => {
+      const bName = record.bookName || record.book_name;
+      const rYear = String(record.year || "");
+      
+      // 符合当前选中的账本和年份时，收集其分类
+      const matchBook = expenseDetailBook === "ALL" || bName === expenseDetailBook;
+      const matchYear = expenseDetailYear === "ALL" || rYear === expenseDetailYear;
+
+      if (matchBook && matchYear && record.category) {
+        set.add(record.category);
+      }
+    });
+    return Array.from(set).sort();
+  }, [unifiedExpenseRecords, expenseDetailBook, expenseDetailYear]);
+
+    // 2. 计算各年度的大消费统计与占当年账本总消费的百分比
+  const largeExpenseAnnualStats = useMemo(() => {
+    const statsMap = new Map<number, { largeTotal: number; count: number }>();
+
+    largeExpenseTransactions.forEach(item => {
+      const date = getTransactionDate(item);
+      if (!date) return;
+      const year = date.getFullYear();
+      const amount = Math.abs(Number(item.amount || 0));
+
+      if (!statsMap.has(year)) {
+        statsMap.set(year, { largeTotal: 0, count: 0 });
+      }
+      const entry = statsMap.get(year)!;
+      entry.largeTotal += amount;
+      entry.count += 1;
+    });
+
+    const result = Array.from(statsMap.entries()).map(([year, data]) => {
+      const totalConsumption = unifiedExpenseRecords
+        .filter(record => {
+          if (Number(record.year) !== year) return false;
+          if (largeExpenseBook !== "ALL" && record.bookName !== largeExpenseBook) {
+            return false;
+          }
+          return true;
+        })
+        .reduce((sum, record) => sum + Number(record.amount || 0), 0);
+
+      const percentage = totalConsumption > 0 ? (data.largeTotal / totalConsumption) * 100 : 0;
+
+      return {
+        year,
+        largeTotal: data.largeTotal,
+        count: data.count,
+        totalConsumption,
+        percentage,
+      };
+    });
+
+    return result.sort((a, b) => b.year - a.year);
+  }, [largeExpenseTransactions, unifiedExpenseRecords, largeExpenseBook]);
+
+
+  // 按年、按账本、按分类汇总金额的表格数据
+  const yearlyBookCategoryMatrix = useMemo(() => {
+    // 结构: Map<year, Map<bookName, Map<category, amount>>>
+    const map = new Map<number, Map<string, Map<number, number>>>(); // 为了精简，用 Map 嵌套
+
+    unifiedExpenseRecords.forEach(record => {
+      const year = Number(record.year);
+      const bookName = record.bookName || "未设置账本";
+      const category = record.category || "未分类";
+      const amount = Number(record.amount || 0);
+
+      if (!Number.isFinite(year) || amount <= 0) return;
+
+      if (!map.has(year)) {
+        map.set(year, new Map());
+      }
+      const yearMap = map.get(year)!;
+
+      if (!yearMap.has(bookName)) {
+        yearMap.set(bookName, new Map());
+      }
+      const bookMap = yearMap.get(bookName)!;
+
+      const currentAmount = bookMap.get(category) || 0;
+      bookMap.set(category, currentAmount + amount);
+    });
+
+    // 转换为便于渲染的结构
+    const result: Array<{
+      year: number;
+      books: Array<{
+        bookName: string;
+        categories: Array<{ category: string; amount: number }>;
+        bookTotal: number;
+      }>;
+      yearTotal: number;
+    }> = [];
+
+    map.forEach((yearMap, year) => {
+      let yearTotal = 0;
+      const books: Array<{
+        bookName: string;
+        categories: Array<{ category: string; amount: number }>;
+        bookTotal: number;
+      }> = [];
+
+      yearMap.forEach((categoryMap, bookName) => {
+        let bookTotal = 0;
+        const categories: Array<{ category: string; amount: number }> = [];
+
+        categoryMap.forEach((amount, category) => {
+          bookTotal += amount;
+          categories.push({ category, amount });
+        });
+
+        // 账本内分类按金额从大到小排序
+        categories.sort((a, b) => b.amount - a.amount);
+        yearTotal += bookTotal;
+
+        books.push({
+          bookName,
+          categories,
+          bookTotal,
+        });
+      });
+
+      // 账本按总金额从大到小排序
+      books.sort((a, b) => b.bookTotal - a.bookTotal);
+
+      result.push({
+        year,
+        books,
+        yearTotal,
+      });
+    });
+
+    // 按年份降序排列（最近的年份在最上面）
+    return result.sort((a, b) => b.year - a.year);
+  }, [unifiedExpenseRecords]);
 // =====================================================
 // ★ 今年各账本月度统计
 //
@@ -1203,371 +1515,141 @@ const yearlyBookMonthlyStats = useMemo(() => {
   };
 }, [unifiedExpenseRecords, bookMonthlyYear]);
 const handleExportExpenseAnalysisData = () => {
-  try {
-    // 只保留 2023-2026 年 1-9 月
-    const analysisRecords = unifiedExpenseRecords
-      .filter(record => {
-        const year = Number(record.year);
-        const month = Number(record.month);
-
-        return (
-          year >= 2023 &&
-          year <= 2026 &&
-          month >= 1 &&
-          month <= 9
+    try {
+      const validRecords = unifiedExpenseRecords
+        .map(record => ({
+          ...record,
+          year: Number(record.year),
+          month: Number(record.month),
+          amount: Number(record.amount || 0),
+        }))
+        .filter(
+          record =>
+            Number.isFinite(record.year) &&
+            Number.isFinite(record.month) &&
+            record.month >= 1 &&
+            record.month <= 12
         );
-      })
-      .map(record => ({
-        year: Number(record.year),
-        month: Number(record.month),
-        bookName: record.bookName,
-        category: record.category,
-        group: record.group,
-        amount: Number(record.amount || 0),
-      }));
 
-    // 实际出现过的账本
-    const bookSet = new Set<string>();
-
-    for (const record of analysisRecords) {
-      if (record.bookName) {
-        bookSet.add(record.bookName);
-      }
-    }
-
-    const books = Array.from(bookSet).sort((a, b) =>
-      a.localeCompare(b, "zh-CN")
-    );
-
-    // 按 年份 + 月份 + 账本 汇总
-    const monthlyData: Record<
-      string,
-      Record<string, number>
-    > = {};
-
-    for (const record of analysisRecords) {
-      const key = `${record.year}-${String(record.month).padStart(
-        2,
-        "0"
-      )}`;
-
-      if (!monthlyData[key]) {
-        monthlyData[key] = {};
+      if (validRecords.length === 0) {
+        alert("没有可导出的消费数据。");
+        return;
       }
 
-      monthlyData[key][record.bookName] =
-        (monthlyData[key][record.bookName] || 0) +
-        record.amount;
-    }
-const handleExportExpenseAnalysisData = () => {
-  try {
-    const validRecords = unifiedExpenseRecords
-      .map(record => ({
-        ...record,
-        year: Number(record.year),
-        month: Number(record.month),
-        amount: Number(record.amount || 0),
-      }))
-      .filter(
-        record =>
-          Number.isFinite(record.year) &&
-          Number.isFinite(record.month) &&
-          record.month >= 1 &&
-          record.month <= 12
+      const startYear = exportStartYear;
+      const endYear = exportEndYear;
+      const startMonth = 1;
+      const endMonth = 12;
+
+      // 根据选择的年份范围筛选数据
+      const analysisRecords = validRecords.filter(record => {
+        if (record.year < startYear || record.year > endYear) {
+          return false;
+        }
+        return true;
+      });
+
+      const bookSet = new Set<string>();
+      for (const record of analysisRecords) {
+        if (record.bookName) {
+          bookSet.add(record.bookName);
+        }
+      }
+      const books = Array.from(bookSet).sort((a, b) =>
+        a.localeCompare(b, "zh-CN")
       );
 
-    if (validRecords.length === 0) {
-      alert("没有可导出的消费数据。");
-      return;
-    }
-
-    // 自动确定实际数据范围
-    const startYear = Math.min(
-      ...validRecords.map(record => record.year)
-    );
-
-    const endYear = Math.max(
-      ...validRecords.map(record => record.year)
-    );
-
-    // 找到最后一个实际存在数据的月份
-    const endYearRecords = validRecords.filter(
-      record => record.year === endYear
-    );
-
-    const endMonth = Math.max(
-      ...endYearRecords.map(record => record.month)
-    );
-
-    const startMonth = 1;
-
-    // 只导出实际数据范围
-    const analysisRecords = validRecords.filter(record => {
-      if (record.year < startYear || record.year > endYear) {
-        return false;
+      const monthlyData: Record<string, Record<string, number>> = {};
+      for (const record of analysisRecords) {
+        const key = `${record.year}-${String(record.month).padStart(2, "0")}`;
+        if (!monthlyData[key]) {
+          monthlyData[key] = {};
+        }
+        monthlyData[key][record.bookName] =
+          (monthlyData[key][record.bookName] || 0) + record.amount;
       }
 
-      if (record.year === endYear) {
-        return (
-          record.month >= startMonth &&
-          record.month <= endMonth
-        );
+      const monthlySummary = [];
+      for (let year = startYear; year <= endYear; year++) {
+        for (let month = 1; month <= 12; month++) {
+          const key = `${year}-${String(month).padStart(2, "0")}`;
+          const booksData: Record<string, number> = {};
+          let total = 0;
+
+          for (const book of books) {
+            const amount = monthlyData[key]?.[book] || 0;
+            booksData[book] = amount;
+            total += amount;
+          }
+
+          monthlySummary.push({
+            year,
+            month,
+            period: key,
+            books: booksData,
+            total,
+          });
+        }
       }
 
-      return record.month >= startMonth;
-    });
-
-    // =================================================
-    // 实际出现过的账本名称
-    // =================================================
-
-    const bookSet = new Set<string>();
-
-    for (const record of analysisRecords) {
-      if (record.bookName) {
-        bookSet.add(record.bookName);
-      }
-    }
-
-    const books = Array.from(bookSet).sort((a, b) =>
-      a.localeCompare(b, "zh-CN")
-    );
-
-    // =================================================
-    // 月度汇总
-    // =================================================
-
-    const monthlyData: Record<
-      string,
-      Record<string, number>
-    > = {};
-
-    for (const record of analysisRecords) {
-      const key = `${record.year}-${String(
-        record.month
-      ).padStart(2, "0")}`;
-
-      if (!monthlyData[key]) {
-        monthlyData[key] = {};
-      }
-
-      monthlyData[key][record.bookName] =
-        (monthlyData[key][record.bookName] || 0) +
-        record.amount;
-    }
-
-    const monthlySummary = [];
-
-    for (let year = startYear; year <= endYear; year++) {
-      const lastMonth =
-        year === endYear ? endMonth : 12;
-
-      for (
-        let month = startMonth;
-        month <= lastMonth;
-        month++
-      ) {
-        const key = `${year}-${String(
-          month
-        ).padStart(2, "0")}`;
-
+      const yearlySummary = [];
+      for (let year = startYear; year <= endYear; year++) {
+        const yearRecords = analysisRecords.filter(record => record.year === year);
         const booksData: Record<string, number> = {};
         let total = 0;
 
         for (const book of books) {
-          const amount =
-            monthlyData[key]?.[book] || 0;
+          const amount = yearRecords
+            .filter(record => record.bookName === book)
+            .reduce((sum, record) => sum + record.amount, 0);
 
           booksData[book] = amount;
           total += amount;
         }
 
-        monthlySummary.push({
+        yearlySummary.push({
           year,
-          month,
-          period: key,
           books: booksData,
           total,
         });
       }
+
+      const exportData = {
+        exportedAt: new Date().toISOString(),
+        source: "AI-Wealth-OS / expense",
+        description: `${startYear}年至${endYear}年消费分析数据`,
+        period: {
+          startYear,
+          endYear,
+        },
+        books,
+        monthlySummary,
+        yearlySummary,
+        records: analysisRecords.map(record => ({
+          year: record.year,
+          month: record.month,
+          bookName: record.bookName,
+          category: record.category,
+          group: record.group,
+          amount: record.amount,
+        })),
+      };
+
+      const json = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `expense-analysis-${startYear}-to-${endYear}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("导出消费分析数据失败:", error);
+      alert("导出消费分析数据失败，请查看控制台。");
     }
-
-    // =================================================
-    // 年度汇总
-    // =================================================
-
-    const yearlySummary = [];
-
-    for (
-      let year = startYear;
-      year <= endYear;
-      year++
-    ) {
-      const yearRecords = analysisRecords.filter(
-        record => record.year === year
-      );
-
-      const booksData: Record<string, number> = {};
-      let total = 0;
-
-      for (const book of books) {
-        const amount = yearRecords
-          .filter(
-            record => record.bookName === book
-          )
-          .reduce(
-            (sum, record) =>
-              sum + record.amount,
-            0
-          );
-
-        booksData[book] = amount;
-        total += amount;
-      }
-
-      yearlySummary.push({
-        year,
-        books: booksData,
-        total,
-      });
-    }
-
-    // =================================================
-    // 导出数据
-    // =================================================
-
-    const exportData = {
-      exportedAt: new Date().toISOString(),
-
-      source: "AI-Wealth-OS / expense",
-
-      description: `${startYear}-${endYear}年1-${endMonth}月消费分析数据`,
-
-      period: {
-        startYear,
-        endYear,
-        startMonth,
-        endMonth,
-      },
-
-      books,
-
-      monthlySummary,
-
-      yearlySummary,
-
-      records: analysisRecords.map(record => ({
-        year: record.year,
-        month: record.month,
-        bookName: record.bookName,
-        category: record.category,
-        group: record.group,
-        amount: record.amount,
-      })),
-    };
-
-    const json = JSON.stringify(
-      exportData,
-      null,
-      2
-    );
-
-    const blob = new Blob([json], {
-      type: "application/json;charset=utf-8",
-    });
-
-    const url =
-      URL.createObjectURL(blob);
-
-    const link =
-      document.createElement("a");
-
-    link.href = url;
-
-    link.download =
-      `expense-analysis-${startYear}-${endYear}-to-${String(
-        endMonth
-      ).padStart(2, "0")}.json`;
-
-    document.body.appendChild(link);
-
-    link.click();
-
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(url);
-  } catch (error) {
-    console.error(
-      "导出消费分析数据失败:",
-      error
-    );
-
-    alert(
-      "导出消费分析数据失败，请查看控制台。"
-    );
-  }
-};
-
-   const exportData = {
-  exportedAt: new Date().toISOString(),
-
-  source: "AI-Wealth-OS / expense",
-
-  description: "消费分析数据",
-
-
-  // 实际出现过的账本
-  books,
-
-  // 每个月各账本消费
-  monthlySummary: [],
-
-  // 每年各账本消费
-  yearlySummary: [],
-
-  // 原始统一消费记录
-  records: analysisRecords,
-};
-
-    const json = JSON.stringify(
-      exportData,
-      null,
-      2
-    );
-
-    const blob = new Blob([json], {
-      type: "application/json;charset=utf-8",
-    });
-
-    const url =
-      URL.createObjectURL(blob);
-
-    const link =
-      document.createElement("a");
-
-    link.href = url;
-
-    link.download =
-      "expense-analysis-2023-2026-jan-sep.json";
-
-    document.body.appendChild(link);
-
-    link.click();
-
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(url);
-  } catch (error) {
-    console.error(
-      "导出消费分析数据失败:",
-      error
-    );
-
-    alert(
-      "导出消费分析数据失败，请查看控制台。"
-    );
-  }
-};
+  };
 const handleExportExpenseData = () => {
   try {
     const exportData = {
@@ -1612,6 +1694,103 @@ const handleExportExpenseData = () => {
     alert("导出消费数据失败，请查看控制台。");
   }
 };
+
+
+// 日常账本：行是年份，列是各项分类的矩阵数据（支持将其他带“游”的账本计入日常账本的“旅游”分类）
+  const dailyBookYearlyMatrix = useMemo(() => {
+    const yearsSet = new Set<number>();
+    const categoriesSet = new Set<string>();
+    
+    const dailyYearCategoryMap = new Map<number, Map<string, number>>();
+    const xiaoBaoBookYearMap = new Map<number, number>();
+
+    unifiedExpenseRecords.forEach(record => {
+      let bookName = (record.bookName || "").trim();
+      const year = Number(record.year);
+      const amount = Number(record.amount || 0);
+
+      if (!Number.isFinite(year) || amount <= 0) return;
+      yearsSet.add(year);
+
+      let category = record.category || "未分类";
+
+      // 🌟 核心新规则：如果账本名称带“游”（且不属于小宝2.7万这类特殊账本），
+      // 我们将其视作日常账本的“旅游”支出归集进来
+      const isTravelBook = bookName.includes("游") && !bookName.includes("小宝");
+
+      if (bookName === "日常账本" || isTravelBook) {
+        // 如果是带“游”的账本，或者日常账本里属于旅游/小宝的分类，做归一化处理
+        if (isTravelBook) {
+          category = "旅游";
+        } else if (category.includes("小宝")) {
+          category = "小宝";
+        }
+
+        categoriesSet.add(category);
+
+        if (!dailyYearCategoryMap.has(year)) {
+          dailyYearCategoryMap.set(year, new Map());
+        }
+        const catMap = dailyYearCategoryMap.get(year)!;
+        catMap.set(category, (catMap.get(category) || 0) + amount);
+      }
+
+      // 收集“小宝2.7万”账本的年度统计数字（用于小宝无流水时的替补）
+      if (bookName.includes("小宝") && (bookName.includes("2.7万") || bookName.includes("27000"))) {
+        xiaoBaoBookYearMap.set(year, (xiaoBaoBookYearMap.get(year) || 0) + amount);
+      }
+    });
+
+    // 确保核心分类展示
+    categoriesSet.add("小宝");
+    categoriesSet.add("旅游");
+
+    if (yearsSet.size === 0) {
+      yearsSet.add(new Date().getFullYear());
+    }
+
+    const categories = Array.from(categoriesSet).sort((a, b) => {
+      if (a === "小宝") return -1;
+      if (b === "小宝") return 1;
+      if (a === "旅游") return -1;
+      if (b === "旅游") return 1;
+      return a.localeCompare(b, "zh-CN");
+    });
+
+    const years = Array.from(yearsSet).sort((a, b) => b - a);
+
+    const rows: Array<{
+      year: number;
+      amounts: Record<string, number>;
+      yearTotal: number;
+    }> = [];
+
+    years.forEach(year => {
+      let yearTotal = 0;
+      const amounts: Record<string, number> = {};
+      const catMap = dailyYearCategoryMap.get(year) || new Map();
+
+      categories.forEach(category => {
+        let amt = catMap.get(category) || 0;
+
+        // 如果日常账本（及合并进来的旅游）中小宝当年为0，读取“小宝2.7万”账本填补
+        if (category === "小宝" && amt === 0) {
+          amt = xiaoBaoBookYearMap.get(year) || 0;
+        }
+
+        amounts[category] = amt;
+        yearTotal += amt;
+      });
+
+      rows.push({
+        year,
+        amounts,
+        yearTotal,
+      });
+    });
+
+    return { categories, rows };
+  }, [unifiedExpenseRecords]);
   // ===================================================
   // ★ 生成 aiExpenseYears
   // ===================================================
@@ -1860,9 +2039,9 @@ const handleExportExpenseData = () => {
     // -------------------------------------------------
     // 按月：只显示当前自然年
     // -------------------------------------------------
-    if (expenseDetailMode === "month") {
-      const currentYear =
-        new Date().getFullYear();
+if (expenseDetailMode === "month") {
+      // 使用你选择的年份，若未选则回退到当年
+      const currentYear = expenseDetailYear ?? new Date().getFullYear();
 
       // ★ 先无条件建立 1–12 月。
       // 这样即使 unifiedExpenseRecords 暂时为空，
@@ -5134,7 +5313,7 @@ const handleExportExpenseData = () => {
     ★ 各账本月度消费
 ================================================= */}
 <div className="rounded-xl border bg-white shadow-sm">
-  <div className="flex items-center justify-between gap-4 border-b px-5 py-4">
+  <div className="flex flex-wrap items-center justify-between gap-4 border-b px-5 py-4">
     <div>
       <div className="font-semibold">
         {yearlyBookMonthlyStats.year} 年各账本月度消费
@@ -5145,10 +5324,28 @@ const handleExportExpenseData = () => {
       </div>
     </div>
 
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-gray-500">分析导出范围:</span>
+      <select
+        value={exportStartYear}
+        onChange={e => setExportStartYear(Number(e.target.value))}
+        className="rounded-lg border bg-white px-2 py-1.5 text-sm"
+      >
+        {availableYears.map(year => (
+          <option key={year} value={year}>{year}年</option>
+        ))}
+      </select>
+      <span className="text-xs text-gray-500">至</span>
+      <select
+        value={exportEndYear}
+        onChange={e => setExportEndYear(Number(e.target.value))}
+        className="rounded-lg border bg-white px-2 py-1.5 text-sm"
+      >
+        {availableYears.map(year => (
+          <option key={year} value={year}>{year}年</option>
+        ))}
+      </select>
 
-
-      {/* 导出 2023-2026 年 1-9 月分析数据 */}
       <button
         type="button"
         onClick={handleExportExpenseAnalysisData}
@@ -5252,6 +5449,360 @@ const handleExportExpenseData = () => {
     </table>
   </div>
 </div>
+
+{/* =================================================
+            ★ 大消费清单与年度统计 (单笔 >= 2000)
+        ================================================= */}
+        <div className="mb-6 overflow-hidden rounded-xl border bg-white shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b px-5 py-4">
+            <div>
+              <div className="font-semibold text-base">大消费清单与年度统计 (单笔 ¥2,000 及以上)</div>
+              <div className="mt-1 text-xs text-gray-500">
+                支持按年份和账本自由筛选，2000–4000元显示绿色，4000元以上显示红色
+              </div>
+            </div>
+
+            {/* 年份与账本选择器 */}
+            <div className="flex flex-wrap items-center gap-3">
+              {/* 年份选择 */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500">选择年份:</span>
+                <select
+                  value={largeExpenseYear}
+                  onChange={e => setLargeExpenseYear(e.target.value)}
+                  className="rounded-lg border bg-white px-3 py-1.5 text-sm font-medium"
+                >
+                  <option value="ALL">全部年份</option>
+                  {availableYears.map(year => (
+                    <option key={year} value={year}>
+                      {year} 年
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 账本选择 */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-gray-500">选择账本:</span>
+                <select
+                  value={largeExpenseBook}
+                  onChange={e => setLargeExpenseBook(e.target.value)}
+                  className="rounded-lg border bg-white px-3 py-1.5 text-sm font-medium"
+                >
+                  <option value="ALL">全部账本</option>
+                  {Array.from(new Set(transactions.map(item => getNormalizedBookName(item))))
+                    .sort((a, b) => a.localeCompare(b, "zh-CN"))
+                    .map(book => (
+                      <option key={book} value={book}>
+                        {book}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* 年度大消费统计汇总卡片 */}
+          <div className="border-b bg-gray-50 px-5 py-4">
+            <div className="mb-3 text-xs font-semibold text-gray-600">📊 大消费统计与占比概览</div>
+            {largeExpenseAnnualStats.length === 0 ? (
+              <div className="text-sm text-gray-400">暂无大消费统计数据</div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {largeExpenseAnnualStats.map(stat => (
+                  <div key={stat.year} className="rounded-lg border bg-white p-3.5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-gray-800">{stat.year} 年</span>
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600">
+                        {stat.count} 笔大消费
+                      </span>
+                    </div>
+                    <div className="mt-2 flex items-baseline justify-between">
+                      <span className="text-xs text-gray-500">大消费总额:</span>
+                      <span className="font-bold text-gray-900">{formatMoney(stat.largeTotal)}</span>
+                    </div>
+                    <div className="mt-1 flex items-baseline justify-between">
+                      <span className="text-xs text-gray-500">占当年总消费:</span>
+                      <span className="font-bold text-indigo-600">{stat.percentage.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 大消费明细表格 */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1000px] text-sm">
+              <thead className="border-b bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-5 py-3 text-left">时间 / 年份</th>
+                  <th className="px-5 py-3 text-left">账本名称</th>
+                  <th className="px-5 py-3 text-left">分类</th>
+                  <th className="px-5 py-3 text-left">账户</th>
+                  <th className="px-5 py-3 text-right">金额</th>
+                  <th className="px-5 py-3 text-left">备注</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y">
+                {largeExpenseTransactions.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-5 py-10 text-center text-sm text-gray-400">
+                      暂无符合条件的大消费记录（单笔金额均低于 2,000 元或当前筛选条件无记录）
+                    </td>
+                  </tr>
+                ) : (
+                  largeExpenseTransactions.map(item => {
+                    const amount = Math.abs(Number(item.amount || 0));
+                    const isGreen = amount >= 2000 && amount < 4000;
+                    const isRed = amount >= 4000;
+
+                    return (
+                      <tr key={item.id} className="hover:bg-gray-50">
+                        <td className="whitespace-nowrap px-5 py-3 font-medium text-gray-700">
+                          {formatDate(item.transaction_time)}
+                        </td>
+                        <td className="whitespace-nowrap px-5 py-3">
+                          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700">
+                            {item.book_name || "-"}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-gray-600">{item.category || "-"}</td>
+                        <td className="px-5 py-3 text-gray-600">{item.account_name || "-"}</td>
+                        <td
+                          className={`px-5 py-3 text-right font-bold ${
+                            isGreen ? "text-green-600" : isRed ? "text-red-600" : "text-gray-900"
+                          }`}
+                        >
+                          {formatMoney(amount)}
+                          <span className="ml-1.5 text-xs font-normal">
+                            {isGreen ? "(绿)" : isRed ? "(红)" : ""}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-gray-500">{item.remark || "-"}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+{/* =================================================
+            ★ 日常账本：跨年度分类金额对比表（行=年份，列=各项分类项目）
+            [破框全屏变宽设计]
+        ================================================= */}
+        <div className="mb-6 overflow-hidden rounded-xl border bg-white shadow-sm lg:-mx-12 xl:-mx-24">
+          <div className="border-b px-6 py-4">
+            <div className="font-semibold text-base">📚 日常账本 - 各年度与消费项目矩阵对比</div>
+            <div className="mt-1 text-xs text-gray-500">
+              竖向显示年份，横向展开显示各项消费分类，小宝无真实流水时自动读取“小宝2.7万”账本（已解除全局宽度约束）
+            </div>
+          </div>
+
+          <div className="overflow-x-auto">
+            {/* 将最小宽度调得更宽，例如 1600px 或 1800px，确保横向展开时有足够的空间 */}
+            <table className="w-full min-w-[1600px] text-sm">
+              <thead className="border-b bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-6 py-3.5 text-left font-semibold">年份</th>
+                  {dailyBookYearlyMatrix.categories.map(cat => (
+                    <th key={cat} className="px-6 py-3.5 text-right font-semibold">
+                      {cat}
+                    </th>
+                  ))}
+                  <th className="px-6 py-3.5 text-right font-semibold text-blue-600">年 度 合 计</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y">
+                {dailyBookYearlyMatrix.rows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={dailyBookYearlyMatrix.categories.length + 2}
+                      className="px-6 py-12 text-center text-sm text-gray-400"
+                    >
+                      暂无“日常账本”的消费记录
+                    </td>
+                  </tr>
+                ) : (
+                  dailyBookYearlyMatrix.rows.map(row => (
+                    <tr key={row.year} className="hover:bg-gray-50">
+                      <td className="whitespace-nowrap px-6 py-3.5 font-bold text-gray-800">
+                        {row.year}年
+                      </td>
+
+                      {/* 循环渲染横向的各个分类项目金额 */}
+                      {dailyBookYearlyMatrix.categories.map(cat => {
+                        const val = row.amounts[cat] || 0;
+                        return (
+                          <td key={cat} className="px-6 py-3.5 text-right text-gray-600">
+                            {val === 0 ? "0" : formatMoney(val)}
+                          </td>
+                        );
+                      })}
+
+                      {/* 年度总计 */}
+                      <td className="px-6 py-3.5 text-right font-bold text-blue-600">
+                        {formatMoney(row.yearTotal)}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+{/* =================================================
+            ★ 消费流水明细与多维筛选模块（采用大消费清单一致的格式）
+        ================================================= */}
+        <div className="mb-6 overflow-hidden rounded-xl border bg-white shadow-sm lg:-mx-12 xl:-mx-24">
+          <div className="border-b px-6 py-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="font-semibold text-base">📋 消费流水明细与筛选</div>
+                <div className="mt-1 text-xs text-gray-500">
+                  支持按账本、年份、全年/单月、以及账本中的分类进行多维精准筛选
+                </div>
+              </div>
+
+              {/* 多维筛选控制栏 */}
+              <div className="flex flex-wrap items-center gap-3">
+                {/* 1. 账本筛选 */}
+                <select
+                  value={expenseDetailBook || "ALL"}
+                  onChange={e => setExpenseDetailBook(e.target.value)}
+                  className="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                >
+                  <option value="ALL">📚 全部账本</option>
+                  {availableBooks.map(book => (
+                    <option key={book} value={book}>
+                      {book}
+                    </option>
+                  ))}
+                </select>
+
+                {/* 2. 年份选择 */}
+                <select
+                  value={expenseDetailYear || "ALL"}
+                  onChange={e => setExpenseDetailYear(e.target.value)}
+                  className="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                >
+                  <option value="ALL">全部年份</option>
+                  <option value="2026">2026年</option>
+                  <option value="2025">2025年</option>
+                </select>
+
+                {/* 3. 月份选择（含“全年”） */}
+                <select
+                  value={expenseDetailMonth || "ALL"}
+                  onChange={e => setExpenseDetailMonth(e.target.value)}
+                  className="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                >
+                  <option value="ALL">📅 全年统计</option>
+                  <option value="01">1月</option>
+                  <option value="02">2月</option>
+                  <option value="03">3月</option>
+                  <option value="04">4月</option>
+                  <option value="05">5月</option>
+                  <option value="06">6月</option>
+                  <option value="07">7月</option>
+                  <option value="08">8月</option>
+                  <option value="09">9月</option>
+                  <option value="10">10月</option>
+                  <option value="11">11月</option>
+                  <option value="12">12月</option>
+                </select>
+
+                {/* 4. 分类选择 */}
+                <select
+                  value={expenseDetailCategory || "ALL"}
+                  onChange={e => setExpenseDetailCategory(e.target.value)}
+                  className="rounded-lg border px-3 py-1.5 text-sm bg-white"
+                >
+                  <option value="ALL">🏷️ 全部分类</option>
+                  {availableCategories.map(cat => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* 表格区域（采用大消费清单一致的列结构与宽屏破框样式） */}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1400px] text-sm border-collapse">
+              <thead className="border-b bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="px-6 py-3.5 text-left font-semibold">交易时间 / 年份</th>
+                  <th className="px-6 py-3.5 text-left font-semibold">账本名称</th>
+                  <th className="px-6 py-3.5 text-left font-semibold">分类</th>
+                  <th className="px-6 py-3.5 text-left font-semibold">账户</th>
+                  <th className="px-6 py-3.5 text-right font-semibold">金额</th>
+                  <th className="px-6 py-3.5 text-left font-semibold">备注</th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y">
+                {filteredExpenseDetails.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
+                      没有找到符合条件的消费流水记录
+                    </td>
+                  </tr>
+                ) : (
+                  filteredExpenseDetails.map((item, index) => {
+                    const amount = Math.abs(Number(item.amount || 0));
+                    const isGreen = amount >= 2000 && amount < 4000;
+                    const isRed = amount >= 4000;
+
+                    return (
+                      <tr key={item.id || index} className="hover:bg-gray-50">
+                        {/* 1. 交易时间 / 年份 */}
+                        <td className="whitespace-nowrap px-6 py-3.5 font-medium text-gray-700">
+                          {formatDate(item.transaction_time || item.date || "-")}
+                        </td>
+
+                        {/* 2. 账本名称 */}
+                        <td className="whitespace-nowrap px-6 py-3.5">
+                          <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700">
+                            {item.bookName || item.book_name || "-"}
+                          </span>
+                        </td>
+
+                        {/* 3. 分类 */}
+                        <td className="px-6 py-3.5 text-gray-800 font-medium">
+                          {item.category || "-"}
+                        </td>
+
+                        {/* 4. 账户 */}
+                        <td className="px-6 py-3.5 text-gray-600">
+                          {item.account_name || "-"}
+                        </td>
+
+                        {/* 5. 金额（支持与大消费清单一致的高亮或常规展示） */}
+                        <td className="px-6 py-3.5 text-right font-bold text-gray-900">
+                          {formatMoney(amount)}
+                        </td>
+
+                        {/* 6. 备注 */}
+                        <td className="px-6 py-3.5 text-gray-500">
+                          {item.remark || "-"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+
         {/* =================================================
             ★ AI 消费分析
         ================================================= */}
@@ -5262,257 +5813,6 @@ const handleExportExpenseData = () => {
             transactions={transactions}
           />
         </div>
-
-        {/* =================================================
-            最近流水
-        ================================================= */}
-
-        <div
-          className="
-            overflow-hidden
-            rounded-xl
-            border
-            bg-white
-          "
-        >
-          <div
-            className="
-              border-b
-              px-5
-              py-4
-            "
-          >
-            <div className="font-semibold">
-              最近消费流水
-            </div>
-
-            <div
-              className="
-                mt-1
-                text-xs
-                text-gray-500
-              "
-            >
-              最新 100 笔
-            </div>
-          </div>
-
-          <div
-            className="
-              overflow-x-auto
-            "
-          >
-            <table
-              className="
-                w-full
-                min-w-[1200px]
-                text-sm
-              "
-            >
-              <thead
-                className="
-                  border-b
-                  bg-gray-50
-                  text-gray-600
-                "
-              >
-                <tr>
-                  <th className="px-5 py-3 text-left">
-                    时间
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    账本名称
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    账户
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    类型
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    收支
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    分类
-                  </th>
-
-                  <th className="px-5 py-3 text-right">
-                    金额
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    成员
-                  </th>
-
-                  <th className="px-5 py-3 text-left">
-                    备注
-                  </th>
-
-                  <th className="px-5 py-3 text-center">
-                    信用卡
-                  </th>
-
-                  <th className="px-5 py-3 text-center">
-                    平账
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y">
-                {loading && (
-                  <tr>
-                    <td
-                      colSpan={11}
-                      className="
-                        px-5
-                        py-12
-                        text-center
-                        text-gray-500
-                      "
-                    >
-                      正在加载消费流水...
-                    </td>
-                  </tr>
-                )}
-
-                {!loading &&
-                  recentTransactions.length ===
-                    0 && (
-                    <tr>
-                      <td
-                        colSpan={11}
-                        className="
-                          px-5
-                          py-12
-                          text-center
-                          text-gray-500
-                        "
-                      >
-                        暂无消费流水，请上传有鱼 Excel
-                      </td>
-                    </tr>
-                  )}
-
-                {!loading &&
-                  recentTransactions.map(
-                    item => (
-                      <tr
-                        key={item.id}
-                        className="
-                          hover:bg-gray-50
-                        "
-                      >
-                        <td
-                          className="
-                            whitespace-nowrap
-                            px-5
-                            py-3
-                          "
-                        >
-                          {formatDate(
-                            item.transaction_time
-                          )}
-                        </td>
-
-                        <td
-                          className="
-                            whitespace-nowrap
-                            px-5
-                            py-3
-                            font-medium
-                            text-gray-700
-                          "
-                        >
-                          {item.book_name ||
-                            "-"}
-                        </td>
-
-                        <td
-                          className="
-                            px-5
-                            py-3
-                            font-medium
-                          "
-                        >
-                          {item.account_name ||
-                            "-"}
-                        </td>
-
-                        <td className="px-5 py-3">
-                          {item.account_type ||
-                            "-"}
-                        </td>
-
-                        <td className="px-5 py-3">
-                          {item.income_expense_type ||
-                            "-"}
-                        </td>
-
-                        <td className="px-5 py-3">
-                          {item.category ||
-                            "-"}
-                        </td>
-
-                        <td
-                          className={`px-5 py-3 text-right font-medium ${
-                            Number(
-                              item.amount
-                            ) < 0
-                              ? "text-red-600"
-                              : "text-green-600"
-                          }`}
-                        >
-                          {formatMoney(
-                            item.amount
-                          )}
-                        </td>
-
-                        <td className="px-5 py-3">
-                          {item.member ||
-                            "-"}
-                        </td>
-
-                        <td className="px-5 py-3">
-                          {item.remark ||
-                            "-"}
-                        </td>
-
-                        <td
-                          className="
-                            px-5
-                            py-3
-                            text-center
-                          "
-                        >
-                          {item.is_credit_card
-                            ? "✅"
-                            : "-"}
-                        </td>
-
-                        <td
-                          className="
-                            px-5
-                            py-3
-                            text-center
-                          "
-                        >
-                          {item.is_settlement
-                            ? "✅"
-                            : "-"}
-                        </td>
-                      </tr>
-                    )
-                  )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
         {/* =================================================
             数据说明
         ================================================= */}
