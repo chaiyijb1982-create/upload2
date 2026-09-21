@@ -619,7 +619,7 @@ const [
   const [
     ningboRepaymentYear,
     setNingboRepaymentYear,
-  ] = useState<number>(2027);
+  ] = useState<number>(2034);
 
 
   // ===================================================
@@ -4010,95 +4010,133 @@ setCurrentHkAsset(
                       annualLoan;
 
                     return (
-                      <tr
-                        key={year}
-                        className="hover:bg-gray-50"
-                      >
-                        <td
-                          className="border border-gray-200 px-3 py-4 text-center text-lg font-bold text-gray-800 align-middle"
-                        >
-                          <div>{year}</div>
+                  
+<tr
+  key={year}
+  className="hover:bg-[#FAFAF8]"
+>
+  <td
+    className="border border-gray-200 px-3 py-4 text-center text-lg font-bold text-gray-800 align-middle"
+  >
+    <div>{year}</div>
 
-                          <div className="mt-2 space-y-1 text-left text-sm font-semibold leading-tight">
-                            <div className="whitespace-nowrap text-green-700">
-                              香港共有：{wan(hkTotalForDisplay)}万
-                            </div>
-                            <div className="whitespace-nowrap text-blue-700">
-                              大陆共有：{wan(mainlandTotalForDisplay)}万
-                            </div>
-                          </div>
+    <div className="mt-2 space-y-1 text-left text-sm font-semibold leading-tight">
+      <div className="whitespace-nowrap text-[#8A6A2A]">
+        香港共有：{wan(hkTotalForDisplay)}万
+      </div>
 
-                          {isBaseYear ? (
-                            <div className="mt-1 text-sm font-normal text-gray-400">
-                              当前资产
-                            </div>
-                          ) : null}
-                        </td>
+      <div className="whitespace-nowrap text-[#65758B]">
+        大陆共有：{wan(mainlandTotalForDisplay)}万
+      </div>
+    </div>
 
-                        <td
-                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {isBaseYear ? "—" : money(mainlandIncrease)}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-center text-lg font-semibold text-blue-700 whitespace-nowrap"
-                        >
-                          {isBaseYear ? "—" : `${mainlandGrowthRate}%`}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-blue-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {money(mainlandAsset)}
-                        </td>
+    {isBaseYear ? (
+      <div className="mt-1 text-sm font-normal text-gray-400">
+        当前资产
+      </div>
+    ) : null}
+  </td>
 
-                        <td
-                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {isBaseYear ? "—" : money(hkIncrease)}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-center text-lg font-semibold text-green-700 whitespace-nowrap"
-                        >
-                          {isBaseYear ? "—" : `${hkGrowthRate}%`}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-green-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {money(hkAsset)}
-                        </td>
+ 
+{/* 大陆 */}
+<td
+  className="border border-[#DCE3EA] bg-[#F4F7F9] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {isBaseYear
+    ? "—"
+    : mainlandIncrease === 0
+      ? "0"
+      : `${wan(mainlandIncrease)}万`}
+</td>
 
-                        <td
-                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {isBaseYear
-                            ? "—"
-                            : money(fixedIncomeIncrease)}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-center text-lg font-semibold text-purple-700 whitespace-nowrap"
-                        >
-                          {isBaseYear
-                            ? "—"
-                            : `${fixedIncomeGrowthRate}%`}
-                        </td>
-                        <td
-                          className="border border-gray-200 bg-purple-50/40 px-3 py-4 text-right text-lg font-bold text-gray-900 whitespace-nowrap"
-                        >
-                          {money(fixedIncomeAsset)}
-                        </td>
+<td
+  className="border border-[#DCE3EA] bg-[#F4F7F9] px-3 py-4 text-center text-lg font-semibold text-[#65758B] whitespace-nowrap"
+>
+  {isBaseYear ? "—" : `${mainlandGrowthRate}%`}
+</td>
 
-                        <td
-                          className="border border-gray-200 bg-orange-50/50 px-3 py-4 text-right text-lg font-bold text-orange-700 whitespace-nowrap"
-                        >
-                          {money(annualLoan)}
-                        </td>
+<td
+  className="border border-[#DCE3EA] bg-[#F4F7F9] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {mainlandAsset === 0
+    ? "0"
+    : `${wan(mainlandAsset)}万`}
+</td>
 
-                        <td
-                          className="border border-gray-200 bg-gray-50 px-3 py-4 text-right text-lg font-bold text-green-700 whitespace-nowrap"
-                        >
-                          {money(totalAsset)}
-                        </td>
-                      </tr>
+{/* 香港 */}
+<td
+  className="border border-[#E8DFC7] bg-[#FBF8EF] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {isBaseYear
+    ? "—"
+    : hkIncrease === 0
+      ? "0"
+      : `${wan(hkIncrease)}万`}
+</td>
+
+<td
+  className="border border-[#E8DFC7] bg-[#FBF8EF] px-3 py-4 text-center text-lg font-semibold text-[#8A6A2A] whitespace-nowrap"
+>
+  {isBaseYear ? "—" : `${hkGrowthRate}%`}
+</td>
+
+<td
+  className="border border-[#E8DFC7] bg-[#FBF8EF] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {hkAsset === 0
+    ? "0"
+    : `${wan(hkAsset)}万`}
+</td>
+
+{/* Fixed Income */}
+<td
+  className="border border-[#E1E1DE] bg-[#F7F7F5] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {isBaseYear
+    ? "—"
+    : fixedIncomeIncrease === 0
+      ? "0"
+      : `${wan(fixedIncomeIncrease)}万`}
+</td>
+
+<td
+  className="border border-[#E1E1DE] bg-[#F7F7F5] px-3 py-4 text-center text-lg font-semibold text-[#6B6B63] whitespace-nowrap"
+>
+  {isBaseYear
+    ? "—"
+    : `${fixedIncomeGrowthRate}%`}
+</td>
+
+<td
+  className="border border-[#E1E1DE] bg-[#F7F7F5] px-3 py-4 text-center text-lg font-bold text-gray-900 whitespace-nowrap"
+>
+  {fixedIncomeAsset === 0
+    ? "0"
+    : `${wan(fixedIncomeAsset)}万`}
+</td>
+
+{/* 贷款 */}
+<td
+  className="border border-[#E7D7D2] bg-[#FAF5F3] px-3 py-4 text-center text-lg font-bold text-[#9A6256] whitespace-nowrap"
+>
+  {annualLoan === 0
+    ? "0"
+    : `${wan(annualLoan)}万`}
+</td>
+
+{/* 总资产 */}
+<td
+  className="border border-[#DCCFA8] bg-[#F8F4E6] px-3 py-4 text-center text-lg font-bold text-[#80651E] whitespace-nowrap"
+>
+  {totalAsset === 0
+    ? "0"
+    : `${wan(totalAsset)}万`}
+</td>
+
+
+</tr>
+
+
                     );
                   });
                 })()}
