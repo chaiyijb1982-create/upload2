@@ -493,9 +493,9 @@ export default function WealthTrend({
                           font-medium
                           ${
                             row.change > 0
-                              ? "text-green-600"
+                              ? "text-red-600"
                               : row.change < 0
-                                ? "text-red-600"
+                                ? "text-green-600"
                                 : "text-gray-400"
                           }
                         `}

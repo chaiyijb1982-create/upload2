@@ -70,6 +70,12 @@ type Holding = {
 
   skip_update: boolean;
 
+   // 定期存款
+  asset_type?: string | null;
+  annual_rate?: number | null;
+  start_date?: string | null;
+  maturity_date?: string | null;
+
   native_currency?: string | null;
 
   native_cost?: number | null;
@@ -95,6 +101,13 @@ const emptyForm = {
   shares: "",
   platform: "",
 
+  // 定期存款
+  asset_type: "normal",
+  annual_rate: "",
+  start_date: "",
+  maturity_date: "",
+  
+  // 香港/非大陆资产本币
   native_currency: "USD",
   native_cost: "",
   native_amount: "",
@@ -116,6 +129,17 @@ const CATEGORY_OPTIONS = [
   "global_stock",
   "china_stock",
   "gold",
+];
+
+const ASSET_TYPE_OPTIONS = [
+  {
+    value: "normal",
+    label: "普通资产",
+  },
+  {
+    value: "fixed_deposit",
+    label: "定期存款",
+  },
 ];
 
 const CURRENCY_OPTIONS = [
@@ -230,6 +254,10 @@ function formatPercent(
   return `${n.toFixed(2)}%`;
 }
 
+// =====================================================
+// 中国习惯：涨红、跌绿、0 灰
+// =====================================================
+
 function getProfitClass(
   value: any
 ) {
@@ -238,16 +266,234 @@ function getProfitClass(
     Number(value);
 
   if (n > 0) {
-    return "text-emerald-600";
+    return "text-red-600";
   }
 
   if (n < 0) {
-    return "text-red-500";
+    return "text-green-600";
   }
 
   return "text-gray-500";
 }
 
+
+// =====================================================
+// 定期存款：计算当前应计金额
+// =====================================================
+
+
+// =====================================================
+// 定期存款：计算截至今天的本币金额
+// =====================================================
+function getCurrentNativeAmount(
+  item: Holding
+) {
+  const principal =
+    Number(item.native_amount ?? 0);
+
+  if (
+    !Number.isFinite(principal) ||
+    principal <= 0
+  ) {
+    return 0;
+  }
+
+  if (
+    item.asset_type !==
+    "fixed_deposit"
+  ) {
+    return principal;
+  }
+
+  const annualRate =
+    Number(item.annual_rate ?? 0);
+
+  if (
+    !Number.isFinite(annualRate) ||
+    annualRate <= 0 ||
+    !item.start_date
+  ) {
+    return principal;
+  }
+
+  const start =
+    new Date(
+      `${item.start_date}T00:00:00`
+    );
+
+  if (
+    Number.isNaN(
+      start.getTime()
+    )
+  ) {
+    return principal;
+  }
+
+  start.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  const today =
+    new Date();
+
+  today.setHours(
+    0,
+    0,
+    0,
+    0
+  );
+
+  let end = today;
+
+  if (item.maturity_date) {
+    const maturity =
+      new Date(
+        `${item.maturity_date}T00:00:00`
+      );
+
+    if (
+      !Number.isNaN(
+        maturity.getTime()
+      )
+    ) {
+      maturity.setHours(
+        0,
+        0,
+        0,
+        0
+      );
+
+      if (
+        end > maturity
+      ) {
+        end = maturity;
+      }
+    }
+  }
+
+  if (
+    end <= start
+  ) {
+    return principal;
+  }
+
+  const days =
+    Math.floor(
+      (
+        end.getTime() -
+        start.getTime()
+      ) /
+        (
+          1000 *
+          60 *
+          60 *
+          24
+        )
+    );
+
+  return (
+    principal +
+    principal *
+      annualRate *
+      days /
+      365
+  );
+}
+
+// =====================================================
+// 定期存款：当前 CNY 金额
+// =====================================================
+function getCurrentCnyAmount(
+  item: Holding
+) {
+  const currentNative =
+    getCurrentNativeAmount(
+      item
+    );
+
+  if (
+    !Number.isFinite(
+      currentNative
+    )
+  ) {
+    return Number(
+      item.amount ?? 0
+    );
+  }
+
+  if (
+    item.asset_type !==
+    "fixed_deposit"
+  ) {
+    return Number(
+      item.amount ?? 0
+    );
+  }
+
+  const originalNative =
+    Number(
+      item.native_amount ?? 0
+    );
+
+  const originalCny =
+    Number(
+      item.amount ?? 0
+    );
+
+  if (
+    !Number.isFinite(
+      originalNative
+    ) ||
+    originalNative <= 0 ||
+    !Number.isFinite(
+      originalCny
+    )
+  ) {
+    return originalCny || 0;
+  }
+
+  // 保存时的 Native → CNY 汇率
+  const fxRate =
+    originalCny /
+    originalNative;
+
+  return (
+    currentNative *
+    fxRate
+  );
+}
+
+function getCurrentCnyProfit(
+  item: Holding
+) {
+  return (
+    getCurrentCnyAmount(item) -
+    Number(item.cost ?? 0)
+  );
+}
+
+
+function getCurrentCnyProfitRate(
+  item: Holding
+) {
+  const cost =
+    Number(item.cost ?? 0);
+
+  if (
+    !Number.isFinite(cost) ||
+    cost === 0
+  ) {
+    return 0;
+  }
+
+  return (
+    getCurrentCnyProfit(item) /
+    cost
+  ) * 100;
+}
 // =====================================================
 // 页面
 // =====================================================
@@ -271,6 +517,11 @@ export default function AssetManagementPage() {
     loading,
     setLoading,
   ] = useState(true);
+
+  const [
+  currentDateTick,
+  setCurrentDateTick,
+] = useState(0);
 
   const [
     saving,
@@ -372,13 +623,6 @@ export default function AssetManagementPage() {
 
   // ===================================================
   // 当前是否正在编辑非大陆资产
-  //
-  // 注意：
-  //
-  // editingId === null
-  // = 新增
-  //
-  // 所以新增不会触发 disabled
   // ===================================================
 
   const isEditingNonMainland =    
@@ -515,16 +759,25 @@ export default function AssetManagementPage() {
 
   }, []);
 
+
+  useEffect(() => {
+  const timer =
+    window.setInterval(() => {
+      setCurrentDateTick(
+        value => value + 1
+      );
+    }, 60 * 1000);
+
+  return () => {
+    window.clearInterval(
+      timer
+    );
+  };
+}, []);
   // ===================================================
   // 编辑非 CN 时：
   //
   // 根据 Native Currency 获取当前 FX
-  //
-  // 例如：
-  //
-  // USD → 7.2
-  // HKD → 0.92
-  // CNY → 1
   // ===================================================
 
   useEffect(() => {
@@ -605,9 +858,6 @@ export default function AssetManagementPage() {
 
   // ===================================================
 // 香港统计：USD → HKD
-//
-// 通过：
-// USD/CNY ÷ HKD/CNY = USD/HKD
 // ===================================================
 
 useEffect(() => {
@@ -665,13 +915,6 @@ useEffect(() => {
   // 编辑非 CN：
   //
   // Native → CNY 实时计算
-  //
-  // 这里不修改 form.amount / form.cost，
-  // 而是直接计算显示值。
-  //
-  // 这样可以保证：
-  //
-  // Native 是真正的数据源。
   // ===================================================
 
   const calculatedFormValues =
@@ -756,8 +999,6 @@ useEffect(() => {
 
         // -----------------------------------------------
         // 其他币种
-        //
-        // Native × FX = CNY
         // -----------------------------------------------
 
         const amount =
@@ -799,8 +1040,6 @@ useEffect(() => {
 
       // =================================================
       // CN / 新增
-      //
-      // 完全使用原来的 form
       // =================================================
 
       return {
@@ -1035,37 +1274,17 @@ useEffect(() => {
     // Native Amount
     // =================================================
 
-    if (
-      key === "native_amount"
-    ) {
+if (
+  key === "native_amount"
+) {
+  const av =
+    getCurrentNativeAmount(a);
 
-      const av =
-        numberValue(
-          a.native_amount
-        );
+  const bv =
+    getCurrentNativeAmount(b);
 
-      const bv =
-        numberValue(
-          b.native_amount
-        );
-
-      if (
-        av === null &&
-        bv === null
-      ) {
-        return 0;
-      }
-
-      if (av === null) {
-        return 1;
-      }
-
-      if (bv === null) {
-        return -1;
-      }
-
-      return av - bv;
-    }
+  return av - bv;
+}
 
     // =================================================
     // Native Cost
@@ -1104,16 +1323,38 @@ useEffect(() => {
     }
 
     // =================================================
+    // 金额 / 盈亏 / 收益率
+    // =================================================
+
+    if (key === "amount") {
+      return (
+        getCurrentCnyAmount(a) -
+        getCurrentCnyAmount(b)
+      );
+    }
+
+    if (key === "profit") {
+      return (
+        getCurrentCnyProfit(a) -
+        getCurrentCnyProfit(b)
+      );
+    }
+
+    if (key === "profit_rate") {
+      return (
+        getCurrentCnyProfitRate(a) -
+        getCurrentCnyProfitRate(b)
+      );
+    }
+
+    // =================================================
     // 数字字段
     // =================================================
 
     const numericKeys: SortKey[] = [
       "shares",
       "nav",
-      "amount",
       "cost",
-      "profit",
-      "profit_rate",
     ];
 
     if (
@@ -1282,29 +1523,20 @@ useEffect(() => {
   // 总资产
   // ===================================================
 
-  const activeTotal =
-    useMemo(() => {
-
-      return filteredActiveHoldings.reduce(
-        (
-          total,
-          item
-        ) => {
-
-          return (
-            total +
-            Number(
-              item.amount || 0
-            )
-          );
-
-        },
-        0
-      );
-
-    }, [
-      filteredActiveHoldings,
-    ]);
+const activeTotal =
+  useMemo(() => {
+    return filteredActiveHoldings.reduce(
+      (total, item) => {
+        return (
+          total +
+          getCurrentCnyAmount(item)
+        );
+      },
+      0
+    );
+  }, [
+    filteredActiveHoldings,
+  ]);
 
 
 // ===================================================
@@ -1351,11 +1583,12 @@ const mainlandStats = useMemo(() => {
 // ===================================================
 
 const hongKongStats = useMemo(() => {
-  const amount = hongKongHoldings.reduce(
-    (total, item) =>
-      total + Number(item.amount || 0),
-    0
-  );
+ const amount = hongKongHoldings.reduce(
+  (total, item) =>
+    total +
+    getCurrentCnyAmount(item),
+  0
+);
 
 
   const cost = hongKongHoldings.reduce(
@@ -1364,11 +1597,11 @@ const hongKongStats = useMemo(() => {
     0
   );
 
-  const profit = hongKongHoldings.reduce(
-    (total, item) =>
-      total + Number(item.profit || 0),
-    0
-  );
+const profit = hongKongHoldings.reduce(
+  (total, item) =>
+    total + getCurrentCnyProfit(item),
+  0
+);
 
   const profitRate =
     cost > 0
@@ -1378,9 +1611,6 @@ const hongKongStats = useMemo(() => {
   // =================================================
   // 香港本币：
   // 必须按照币种分别统计
-  //
-  // USD / HKD / EUR / GBP / JPY
-  // 不能直接混加
   // =================================================
 
   const nativeMap =
@@ -1412,9 +1642,8 @@ const hongKongStats = useMemo(() => {
         cost: 0,
       };
 
-    current.amount += Number(
-      item.native_amount || 0
-    );
+    current.amount +=
+  getCurrentNativeAmount(item);
 
     current.cost += Number(
       item.native_cost || 0
@@ -1451,6 +1680,7 @@ const hongKongStats = useMemo(() => {
   };
 }, [
   hongKongHoldings,
+  currentDateTick,
 ]);
 
 // ===================================================
@@ -1511,30 +1741,16 @@ const mainlandPlatformStats = useMemo(() => {
 
 // ===================================================
 // 香港平台统计
-// 本币
-// USD / HKD 分开统计
 // ===================================================
-
 
 
   // ===================================================
   // 大陆平台统计
-  //
-  // 全部使用 CNY
   // ===================================================
-
 
 
   // ===================================================
   // 香港平台统计
-  //
-  // 原本币种保留
-  //
-  // USD 平台：
-  // 自动增加一行 HKD
-  //
-  // HKD 只用于显示
-  // 不写入 holding_native_currency
   // ===================================================
 
   const hongKongPlatformStats = useMemo(() => {
@@ -1567,9 +1783,8 @@ const mainlandPlatformStats = useMemo(() => {
         cost: 0,
       };
 
-      current.amount += Number(
-        holding.native_amount ?? 0
-      );
+      current.amount +=
+        getCurrentNativeAmount(holding);
 
       current.cost += Number(
         holding.native_cost ?? 0
@@ -1596,10 +1811,6 @@ const mainlandPlatformStats = useMemo(() => {
 
     // =================================================
     // USD → HKD
-    //
-    // 只做 UI 显示
-    // 不写数据库
-    // 不生成 holding_native_currency
     // =================================================
 
     if (
@@ -1684,6 +1895,7 @@ const mainlandPlatformStats = useMemo(() => {
   }, [
     hongKongHoldings,
     usdToHkdRate,
+    currentDateTick,
   ]);
 
 
@@ -1768,6 +1980,20 @@ const mainlandPlatformStats = useMemo(() => {
 
       native_amount:
         item.native_amount ?? "",
+
+      asset_type:
+        item.asset_type ?? "normal",
+
+      annual_rate:
+        item.annual_rate != null
+          ? String(item.annual_rate * 100)
+          : "",
+
+      start_date:
+        item.start_date ?? "",
+
+      maturity_date:
+        item.maturity_date ?? "",  
     });
 
     setError("");
@@ -1824,8 +2050,6 @@ const mainlandPlatformStats = useMemo(() => {
 
       // =================================================
       // 默认使用普通 CNY 字段
-      //
-      // CN / 新增逻辑保持不变
       // =================================================
 
       let cnyAmount =
@@ -1846,8 +2070,6 @@ const mainlandPlatformStats = useMemo(() => {
 
       // =================================================
       // 非大陆
-      //
-      // Native 是源数据
       // =================================================
 
       if (!isMainland) {
@@ -1934,8 +2156,6 @@ const mainlandPlatformStats = useMemo(() => {
 
       // =================================================
       // Profit
-      //
-      // 永远基于 CNY
       // =================================================
 
       const calculatedProfit =
@@ -1956,8 +2176,6 @@ const mainlandPlatformStats = useMemo(() => {
 
       // =================================================
       // Holdings payload
-      //
-      // amount / cost 最终都是整数 CNY
       // =================================================
 
       const payload = {
@@ -2001,6 +2219,35 @@ const mainlandPlatformStats = useMemo(() => {
 
         platform:
           form.platform.trim(),
+
+            // ==============================
+  // 定期存款
+  // ==============================
+          asset_type:
+  form.asset_type === "fixed_deposit"
+    ? "fixed_deposit"
+    : "normal",
+
+annual_rate:
+  form.asset_type === "fixed_deposit" &&
+  form.annual_rate !== ""
+    ? Number(form.annual_rate) / 100
+    : null,
+
+start_date:
+  form.asset_type === "fixed_deposit"
+    ? form.start_date || null
+    : null,
+
+maturity_date:
+  form.asset_type === "fixed_deposit"
+    ? form.maturity_date || null
+    : null,
+
+skip_update:
+  form.asset_type === "fixed_deposit"
+    ? true
+    : false,
       };
 
       // =================================================
@@ -2033,8 +2280,6 @@ const mainlandPlatformStats = useMemo(() => {
 
         // =================================================
         // 非大陆
-        //
-        // 保存 Native 原始值
         // =================================================
 
         if (!isMainland) {
@@ -2077,8 +2322,6 @@ const mainlandPlatformStats = useMemo(() => {
 
         // =================================================
         // CN
-        //
-        // 删除 Native
         // =================================================
 
         else {
@@ -2121,15 +2364,36 @@ const mainlandPlatformStats = useMemo(() => {
           .insert({
             ...payload,
 
-            active:
-              true,
+active:
+  true,
 
-            skip_update:
-              false,
+asset_type:
+  form.asset_type || "normal",
 
-            updated_at:
-              new Date()
-                .toISOString(),
+annual_rate:
+  form.asset_type === "fixed_deposit" &&
+  form.annual_rate !== ""
+    ? Number(form.annual_rate) / 100
+    : null,
+
+start_date:
+  form.asset_type === "fixed_deposit"
+    ? form.start_date || null
+    : null,
+
+maturity_date:
+  form.asset_type === "fixed_deposit"
+    ? form.maturity_date || null
+    : null,
+
+skip_update:
+  form.asset_type === "fixed_deposit"
+    ? true
+    : false,
+
+updated_at:
+  new Date()
+    .toISOString(),
           })
           .select("id")
           .single();
@@ -2737,22 +3001,14 @@ const mainlandPlatformStats = useMemo(() => {
             </td>
 
             <td
-              className={`py-2 text-right ${
-                item.profit >= 0
-                  ? "text-green-600"
-                  : "text-red-600"
-              }`}
+              className={`py-2 text-right ${getProfitClass(item.profit)}`}
             >
               {item.profit >= 0 ? "+" : "-"}¥
               {formatNumber(Math.abs(item.profit), 2)}
             </td>
 
             <td
-              className={`py-2 text-right ${
-                item.profitRate >= 0
-                  ? "text-green-600"
-                  : "text-red-600"
-              }`}
+              className={`py-2 text-right ${getProfitClass(item.profitRate)}`}
             >
               {item.profitRate >= 0 ? "+" : ""}
               {item.profitRate.toFixed(2)}%
@@ -2980,11 +3236,7 @@ const mainlandPlatformStats = useMemo(() => {
                   </td>
 
                   <td
-                    className={`py-2 text-right ${
-                      item.profit >= 0
-                        ? "text-green-600"
-                        : "text-red-600"
-                    }`}
+                    className={`py-2 text-right ${getProfitClass(item.profit)}`}
                   >
                     {item.profit >= 0
                       ? "+"
@@ -2998,11 +3250,7 @@ const mainlandPlatformStats = useMemo(() => {
                   </td>
 
                   <td
-                    className={`py-2 text-right ${
-                      item.profitRate >= 0
-                        ? "text-green-600"
-                        : "text-red-600"
-                    }`}
+                    className={`py-2 text-right ${getProfitClass(item.profitRate)}`}
                   >
                     {item.profitRate >= 0
                       ? "+"
@@ -3108,9 +3356,6 @@ const mainlandPlatformStats = useMemo(() => {
       )}
       {/* =========================
           USD → HKD
-          
-          只有数据库没有 HKD 时
-          才显示换算出来的 HKD
       ========================= */}
 
       {usdToHkdRate != null &&
@@ -3663,7 +3908,9 @@ const mainlandPlatformStats = useMemo(() => {
                             text-gray-500
                           "
                         >
-                          ¥{formatMoney(item.amount)}
+                          ¥{formatMoney(
+                          getCurrentCnyAmount(item)
+                            )}
                         </td>
 
                         <td
@@ -3673,10 +3920,10 @@ const mainlandPlatformStats = useMemo(() => {
                             text-right
                             font-medium
                             tabular-nums
-                            ${getProfitClass(item.profit)}
+                            ${getProfitClass(getCurrentCnyProfit(item))}
                           `}
                         >
-                          ¥{formatMoney(item.profit)}
+                          ¥{formatMoney(getCurrentCnyProfit(item))}
                         </td>
 
                         <td
@@ -3768,8 +4015,7 @@ const mainlandPlatformStats = useMemo(() => {
                                 hover:bg-gray-50
                               "
                             >
-                              编辑
-                            </button>
+                              编辑                            </button>
 
                             <button
                               onClick={() =>
@@ -4019,6 +4265,96 @@ const mainlandPlatformStats = useMemo(() => {
                     required
                   />
 
+
+                  {/* Asset Type */}
+<div>
+  <label className="mb-1.5 block text-xs font-medium text-gray-600">
+    Asset Type
+  </label>
+
+  <select
+    value={form.asset_type || "normal"}
+    onChange={e =>
+      updateForm(
+        "asset_type",
+        e.target.value
+      )
+    }
+    className="
+      w-full
+      rounded-lg
+      border
+      border-gray-200
+      bg-white
+      px-3.5
+      py-2.5
+      text-sm
+      text-gray-900
+      outline-none
+      transition
+      focus:border-gray-400
+      focus:ring-2
+      focus:ring-gray-100
+    "
+  >
+    <option value="normal">
+      普通资产
+    </option>
+
+    <option value="fixed_deposit">
+      定期存款
+    </option>
+  </select>
+</div>
+
+{/* 定期存款专用字段 */}
+{form.asset_type === "fixed_deposit" && (
+  <>
+    <FormInput
+      label="年利率 (%)"
+      value={form.annual_rate}
+      onChange={
+        value =>
+          updateForm(
+            "annual_rate",
+            value
+          )
+      }
+      type="number"
+      step="0.01"
+      placeholder="例如 4"
+    />
+
+    <FormInput
+      label="起息日"
+      value={form.start_date}
+      onChange={
+        value =>
+          updateForm(
+            "start_date",
+            value
+          )
+      }
+      type="date"
+    />
+
+    <FormInput
+      label="到期日"
+      value={form.maturity_date}
+      onChange={
+        value =>
+          updateForm(
+            "maturity_date",
+            value
+          )
+      }
+      type="date"
+    />
+  </>
+)}
+
+
+
                   <FormInput
                     label="Currency"
                     value={form.currency}
@@ -4080,12 +4416,6 @@ const mainlandPlatformStats = useMemo(() => {
                   "
                 >
 
-                  {/* =================================================
-                      Shares
-                      编辑 CN / 非 CN / 新增
-                      都可以编辑
-                  ================================================= */}
-
                   <FormInput
                     label="Shares"
                     value={form.shares}
@@ -4101,10 +4431,6 @@ const mainlandPlatformStats = useMemo(() => {
                     placeholder="持有数量"
                   />
 
-                  {/* =================================================
-                      NAV
-                  ================================================= */}
-
                   <FormInput
                     label="NAV / Price"
                     value={form.nav}
@@ -4119,20 +4445,6 @@ const mainlandPlatformStats = useMemo(() => {
                     step="0.000001"
                     placeholder="最新净值 / 价格"
                   />
-
-                  {/* =================================================
-                      Amount
-                      
-                      编辑非 CN：
-                      浅灰 + disabled
-                      value 来自 Native × FX
-
-                      CN：
-                      原来的 form.amount
-
-                      新增：
-                      原来的 form.amount
-                  ================================================= */}
 
                   <FormInput
                     label="Amount"
@@ -4156,10 +4468,6 @@ const mainlandPlatformStats = useMemo(() => {
                     }
                   />
 
-                  {/* =================================================
-                      Cost
-                  ================================================= */}
-
                   <FormInput
                     label="Cost"
                     value={
@@ -4181,10 +4489,6 @@ const mainlandPlatformStats = useMemo(() => {
                       isEditingNonMainland
                     }
                   />
-
-                  {/* =================================================
-                      Profit
-                  ================================================= */}
 
                   <FormInput
                     label="Profit"
@@ -4208,10 +4512,6 @@ const mainlandPlatformStats = useMemo(() => {
                     }
                   />
 
-                  {/* =================================================
-                      Profit Rate
-                  ================================================= */}
-
                   <FormInput
                     label="Profit Rate"
                     value={
@@ -4233,10 +4533,6 @@ const mainlandPlatformStats = useMemo(() => {
                       isEditingNonMainland
                     }
                   />
-
-                  {/* =================================================
-                      非 CN Native
-                  ================================================= */}
 
                   {form.market
                     ?.trim()
@@ -4301,10 +4597,6 @@ const mainlandPlatformStats = useMemo(() => {
                         step="0.01"
                         placeholder="当前本币市值"
                       />
-
-                      {/* =================================================
-                          编辑非 CN 时显示 FX
-                      ================================================= */}
 
                       {isEditingNonMainland && (
 
@@ -4865,11 +5157,6 @@ function AssetRegionTable({
                   align="right"
                 />
 
-                {/* =================================================
-                    Native Cost
-                    支持排序
-                ================================================= */}
-
                 {showNative && (
 
                   <SortableHeader
@@ -4881,11 +5168,6 @@ function AssetRegionTable({
                   />
 
                 )}
-
-                {/* =================================================
-                    Native Amount
-                    支持排序
-                ================================================= */}
 
                 {showNative && (
 
@@ -5065,7 +5347,7 @@ function AssetRegionTable({
                       "
                     >
                       ¥{formatMoney(
-                        item.amount
+                         getCurrentCnyAmount(item)
                       )}
                     </td>
 
@@ -5082,11 +5364,6 @@ function AssetRegionTable({
                         item.cost
                       )}
                     </td>
-
-                    {/* =================================================
-                        Native Cost
-                        始终 2 位小数
-                    ================================================= */}
 
                     {showNative && (
 
@@ -5117,11 +5394,6 @@ function AssetRegionTable({
 
                     )}
 
-                    {/* =================================================
-                        Native Amount
-                        始终 2 位小数
-                    ================================================= */}
-
                     {showNative && (
 
                       <td
@@ -5142,7 +5414,7 @@ function AssetRegionTable({
                               "USD"
                             } ${
                               formatNativeMoney(
-                                item.native_amount
+                                  getCurrentNativeAmount(item)
                               )
                             }`
 
@@ -5160,12 +5432,12 @@ function AssetRegionTable({
                         font-medium
                         tabular-nums
                         ${getProfitClass(
-                          item.profit
+                          getCurrentCnyProfit(item)
                         )}
                       `}
                     >
                       ¥{formatMoney(
-                        item.profit
+                         getCurrentCnyProfit(item)
                       )}
                     </td>
 
@@ -5177,12 +5449,12 @@ function AssetRegionTable({
                         font-medium
                         tabular-nums
                         ${getProfitClass(
-                          item.profit_rate
+                          getCurrentCnyProfitRate(item)
                         )}
                       `}
                     >
                       {formatPercent(
-                        item.profit_rate
+                         getCurrentCnyProfitRate(item)
                       )}
                     </td>
 
@@ -5395,6 +5667,7 @@ function FormInput({
             "
           >
             *
+
           </span>
 
         )}
@@ -5531,4 +5804,5 @@ function FormInput({
     </div>
 
   );
+
 }

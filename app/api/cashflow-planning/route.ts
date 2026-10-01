@@ -73,6 +73,14 @@ function normalizeName(value: unknown): string {
  *
  * 3. 本月交养老保险
  *    同一个年月只能存在一条 active。
+ *
+ * 4. 普通项目
+ *    同一个年月只能存在一条 active。
+ *
+ *    注意：
+ *    这里不再使用 project_id 作为普通项目的唯一身份，
+ *    因为历史数据里同一个“房租”可能有多个 project_id。
+ *    统一按 year + month + role + normalized name 作为身份。
  */
 function buildMatchKey(row: {
   year: number;
@@ -92,10 +100,7 @@ function buildMatchKey(row: {
   // SAL
   // =========================================================
 
-  if (
-    row.role === "income" &&
-    name === "sal"
-  ) {
+  if (row.role === "income" && name === "sal") {
     return JSON.stringify([
       row.year,
       row.month,
@@ -126,11 +131,9 @@ function buildMatchKey(row: {
 
   if (
     row.role === "expense" &&
-    (
-      row.project_id === "fixed:pension-payment" ||
+    (row.project_id === "fixed:pension-payment" ||
       row.is_pension_payment === true ||
-      name === "本月交养老保险"
-    )
+      name === "本月交养老保险")
   ) {
     return JSON.stringify([
       row.year,
@@ -142,19 +145,25 @@ function buildMatchKey(row: {
 
   // =========================================================
   // 普通项目
+  //
+  // 一个项目的唯一业务身份：
+  // 年 + 月 + role + normalized name
+  //
+  // project_id 不再参与身份判断。
+  //
+  // 原因：
+  // 同一个“房租”在历史保存中可能产生过多个 project_id。
+  // 如果继续使用 project_id 作为身份，
+  // 数据库里会不断累积重复记录，
+  // 页面刷新后就会出现“房租 / 报销 / LP 重复”。
   // =========================================================
 
   return JSON.stringify([
     row.year,
     row.month,
     row.role,
-    row.project_id,
-    row.name,
-    row.source_row,
-    row.source_col,
-    row.source_offset,
-    row.is_annuity_contribution,
-    row.is_pension_payment,
+    "__NORMAL__",
+    name,
   ]);
 }
 
@@ -178,13 +187,10 @@ export async function GET() {
     while (true) {
       const to = from + PAGE_SIZE - 1;
 
-      console.log(
-        "[CASHFLOW-PLANNING GET] loading rows:",
-        {
-          from,
-          to,
-        }
-      );
+      console.log("[CASHFLOW-PLANNING GET] loading rows:", {
+        from,
+        to,
+      });
 
       const { data, error } = await supabase
         .from("cashflow_planning")
@@ -245,8 +251,8 @@ export async function GET() {
         );
       }
 
-      const pageData =
-        (data ?? []) as unknown as CashflowPlanningRow[];
+      const pageData = (data ??
+        []) as unknown as CashflowPlanningRow[];
 
       allData.push(...pageData);
 
@@ -313,12 +319,25 @@ export async function POST(request: Request) {
 
     const body = await request.json();
 
-    const years = Array.isArray(body?.years)
-      ? body.years
-      : [];
+    const years = Array.isArray(body?.years) ? body.years : [];
 
     const projects = Array.isArray(body?.projects)
       ? body.projects
+      : [];
+
+    const deleteMonths = Array.isArray(body?.deleteMonths)
+      ? body.deleteMonths
+          .map((item: any) => ({
+            year: Number(item?.year),
+            month: Number(item?.month),
+          }))
+          .filter(
+            (item: { year: number; month: number }) =>
+              Number.isFinite(item.year) &&
+              Number.isFinite(item.month) &&
+              item.month >= 1 &&
+              item.month <= 12
+          )
       : [];
 
     void projects;
@@ -349,9 +368,7 @@ export async function POST(request: Request) {
       }
 
       const yearValue = Number(
-        yearData.year ??
-          yearData.value ??
-          yearData.yearValue
+        yearData.year ?? yearData.value ?? yearData.yearValue
       );
 
       if (!Number.isFinite(yearValue)) {
@@ -383,18 +400,13 @@ export async function POST(request: Request) {
           continue;
         }
 
-        const monthMetaProjectId =
-          `__month_meta__${yearValue}_${monthValue}`;
+        const monthMetaProjectId = `__month_meta__${yearValue}_${monthValue}`;
 
-        const incomeItems = Array.isArray(
-          monthData.income
-        )
+        const incomeItems = Array.isArray(monthData.income)
           ? monthData.income
           : [];
 
-        const expenseItems = Array.isArray(
-          monthData.expense
-        )
+        const expenseItems = Array.isArray(monthData.expense)
           ? monthData.expense
           : [];
 
@@ -402,243 +414,167 @@ export async function POST(request: Request) {
          * 收入
          * ================================================= */
 
-        incomeItems.forEach(
-          (
-            item: any,
-            index: number
-          ) => {
-            if (!item) {
-              return;
-            }
-
-            const row: CashflowPlanningRow = {
-              year: yearValue,
-              month: monthValue,
-              role: "income",
-
-              project_id:
-                optionalString(
-                  item.project_id ??
-                    item.projectId
-                ),
-
-              name:
-                optionalString(
-                  item.name ??
-                    item.title ??
-                    item.project_name
-                ),
-
-              value:
-                optionalNumber(
-                  item.value ??
-                    item.amount
-                ),
-
-              independent:
-                optionalBoolean(
-                  item.independent
-                ),
-
-              from_excel:
-                optionalBoolean(
-                  item.from_excel ??
-                    item.fromExcel
-                ),
-
-              source_row:
-                optionalNumber(
-                  item.source_row ??
-                    item.sourceRow
-                ),
-
-              source_col:
-                optionalNumber(
-                  item.source_col ??
-                    item.sourceCol
-                ),
-
-              source_offset:
-                optionalNumber(
-                  item.source_offset ??
-                    item.sourceOffset
-                ),
-
-              is_annuity_contribution:
-                optionalBoolean(
-                  item.is_annuity_contribution ??
-                    item.isAnnuityContribution
-                ),
-
-              is_pension_payment:
-                item.is_pension_payment === true ||
-                item.isPensionPayment === true,
-
-              sort_order:
-                optionalNumber(
-                  item.sort_order ??
-                    item.sortOrder ??
-                    index
-                ),
-
-              deleted:
-                item.deleted === true,
-
-              manual_remaining:
-                optionalNumber(
-                  item.manual_remaining ??
-                    item.manualRemaining
-                ),
-
-              manual_total_cash:
-                optionalNumber(
-                  item.manual_total_cash ??
-                    item.manualTotalCash
-                ),
-
-              manual_annuity:
-                optionalNumber(
-                  item.manual_annuity ??
-                    item.manualAnnuity
-                ),
-
-              original_opening_cash:
-                optionalNumber(
-                  item.original_opening_cash ??
-                    item.originalOpeningCash
-                ),
-
-              original_opening_annuity:
-                optionalNumber(
-                  item.original_opening_annuity ??
-                    item.originalOpeningAnnuity
-                ),
-            };
-
-            rows.push(row);
+        incomeItems.forEach((item: any, index: number) => {
+          if (!item) {
+            return;
           }
-        );
+
+          const row: CashflowPlanningRow = {
+            year: yearValue,
+            month: monthValue,
+            role: "income",
+
+            project_id: optionalString(
+              item.project_id ?? item.projectId
+            ),
+
+            name: optionalString(
+              item.name ?? item.title ?? item.project_name
+            ),
+
+            value: optionalNumber(item.value ?? item.amount),
+
+            independent: optionalBoolean(item.independent),
+
+            from_excel: optionalBoolean(
+              item.from_excel ?? item.fromExcel
+            ),
+
+            source_row: optionalNumber(
+              item.source_row ?? item.sourceRow
+            ),
+
+            source_col: optionalNumber(
+              item.source_col ?? item.sourceCol
+            ),
+
+            source_offset: optionalNumber(
+              item.source_offset ?? item.sourceOffset
+            ),
+
+            is_annuity_contribution: optionalBoolean(
+              item.is_annuity_contribution ??
+                item.isAnnuityContribution
+            ),
+
+            is_pension_payment:
+              item.is_pension_payment === true ||
+              item.isPensionPayment === true,
+
+            sort_order: optionalNumber(
+              item.sort_order ?? item.sortOrder ?? index
+            ),
+
+            deleted: item.deleted === true,
+
+            manual_remaining: optionalNumber(
+              item.manual_remaining ?? item.manualRemaining
+            ),
+
+            manual_total_cash: optionalNumber(
+              item.manual_total_cash ?? item.manualTotalCash
+            ),
+
+            manual_annuity: optionalNumber(
+              item.manual_annuity ?? item.manualAnnuity
+            ),
+
+            original_opening_cash: optionalNumber(
+              item.original_opening_cash ??
+                item.originalOpeningCash
+            ),
+
+            original_opening_annuity: optionalNumber(
+              item.original_opening_annuity ??
+                item.originalOpeningAnnuity
+            ),
+          };
+
+          rows.push(row);
+        });
 
         /* =================================================
          * 支出
          * ================================================= */
 
-        expenseItems.forEach(
-          (
-            item: any,
-            index: number
-          ) => {
-            if (!item) {
-              return;
-            }
-
-            const row: CashflowPlanningRow = {
-              year: yearValue,
-              month: monthValue,
-              role: "expense",
-
-              project_id:
-                optionalString(
-                  item.project_id ??
-                    item.projectId
-                ),
-
-              name:
-                optionalString(
-                  item.name ??
-                    item.title ??
-                    item.project_name
-                ),
-
-              value:
-                optionalNumber(
-                  item.value ??
-                    item.amount
-                ),
-
-              independent:
-                optionalBoolean(
-                  item.independent
-                ),
-
-              from_excel:
-                optionalBoolean(
-                  item.from_excel ??
-                    item.fromExcel
-                ),
-
-              source_row:
-                optionalNumber(
-                  item.source_row ??
-                    item.sourceRow
-                ),
-
-              source_col:
-                optionalNumber(
-                  item.source_col ??
-                    item.sourceCol
-                ),
-
-              source_offset:
-                optionalNumber(
-                  item.source_offset ??
-                    item.sourceOffset
-                ),
-
-              is_annuity_contribution:
-                optionalBoolean(
-                  item.is_annuity_contribution ??
-                    item.isAnnuityContribution
-                ),
-
-              is_pension_payment:
-                item.is_pension_payment === true ||
-                item.isPensionPayment === true,
-
-              sort_order:
-                optionalNumber(
-                  item.sort_order ??
-                    item.sortOrder ??
-                    index
-                ),
-
-              deleted:
-                item.deleted === true,
-
-              manual_remaining:
-                optionalNumber(
-                  item.manual_remaining ??
-                    item.manualRemaining
-                ),
-
-              manual_total_cash:
-                optionalNumber(
-                  item.manual_total_cash ??
-                    item.manualTotalCash
-                ),
-
-              manual_annuity:
-                optionalNumber(
-                  item.manual_annuity ??
-                    item.manualAnnuity
-                ),
-
-              original_opening_cash:
-                optionalNumber(
-                  item.original_opening_cash ??
-                    item.originalOpeningCash
-                ),
-
-              original_opening_annuity:
-                optionalNumber(
-                  item.original_opening_annuity ??
-                    item.originalOpeningAnnuity
-                ),
-            };
-
-            rows.push(row);
+        expenseItems.forEach((item: any, index: number) => {
+          if (!item) {
+            return;
           }
-        );
+
+          const row: CashflowPlanningRow = {
+            year: yearValue,
+            month: monthValue,
+            role: "expense",
+
+            project_id: optionalString(
+              item.project_id ?? item.projectId
+            ),
+
+            name: optionalString(
+              item.name ?? item.title ?? item.project_name
+            ),
+
+            value: optionalNumber(item.value ?? item.amount),
+
+            independent: optionalBoolean(item.independent),
+
+            from_excel: optionalBoolean(
+              item.from_excel ?? item.fromExcel
+            ),
+
+            source_row: optionalNumber(
+              item.source_row ?? item.sourceRow
+            ),
+
+            source_col: optionalNumber(
+              item.source_col ?? item.sourceCol
+            ),
+
+            source_offset: optionalNumber(
+              item.source_offset ?? item.sourceOffset
+            ),
+
+            is_annuity_contribution: optionalBoolean(
+              item.is_annuity_contribution ??
+                item.isAnnuityContribution
+            ),
+
+            is_pension_payment:
+              item.is_pension_payment === true ||
+              item.isPensionPayment === true,
+
+            sort_order: optionalNumber(
+              item.sort_order ?? item.sortOrder ?? index
+            ),
+
+            deleted: item.deleted === true,
+
+            manual_remaining: optionalNumber(
+              item.manual_remaining ?? item.manualRemaining
+            ),
+
+            manual_total_cash: optionalNumber(
+              item.manual_total_cash ?? item.manualTotalCash
+            ),
+
+            manual_annuity: optionalNumber(
+              item.manual_annuity ?? item.manualAnnuity
+            ),
+
+            original_opening_cash: optionalNumber(
+              item.original_opening_cash ??
+                item.originalOpeningCash
+            ),
+
+            original_opening_annuity: optionalNumber(
+              item.original_opening_annuity ??
+                item.originalOpeningAnnuity
+            ),
+          };
+
+          rows.push(row);
+        });
 
         /* =================================================
          * 如果这个月完全没有 income / expense，
@@ -649,118 +585,89 @@ export async function POST(request: Request) {
           incomeItems.length === 0 &&
           expenseItems.length === 0
         ) {
-          const monthMeta: any =
-            monthData.meta ??
-            monthData;
+          const monthMeta: any = monthData.meta ?? monthData;
 
           rows.push({
             year: yearValue,
             month: monthValue,
             role: "expense",
 
-            project_id:
-              monthMetaProjectId,
+            project_id: monthMetaProjectId,
 
             name: "__month_meta__",
 
-            value:
-              optionalNumber(
-                monthMeta.value
-              ),
+            value: optionalNumber(monthMeta.value),
 
-            independent:
-              optionalBoolean(
-                monthMeta.independent
-              ),
+            independent: optionalBoolean(monthMeta.independent),
 
-            from_excel:
-              optionalBoolean(
-                monthMeta.from_excel ??
-                  monthMeta.fromExcel
-              ),
+            from_excel: optionalBoolean(
+              monthMeta.from_excel ?? monthMeta.fromExcel
+            ),
 
-            source_row:
-              optionalNumber(
-                monthMeta.source_row ??
-                  monthMeta.sourceRow
-              ),
+            source_row: optionalNumber(
+              monthMeta.source_row ?? monthMeta.sourceRow
+            ),
 
-            source_col:
-              optionalNumber(
-                monthMeta.source_col ??
-                  monthMeta.sourceCol
-              ),
+            source_col: optionalNumber(
+              monthMeta.source_col ?? monthMeta.sourceCol
+            ),
 
-            source_offset:
-              optionalNumber(
-                monthMeta.source_offset ??
-                  monthMeta.sourceOffset
-              ),
+            source_offset: optionalNumber(
+              monthMeta.source_offset ??
+                monthMeta.sourceOffset
+            ),
 
-            is_annuity_contribution:
-              optionalBoolean(
-                monthMeta.is_annuity_contribution ??
-                  monthMeta.isAnnuityContribution
-              ),
+            is_annuity_contribution: optionalBoolean(
+              monthMeta.is_annuity_contribution ??
+                monthMeta.isAnnuityContribution
+            ),
 
             is_pension_payment:
               monthMeta.is_pension_payment === true ||
               monthMeta.isPensionPayment === true,
 
-            sort_order:
-              optionalNumber(
-                monthMeta.sort_order ??
-                  monthMeta.sortOrder ??
-                  0
-              ),
+            sort_order: optionalNumber(
+              monthMeta.sort_order ??
+                monthMeta.sortOrder ??
+                0
+            ),
 
-            deleted:
-              monthMeta.deleted === true,
+            deleted: monthMeta.deleted === true,
 
-            manual_remaining:
-              optionalNumber(
-                monthMeta.manual_remaining ??
-                  monthMeta.manualRemaining
-              ),
+            manual_remaining: optionalNumber(
+              monthMeta.manual_remaining ??
+                monthMeta.manualRemaining
+            ),
 
-            manual_total_cash:
-              optionalNumber(
-                monthMeta.manual_total_cash ??
-                  monthMeta.manualTotalCash
-              ),
+            manual_total_cash: optionalNumber(
+              monthMeta.manual_total_cash ??
+                monthMeta.manualTotalCash
+            ),
 
-            manual_annuity:
-              optionalNumber(
-                monthMeta.manual_annuity ??
-                  monthMeta.manualAnnuity
-              ),
+            manual_annuity: optionalNumber(
+              monthMeta.manual_annuity ??
+                monthMeta.manualAnnuity
+            ),
 
-            original_opening_cash:
-              optionalNumber(
-                monthMeta.original_opening_cash ??
-                  monthMeta.originalOpeningCash
-              ),
+            original_opening_cash: optionalNumber(
+              monthMeta.original_opening_cash ??
+                monthMeta.originalOpeningCash
+            ),
 
-            original_opening_annuity:
-              optionalNumber(
-                monthMeta.original_opening_annuity ??
-                  monthMeta.originalOpeningAnnuity
-              ),
+            original_opening_annuity: optionalNumber(
+              monthMeta.original_opening_annuity ??
+                monthMeta.originalOpeningAnnuity
+            ),
           });
         }
       }
     }
 
-    const incomingYears = Array.from(
-      incomingYearSet
-    ).sort(
+    const incomingYears = Array.from(incomingYearSet).sort(
       (a, b) => a - b
     );
 
-    if (
-      incomingYears.length === 0 ||
-      rows.length === 0
-    ) {
+    if (incomingYears.length === 0 || rows.length === 0) {
       return NextResponse.json(
         {
           ok: false,
@@ -825,10 +732,7 @@ export async function POST(request: Request) {
             "original_opening_annuity",
           ].join(",")
         )
-        .in(
-          "year",
-          incomingYears
-        )
+        .in("year", incomingYears)
         .order("year", {
           ascending: true,
         })
@@ -861,17 +765,11 @@ export async function POST(request: Request) {
         );
       }
 
-      const page =
-        data ?? [];
+      const page = data ?? [];
 
-      existingRows.push(
-        ...page
-      );
+      existingRows.push(...page);
 
-      if (
-        page.length <
-        PAGE_SIZE
-      ) {
+      if (page.length < PAGE_SIZE) {
         break;
       }
 
@@ -888,159 +786,96 @@ export async function POST(request: Request) {
      * 建立数据库记录索引
      * ===================================================== */
 
-    const existingMap =
-      new Map<string, any[]>();
+    const existingMap = new Map<string, any[]>();
 
     for (const existing of existingRows) {
-      const key =
-        buildMatchKey(existing);
+      const key = buildMatchKey(existing);
 
-      const list =
-        existingMap.get(key) ?? [];
+      const list = existingMap.get(key) ?? [];
 
       list.push(existing);
 
-      existingMap.set(
-        key,
-        list
-      );
+      existingMap.set(key, list);
     }
 
     /* =====================================================
      * 第二步-A：
-     * 清理数据库历史特殊项目重复记录
+     * 清理数据库历史重复记录
      *
-     * 重要：
-     * NEVER DELETE。
+     * 规则：
      *
-     * 多余历史记录：
-     *     deleted = true
+     * 同一个 buildMatchKey：
+     *   active > 1
+     *   → 保留第一条 active
+     *   → 其他全部 deleted=true
      *
-     * 每个年月最终只保留 1 条 active。
+     * 普通项目和特殊项目全部处理。
      *
      * 注意：
-     * 这里使用 UPDATE，
-     * 不能使用 upsert({id, deleted})。
-     *
-     * 同时不写 updated_at，
-     * 避免数据库不存在该字段导致 500。
+     * 不真正 DELETE。
+     * 使用 deleted=true，避免破坏历史记录。
      * ===================================================== */
 
     const duplicateIdsToMarkDeleted: string[] = [];
 
-    for (const [
-      key,
-      candidates,
-    ] of existingMap.entries()) {
+    for (const [key, candidates] of existingMap.entries()) {
       if (candidates.length <= 1) {
         continue;
       }
 
-      const isSpecial =
-        key.includes(
-          "__SPECIAL_SAL__"
-        ) ||
-        key.includes(
-          "__SPECIAL_TRANSFER_TO_PENSION__"
-        ) ||
-        key.includes(
-          "__SPECIAL_PENSION_PAYMENT__"
-        );
+      const activeCandidates = candidates.filter(
+        (row) => row.deleted !== true
+      );
 
-      if (!isSpecial) {
-        continue;
-      }
-
-      const activeCandidates =
-        candidates.filter(
-          (row) =>
-            row.deleted !== true
-        );
-
-      if (
-        activeCandidates.length <= 1
-      ) {
+      if (activeCandidates.length <= 1) {
         continue;
       }
 
       /*
-       * 保留第一条 active。
-       * 其他 active 标记 deleted=true。
+       * 按数据库当前排序后的顺序：
+       * 第一条 active 保留。
        */
+      const keep = activeCandidates[0];
 
-      const keep =
-        activeCandidates[0];
+      for (let i = 1; i < activeCandidates.length; i++) {
+        const duplicate = activeCandidates[i];
 
-      for (
-        let i = 1;
-        i < activeCandidates.length;
-        i++
-      ) {
-        const duplicate =
-          activeCandidates[i];
-
-        if (
-          duplicate?.id &&
-          duplicate.id !== keep?.id
-        ) {
-          duplicateIdsToMarkDeleted.push(
-            duplicate.id
-          );
+        if (duplicate?.id && duplicate.id !== keep?.id) {
+          duplicateIdsToMarkDeleted.push(duplicate.id);
         }
       }
     }
 
-    if (
-      duplicateIdsToMarkDeleted.length >
-      0
-    ) {
+    /* =====================================================
+     * 把历史重复记录标记 deleted=true
+     * ===================================================== */
+
+    if (duplicateIdsToMarkDeleted.length > 0) {
       console.log(
-        "[CASHFLOW-PLANNING POST] marking historical duplicates deleted:",
+        "[CASHFLOW-PLANNING POST] marking ALL historical duplicates deleted:",
         duplicateIdsToMarkDeleted.length
       );
 
-      const DELETE_MARK_BATCH_SIZE =
-        500;
+      const DELETE_MARK_BATCH_SIZE = 500;
 
       for (
         let i = 0;
-        i <
-        duplicateIdsToMarkDeleted.length;
-        i +=
-          DELETE_MARK_BATCH_SIZE
+        i < duplicateIdsToMarkDeleted.length;
+        i += DELETE_MARK_BATCH_SIZE
       ) {
-        const batch =
-          duplicateIdsToMarkDeleted.slice(
-            i,
-            i +
-              DELETE_MARK_BATCH_SIZE
-          );
+        const batch = duplicateIdsToMarkDeleted.slice(
+          i,
+          i + DELETE_MARK_BATCH_SIZE
+        );
 
-        /*
-         * 这里只 UPDATE deleted。
-         *
-         * 不使用 DELETE。
-         * 不使用部分字段 upsert。
-         */
-
-        const {
-          error:
-            duplicateMarkError,
-        } = await supabase
-          .from(
-            "cashflow_planning"
-          )
+        const { error: duplicateMarkError } = await supabase
+          .from("cashflow_planning")
           .update({
             deleted: true,
           })
-          .in(
-            "id",
-            batch
-          );
+          .in("id", batch);
 
-        if (
-          duplicateMarkError
-        ) {
+        if (duplicateMarkError) {
           console.error(
             "[CASHFLOW-PLANNING POST] duplicate cleanup error:",
             duplicateMarkError
@@ -1049,8 +884,7 @@ export async function POST(request: Request) {
           return NextResponse.json(
             {
               ok: false,
-              error:
-                duplicateMarkError.message,
+              error: duplicateMarkError.message,
             },
             {
               status: 500,
@@ -1062,16 +896,8 @@ export async function POST(request: Request) {
       /*
        * 同步修改内存里的 existingRows。
        */
-
-      for (
-        const id of
-          duplicateIdsToMarkDeleted
-      ) {
-        const found =
-          existingRows.find(
-            (row) =>
-              row.id === id
-          );
+      for (const id of duplicateIdsToMarkDeleted) {
+        const found = existingRows.find((row) => row.id === id);
 
         if (found) {
           found.deleted = true;
@@ -1081,20 +907,11 @@ export async function POST(request: Request) {
       /*
        * 同步修改 existingMap。
        */
-
-      for (
-        const candidates of
-          existingMap.values()
-      ) {
-        for (
-          const candidate of
-            candidates
-        ) {
+      for (const candidates of existingMap.values()) {
+        for (const candidate of candidates) {
           if (
             candidate?.id &&
-            duplicateIdsToMarkDeleted.includes(
-              candidate.id
-            )
+            duplicateIdsToMarkDeleted.includes(candidate.id)
           ) {
             candidate.deleted = true;
           }
@@ -1104,99 +921,61 @@ export async function POST(request: Request) {
 
     /* =====================================================
      * 第二步-B：
-     * 本次 incoming rows 特殊项目去重
+     * incoming rows 全部去重
      *
-     * 特殊项目：
-     *   SAL
-     *   转去养老保险
-     *   本月交养老保险
+     * 不再只处理特殊项目。
      *
-     * 同一个：
-     *   年 + 月 + 特殊项目
+     * 同一个 buildMatchKey：
+     *   只允许进入数据库一次。
      *
-     * 最终只允许进入数据库 1 条。
+     * 这可以防止：
      *
-     * 普通项目完全不改变。
+     * 房租
+     * 房租
+     * 房租
+     *
+     * 在一次保存中又产生 3 条。
      * ===================================================== */
 
-    const dedupedRows: CashflowPlanningRow[] =
-      [];
+    const dedupedRows: CashflowPlanningRow[] = [];
 
-    const incomingSpecialKeys =
-      new Set<string>();
+    const incomingKeys = new Set<string>();
 
     for (const row of rows) {
-      const name =
-        normalizeName(
-          row.name
-        );
-
-      const isSpecial =
-        (
-          row.role === "income" &&
-          name === "sal"
-        ) ||
-        (
-          row.role === "expense" &&
-          name ===
-            "转去养老保险"
-        ) ||
-        (
-          row.role === "expense" &&
-          (
-            row.project_id ===
-              "fixed:pension-payment" ||
-            row.is_pension_payment ===
-              true ||
-            name ===
-              "本月交养老保险"
-          )
-        );
+      const key = buildMatchKey(row);
 
       /*
-       * 普通项目原样保留。
-       */
-
-      if (!isSpecial) {
-        dedupedRows.push(
-          row
-        );
-
-        continue;
-      }
-
-      const key =
-        buildMatchKey(row);
-
-      /*
-       * 同一个特殊项目已经出现：
+       * 已经出现过完全相同业务键：
        * 跳过后面的重复。
        */
+      if (incomingKeys.has(key)) {
+        console.log(
+          "[CASHFLOW-PLANNING POST] skipping duplicate incoming row:",
+          {
+            year: row.year,
+            month: row.month,
+            role: row.role,
+            project_id: row.project_id,
+            name: row.name,
+          }
+        );
 
-      if (
-        incomingSpecialKeys.has(
-          key
-        )
-      ) {
         continue;
       }
 
-      incomingSpecialKeys.add(
-        key
-      );
+      incomingKeys.add(key);
 
-      dedupedRows.push(
-        row
-      );
+      dedupedRows.push(row);
     }
 
     console.log(
-      "[CASHFLOW-PLANNING POST] rows after special dedupe:",
+      "[CASHFLOW-PLANNING POST] rows after ALL dedupe:",
       {
-        before:
-          rows.length,
-        after:
-          dedupedRows.length,
+        before: rows.length,
+
+        after: dedupedRows.length,
+
+        removed: rows.length - dedupedRows.length,
       }
     );
 
@@ -1211,232 +990,181 @@ export async function POST(request: Request) {
      * 3. 都没有，新建完整记录
      * ===================================================== */
 
-    const usedExistingIds =
-      new Set<string>();
+    const usedExistingIds = new Set<string>();
 
-    const rowsToUpsert =
-      dedupedRows.map(
-        (row) => {
-          const key =
-            buildMatchKey(row);
+    const rowsToUpsert = dedupedRows.map((row) => {
+      const key = buildMatchKey(row);
 
-          const candidates =
-            existingMap.get(key) ??
-            [];
+      const candidates = existingMap.get(key) ?? [];
 
-          let matched:
-            | (typeof candidates)[number]
-            | undefined;
+      let matched: (typeof candidates)[number] | undefined;
 
-          /*
-           * ---------------------------------------------
-           * 第一优先：
-           * active 记录
-           * ---------------------------------------------
-           */
+      /*
+       * ---------------------------------------------
+       * 第一优先：
+       * active 记录
+       * ---------------------------------------------
+       */
 
-          for (
-            const candidate of
-              candidates
-          ) {
-            if (
-              candidate?.id &&
-              candidate.deleted !== true &&
-              !usedExistingIds.has(
-                candidate.id
-              )
-            ) {
-              matched =
-                candidate;
+      for (const candidate of candidates) {
+        if (
+          candidate?.id &&
+          candidate.deleted !== true &&
+          !usedExistingIds.has(candidate.id)
+        ) {
+          matched = candidate;
 
-              break;
-            }
-          }
-
-          /*
-           * ---------------------------------------------
-           * 第二优先：
-           * 历史 deleted 记录
-           * ---------------------------------------------
-           */
-
-          for (
-            const candidate of
-              candidates
-          ) {
-            if (matched) {
-              break;
-            }
-
-            if (
-              candidate?.id &&
-              !usedExistingIds.has(
-                candidate.id
-              )
-            ) {
-              matched =
-                candidate;
-
-              break;
-            }
-          }
-
-          /*
-           * ---------------------------------------------
-           * 找到数据库记录
-           * ---------------------------------------------
-           */
-
-          if (matched?.id) {
-            usedExistingIds.add(
-              matched.id
-            );
-
-            return {
-              id:
-                matched.id,
-
-              year:
-                row.year,
-
-              month:
-                row.month,
-
-              role:
-                row.role,
-
-              project_id:
-                row.project_id,
-
-              name:
-                row.name,
-
-              value:
-                row.value,
-
-              independent:
-                row.independent,
-
-              from_excel:
-                row.from_excel,
-
-              source_row:
-                row.source_row,
-
-              source_col:
-                row.source_col,
-
-              source_offset:
-                row.source_offset,
-
-              is_annuity_contribution:
-                row.is_annuity_contribution,
-
-              is_pension_payment:
-                row.is_pension_payment,
-
-              sort_order:
-                row.sort_order,
-
-              /*
-               * 本次 incoming 数据重新成为 active。
-               */
-              deleted:
-                false,
-
-              manual_remaining:
-                row.manual_remaining,
-
-              manual_total_cash:
-                row.manual_total_cash,
-
-              manual_annuity:
-                row.manual_annuity,
-
-              original_opening_cash:
-                row.original_opening_cash,
-
-              original_opening_annuity:
-                row.original_opening_annuity,
-            };
-          }
-
-          /*
-           * ---------------------------------------------
-           * 完全没有对应记录：
-           * 创建新记录。
-           *
-           * year/month/role 等 NOT NULL 字段
-           * 全部完整写入。
-           * ---------------------------------------------
-           */
-
-          return {
-            id:
-              crypto.randomUUID(),
-
-            year:
-              row.year,
-
-            month:
-              row.month,
-
-            role:
-              row.role,
-
-            project_id:
-              row.project_id,
-
-            name:
-              row.name,
-
-            value:
-              row.value,
-
-            independent:
-              row.independent,
-
-            from_excel:
-              row.from_excel,
-
-            source_row:
-              row.source_row,
-
-            source_col:
-              row.source_col,
-
-            source_offset:
-              row.source_offset,
-
-            is_annuity_contribution:
-              row.is_annuity_contribution,
-
-            is_pension_payment:
-              row.is_pension_payment,
-
-            sort_order:
-              row.sort_order,
-
-            deleted:
-              false,
-
-            manual_remaining:
-              row.manual_remaining,
-
-            manual_total_cash:
-              row.manual_total_cash,
-
-            manual_annuity:
-              row.manual_annuity,
-
-            original_opening_cash:
-              row.original_opening_cash,
-
-            original_opening_annuity:
-              row.original_opening_annuity,
-          };
+          break;
         }
-      );
+      }
+
+      /*
+       * ---------------------------------------------
+       * 第二优先：
+       * 历史 deleted 记录
+       * ---------------------------------------------
+       */
+
+      for (const candidate of candidates) {
+        if (matched) {
+          break;
+        }
+
+        if (
+          candidate?.id &&
+          !usedExistingIds.has(candidate.id)
+        ) {
+          matched = candidate;
+
+          break;
+        }
+      }
+
+      /*
+       * ---------------------------------------------
+       * 找到数据库记录
+       * ---------------------------------------------
+       */
+
+      if (matched?.id) {
+        usedExistingIds.add(matched.id);
+
+        return {
+          id: matched.id,
+
+          year: row.year,
+
+          month: row.month,
+
+          role: row.role,
+
+          project_id: row.project_id,
+
+          name: row.name,
+
+          value: row.value,
+
+          independent: row.independent,
+
+          from_excel: row.from_excel,
+
+          source_row: row.source_row,
+
+          source_col: row.source_col,
+
+          source_offset: row.source_offset,
+
+          is_annuity_contribution:
+            row.is_annuity_contribution,
+
+          is_pension_payment: row.is_pension_payment,
+
+          sort_order: row.sort_order,
+
+          /*
+           * 关键修复：
+           *
+           * 之前这里是写死的 deleted: false，
+           * 导致前端把 item 标 deleted=true 后，
+           * 后端 POST 落库时又被改回 false，
+           * 于是刷新页面时 sanitizeYears 无法过滤，
+           * 被 DEL 的项目又重新出现。
+           *
+           * 现在改为尊重 incoming row 的 deleted，
+           * 前端点 DEL 时 deleted=true 会真实落库。
+           */
+          deleted: row.deleted === true,
+
+          manual_remaining: row.manual_remaining,
+
+          manual_total_cash: row.manual_total_cash,
+
+          manual_annuity: row.manual_annuity,
+
+          original_opening_cash: row.original_opening_cash,
+
+          original_opening_annuity:
+            row.original_opening_annuity,
+        };
+      }
+
+      /*
+       * ---------------------------------------------
+       * 完全没有对应记录：
+       * 创建新记录。
+       *
+       * year/month/role 等 NOT NULL 字段
+       * 全部完整写入。
+       * ---------------------------------------------
+       */
+
+      return {
+        id: crypto.randomUUID(),
+
+        year: row.year,
+
+        month: row.month,
+
+        role: row.role,
+
+        project_id: row.project_id,
+
+        name: row.name,
+
+        value: row.value,
+
+        independent: row.independent,
+
+        from_excel: row.from_excel,
+
+        source_row: row.source_row,
+
+        source_col: row.source_col,
+
+        source_offset: row.source_offset,
+
+        is_annuity_contribution: row.is_annuity_contribution,
+
+        is_pension_payment: row.is_pension_payment,
+
+        sort_order: row.sort_order,
+
+        /*
+         * 同样尊重 incoming row 的 deleted。
+         */
+        deleted: row.deleted === true,
+
+        manual_remaining: row.manual_remaining,
+
+        manual_total_cash: row.manual_total_cash,
+
+        manual_annuity: row.manual_annuity,
+
+        original_opening_cash: row.original_opening_cash,
+
+        original_opening_annuity: row.original_opening_annuity,
+      };
+    });
 
     /* =====================================================
      * 第四步：
@@ -1451,19 +1179,13 @@ export async function POST(request: Request) {
      * 永远不会主动写 null。
      * ===================================================== */
 
-    const safeRowsToUpsert =
-      rowsToUpsert.map(
-        (row) => ({
-          ...row,
+    const safeRowsToUpsert = rowsToUpsert.map((row) => ({
+      ...row,
 
-          is_pension_payment:
-            row.is_pension_payment ===
-            true,
+      is_pension_payment: row.is_pension_payment === true,
 
-          deleted:
-            row.deleted === true,
-        })
-      );
+      deleted: row.deleted === true,
+    }));
 
     console.log(
       "[CASHFLOW-PLANNING POST] prepared rows:",
@@ -1477,53 +1199,34 @@ export async function POST(request: Request) {
      * 不 DELETE。
      * ===================================================== */
 
-    const UPSERT_BATCH_SIZE =
-      500;
+    const UPSERT_BATCH_SIZE = 500;
 
-    let totalSaved =
-      0;
+    let totalSaved = 0;
 
     for (
       let i = 0;
-      i <
-      safeRowsToUpsert.length;
-      i +=
-        UPSERT_BATCH_SIZE
+      i < safeRowsToUpsert.length;
+      i += UPSERT_BATCH_SIZE
     ) {
-      const batch =
-        safeRowsToUpsert.slice(
-          i,
-          i +
-            UPSERT_BATCH_SIZE
-        );
+      const batch = safeRowsToUpsert.slice(
+        i,
+        i + UPSERT_BATCH_SIZE
+      );
 
       console.log(
         "[CASHFLOW-PLANNING POST] upserting batch:",
         {
-          start:
-            i,
-          count:
-            batch.length,
+          start: i,
+          count: batch.length,
         }
       );
 
-      const {
-        data,
-        error,
-      } = await supabase
-        .from(
-          "cashflow_planning"
-        )
-        .upsert(
-          batch,
-          {
-            onConflict:
-              "id",
-          }
-        )
-        .select(
-          "id"
-        );
+      const { data, error } = await supabase
+        .from("cashflow_planning")
+        .upsert(batch, {
+          onConflict: "id",
+        })
+        .select("id");
 
       if (error) {
         console.error(
@@ -1534,10 +1237,8 @@ export async function POST(request: Request) {
         return NextResponse.json(
           {
             ok: false,
-            error:
-              error.message,
-            savedBeforeError:
-              totalSaved,
+            error: error.message,
+            savedBeforeError: totalSaved,
           },
           {
             status: 500,
@@ -1545,43 +1246,76 @@ export async function POST(request: Request) {
         );
       }
 
-      totalSaved +=
-        data?.length ??
-        batch.length;
+      totalSaved += data?.length ?? batch.length;
+    }
+
+    console.log("[CASHFLOW-PLANNING POST] save completed:", {
+      incomingYears,
+      incomingRows: rows.length,
+      totalSaved,
+      existingRows: existingRows.length,
+    });
+
+    // =====================================================
+    // 最后删除用户明确指定的月份
+    // =====================================================
+
+    let deletedMonthCount = 0;
+
+    if (deleteMonths.length > 0) {
+      console.log(
+        "[CASHFLOW-PLANNING POST] deleting months AFTER upsert:",
+        deleteMonths
+      );
+
+      for (const target of deleteMonths) {
+        const { error: deleteMonthError } = await supabase
+          .from("cashflow_planning")
+          .delete()
+          .eq("year", target.year)
+          .eq("month", target.month);
+
+        if (deleteMonthError) {
+          console.error(
+            "[CASHFLOW-PLANNING POST] delete month error:",
+            deleteMonthError
+          );
+
+          return NextResponse.json(
+            {
+              ok: false,
+              error: deleteMonthError.message,
+            },
+            {
+              status: 500,
+            }
+          );
+        }
+
+        deletedMonthCount++;
+      }
     }
 
     console.log(
-      "[CASHFLOW-PLANNING POST] save completed:",
-      {
-        incomingYears,
-        incomingRows:
-          rows.length,
-        totalSaved,
-        existingRows:
-          existingRows.length,
-      }
+      "[CASHFLOW-PLANNING POST] deleted months:",
+      deletedMonthCount
     );
 
     return NextResponse.json({
       ok: true,
 
-      years:
-        incomingYears,
+      years: incomingYears,
 
-      incomingRows:
-        rows.length,
+      incomingRows: rows.length,
 
-      savedRows:
-        totalSaved,
+      savedRows: totalSaved,
 
-      existingRows:
-        existingRows.length,
+      existingRows: existingRows.length,
 
       /*
        * POST 本次没有执行 DELETE。
        */
-      deletedRows:
-        0,
+      deletedRows: deletedMonthCount,
     });
   } catch (error) {
     console.error(
@@ -1618,21 +1352,12 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   try {
-    const supabase =
-      createSupabaseServerClient();
+    const supabase = createSupabaseServerClient();
 
-    const {
-      error,
-    } = await supabase
-      .from(
-        "cashflow_planning"
-      )
+    const { error } = await supabase
+      .from("cashflow_planning")
       .delete()
-      .not(
-        "id",
-        "is",
-        null
-      );
+      .not("id", "is", null);
 
     if (error) {
       console.error(
@@ -1643,8 +1368,7 @@ export async function DELETE() {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            error.message,
+          error: error.message,
         },
         {
           status: 500,
@@ -1675,4 +1399,3 @@ export async function DELETE() {
     );
   }
 }
-

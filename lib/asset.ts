@@ -134,6 +134,8 @@ export type PerformancePoint = {
 
   profitRate: number;
 
+  amount: number;   // 新增：该周期截止日的资产金额
+
 };
 
 
@@ -2196,24 +2198,20 @@ function calculatePerformancePoints(
         : 0;
 
 
-    result.push({
+    const currentAsset =
+  toNumber(
+    current[assetField]
+  );
 
-      date:
-        String(
-          current.snapshot_date
-        ).slice(
-          0,
-          10
-        ),
-
-      profit:
-        Math.round(
-          profit
-        ),
-
-      profitRate,
-
-    });
+result.push({
+  date:
+    String(current.snapshot_date).slice(0, 10),
+  profit:
+    Math.round(profit),
+  profitRate,
+  amount:
+    Math.round(currentAsset),   // 新增
+});
 
   }
 

@@ -1,8 +1,29 @@
 import { supabase } from "@/lib/supabase";
+import { getLatestAsset } from "@/lib/asset";
 
-/* =========================================================
-   Types
-========================================================= */
+/**
+ * ============================================================
+ * Fixed Income
+ * ============================================================
+ *
+ * 设计：
+ *
+ * 1. CNY 固收：
+ *    amount 本身就是人民币
+ *
+ * 2. USD 固收：
+ *    amount 保存美元原始金额
+ *
+ * 3. USD/CNY：
+ *    不再以 fixed_income_assets.exchange_rate 作为当前汇率
+ *    当前汇率统一使用 Dashboard 的 asset.usd_cny
+ *
+ * 4. exchange_rate：
+ *    保留字段只是为了兼容旧数据。
+ *    新数据不依赖它。
+ *
+ * ============================================================
+ */
 
 export type FixedIncomeType =
   | "万能险"
@@ -14,21 +35,53 @@ export type FixedIncomeType =
   | "固收理财"
   | "其他";
 
-export type FixedIncomeAsset = {
+export type FixedIncomeCurrency =
+  | "CNY"
+  | "USD";
+
+export interface FixedIncomeAsset {
   id: string;
 
+  type: FixedIncomeType | string;
+
   name: string;
-  code?: string | null;
-
-  type: FixedIncomeType;
-
-  amount: number;
 
   institution?: string | null;
 
-  interest_rate?: number | null;
+  /**
+   * 原始金额
+   *
+   * CNY：人民币
+   * USD：美元
+   */
+  amount: number;
 
-  auto_interest?: boolean | null;
+
+  /**
+   * 所属市场
+   *
+   * CN 中国大陆
+   * HK 香港
+   */
+  market: "CN" | "HK";
+
+
+  /**
+   * 原始币种
+   */
+  currency: FixedIncomeCurrency;
+
+
+  /**
+   * 历史字段
+   * 不作为每日汇率来源
+   */
+  exchange_rate?: number | null;
+
+
+  interest_rate: number | null;
+
+  auto_interest: boolean;
 
   interest_date?: string | null;
 
@@ -36,919 +89,1322 @@ export type FixedIncomeAsset = {
 
   group_id?: string | null;
 
-  /*
-   * 资产在所属分组中的排序。
-   * 数字越小越靠前。
-   */
   sort_order?: number | null;
 
-  created_at?: string;
-  updated_at?: string;
-};
+  created_at?: string | null;
 
-export type FixedIncomeGroup = {
+  updated_at?: string | null;
+}
+
+export interface FixedIncomeGroup {
   id: string;
 
   name: string;
 
-  /*
-   * 分组排序。
-   * 数字越小越靠前。
-   */
-  sort_order: number;
+  sort_order?: number | null;
 
-  created_at?: string;
-  updated_at?: string;
-};
+  created_at?: string | null;
 
-/* =========================================================
-   Helpers
-========================================================= */
+  updated_at?: string | null;
+}
 
-function normalizeAsset(
-  asset: FixedIncomeAsset
+
+/**
+ * ============================================================
+ * 默认值
+ * ============================================================
+ */
+
+
+
+
+/**
+ * ============================================================
+ * 工具函数
+ * ============================================================
+ */
+
+export function toNumber(
+  value: unknown
+): number {
+  const n = Number(value ?? 0);
+
+  return Number.isFinite(n)
+    ? n
+    : 0;
+}
+
+
+/**
+ * ============================================================
+ * 币种标准化
+ * ============================================================
+ */
+
+export function normalizeCurrency(
+  value: unknown
+): FixedIncomeCurrency {
+
+  return String(value ?? "")
+    .trim()
+    .toUpperCase() === "USD"
+    ? "USD"
+    : "CNY";
+}
+
+
+/**
+ * ============================================================
+ * Dashboard 当前 USD/CNY
+ *
+ * 唯一来源：
+ *
+ * asset.usd_cny
+ *
+ * ============================================================
+ */
+
+export async function getDashboardUsdCnyRate(): Promise<number> {
+
+  const asset = await getLatestAsset();
+
+  const rate =
+    toNumber(asset?.usd_cny);
+
+  if(rate > 0){
+    return rate;
+  }
+
+  throw new Error(
+    "Dashboard USD/CNY unavailable"
+  );
+}
+
+
+/**
+ * ============================================================
+ * 资产标准化
+ * ============================================================
+ */
+
+export function normalizeAsset(
+  row: any
 ): FixedIncomeAsset {
-  return {
-    ...asset,
 
-    amount: Number(
-      asset.amount ?? 0
-    ),
+  const currency =
+    normalizeCurrency(
+      row?.currency
+    );
+
+  return {
+
+    id:
+      String(
+        row?.id ?? ""
+      ),
+
+    type:
+      String(
+        row?.type ?? "其他"
+      ),
+
+    name:
+      String(
+        row?.name ?? ""
+      ),
+
+    institution:
+      row?.institution ??
+      null,
+
+    amount:
+      toNumber(
+        row?.amount
+      ),
+
+    currency,
+
+    exchange_rate:
+      row?.exchange_rate !== null &&
+      row?.exchange_rate !== undefined
+        ? toNumber(
+            row.exchange_rate
+          )
+        : null,
 
     interest_rate:
-      asset.interest_rate == null
-        ? null
-        : Number(
-            asset.interest_rate
-          ),
+      toNumber(
+        row?.interest_rate
+      ),
 
     auto_interest:
       Boolean(
-        asset.auto_interest
+        row?.auto_interest
       ),
 
+    interest_date:
+      row?.interest_date ??
+      null,
+
+    note:
+      row?.note ??
+      null,
+
+    group_id:
+      row?.group_id ??
+      null,
+
     sort_order:
-      Number(
-        asset.sort_order ?? 0
-      ),
+      row?.sort_order !== null &&
+      row?.sort_order !== undefined
+        ? toNumber(
+            row.sort_order
+          )
+        : null,
+
+    created_at:
+      row?.created_at ??
+      null,
+
+    updated_at:
+      row?.updated_at ??
+      null,
+
+    market:
+  row?.market === "HK"
+    ? "HK"
+    : "CN",  
   };
 }
 
-function normalizeGroup(
-  group: FixedIncomeGroup
-): FixedIncomeGroup {
-  return {
-    ...group,
 
-    sort_order:
+/**
+ * ============================================================
+ * USD → CNY
+ * ============================================================
+ */
+
+export function getFixedIncomeAssetCnyAmount(
+  asset: FixedIncomeAsset,
+  usdCnyRate: number = 0
+): number {
+
+  const amount =
+    Number(asset.amount || 0);
+
+
+  if (
+    asset.currency === "USD"
+  ) {
+
+    const rate =
       Number(
-        group.sort_order ?? 0
-      ),
-  };
+        usdCnyRate ||
+        asset.exchange_rate ||
+        0
+      );
+
+
+    return amount * rate;
+  }
+
+
+  return amount;
 }
 
-/* =========================================================
-   Fixed Income Assets
-========================================================= */
+
+/**
+ * ============================================================
+ * 每日利息
+ *
+ * 年利率 / 365
+ * ============================================================
+ */
+
+export function getFixedIncomeAssetDailyInterest(
+  asset: FixedIncomeAsset,
+  usdCnyRate?: number
+): number {
+
+  const amountCny =
+    getFixedIncomeAssetCnyAmount(
+      asset,
+      usdCnyRate
+    );
+
+  const interestRate =
+    toNumber(
+      asset?.interest_rate
+    );
+
+  if (
+    amountCny <= 0 ||
+    interestRate <= 0
+  ) {
+
+    return 0;
+
+  }
+
+  return (
+    amountCny *
+    interestRate /
+    100 /
+    365
+  );
+}
+
+
+/**
+ * ============================================================
+ * 年利息
+ * ============================================================
+ */
+
+export function getFixedIncomeAssetAnnualInterest(
+  asset: FixedIncomeAsset,
+  usdCnyRate?: number
+): number {
+
+  const amountCny =
+    getFixedIncomeAssetCnyAmount(
+      asset,
+      usdCnyRate
+    );
+
+  const interestRate =
+    toNumber(
+      asset?.interest_rate
+    );
+
+  if (
+    amountCny <= 0 ||
+    interestRate <= 0
+  ) {
+
+    return 0;
+
+  }
+
+  return (
+    amountCny *
+    interestRate /
+    100
+  );
+}
+
+
+/**
+ * ============================================================
+ * 获取固收资产
+ * ============================================================
+ */
 
 export async function getFixedIncomeAssets(): Promise<
   FixedIncomeAsset[]
 > {
-  const { data, error } =
-    await supabase
-      .from("fixed_income_assets")
-      .select("*")
-      .order("group_id", {
-        ascending: true,
-        nullsFirst: true,
-      })
-      .order("sort_order", {
-        ascending: true,
-      })
-      .order("created_at", {
-        ascending: true,
-      });
 
-  if (error) {
+  const {
+    data,
+    error,
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_assets"
+      )
+
+      .select("*")
+
+      .order(
+        "sort_order",
+        {
+          ascending: true,
+        }
+      )
+
+      .order(
+        "created_at",
+        {
+          ascending: true,
+        }
+      );
+
+  if (
+    error
+  ) {
+
     console.error(
-      "获取固收资产失败:",
+      "getFixedIncomeAssets error:",
       error
     );
 
     throw error;
+
   }
 
   return (
-    (data ?? []) as FixedIncomeAsset[]
-  ).map(
-    normalizeAsset
-  );
+    Array.isArray(data)
+      ? data
+      : []
+  )
+    .map(
+      normalizeAsset
+    );
+
 }
 
-/* =========================================================
-   Fixed Income Groups
-========================================================= */
+
+/**
+ * ============================================================
+ * 获取分组
+ * ============================================================
+ */
 
 export async function getFixedIncomeGroups(): Promise<
   FixedIncomeGroup[]
 > {
-  const { data, error } =
-    await supabase
-      .from("fixed_income_groups")
-      .select("*")
-      .order("sort_order", {
-        ascending: true,
-      })
-      .order("created_at", {
-        ascending: true,
-      });
 
-  if (error) {
+  const {
+    data,
+    error,
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_groups"
+      )
+
+      .select("*")
+
+      .order(
+        "sort_order",
+        {
+          ascending: true,
+        }
+      )
+
+      .order(
+        "created_at",
+        {
+          ascending: true,
+        }
+      );
+
+  if (
+    error
+  ) {
+
     console.error(
-      "获取固收分组失败:",
+      "getFixedIncomeGroups error:",
       error
     );
 
     throw error;
+
   }
 
   return (
-    (data ?? []) as FixedIncomeGroup[]
-  ).map(
-    normalizeGroup
-  );
-}
+    Array.isArray(data)
+      ? data
+      : []
+  )
+    .map(
+      (row: any) => ({
 
-/* =========================================================
-   Create Group
-========================================================= */
+        id:
+          String(
+            row?.id ?? ""
+          ),
 
-export async function createFixedIncomeGroup(
-  name: string
-): Promise<FixedIncomeGroup> {
-  const trimmedName =
-    name.trim();
+        name:
+          String(
+            row?.name ?? ""
+          ),
 
-  if (!trimmedName) {
-    throw new Error(
-      "分组名称不能为空"
-    );
-  }
-
-  /*
-   * 新分组放到最后。
-   */
-  const {
-    data: maxData,
-    error: maxError,
-  } = await supabase
-    .from("fixed_income_groups")
-    .select("sort_order")
-    .order("sort_order", {
-      ascending: false,
-    })
-    .limit(1);
-
-  if (maxError) {
-    console.error(
-      "获取最大分组排序失败:",
-      maxError
-    );
-
-    throw maxError;
-  }
-
-  const maxSortOrder =
-    maxData &&
-    maxData.length > 0
-      ? Number(
-          maxData[0]
-            .sort_order ?? 0
-        )
-      : -1;
-
-  const nextSortOrder =
-    maxSortOrder + 1;
-
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("fixed_income_groups")
-    .insert({
-      name: trimmedName,
-      sort_order:
-        nextSortOrder,
-    })
-    .select("*")
-    .single();
-
-  if (error) {
-    console.error(
-      "创建固收分组失败:",
-      error
-    );
-
-    throw error;
-  }
-
-  return normalizeGroup(
-    data as FixedIncomeGroup
-  );
-}
-
-/* =========================================================
-   Update Group
-========================================================= */
-
-export async function updateFixedIncomeGroup(
-  id: string,
-  name: string
-): Promise<FixedIncomeGroup> {
-  const trimmedName =
-    name.trim();
-
-  if (!trimmedName) {
-    throw new Error(
-      "分组名称不能为空"
-    );
-  }
-
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("fixed_income_groups")
-    .update({
-      name: trimmedName,
-      updated_at:
-        new Date().toISOString(),
-    })
-    .eq("id", id)
-    .select("*")
-    .single();
-
-  if (error) {
-    console.error(
-      "修改固收分组失败:",
-      error
-    );
-
-    throw error;
-  }
-
-  return normalizeGroup(
-    data as FixedIncomeGroup
-  );
-}
-
-/* =========================================================
-   Delete Group
-========================================================= */
-
-export async function deleteFixedIncomeGroup(
-  id: string
-): Promise<void> {
-  /*
-   * fixed_income_assets.group_id
-   * 已经设置 on delete set null。
-   *
-   * 所以删除分组以后：
-   * 资产不会删除；
-   * 资产会自动进入未分组。
-   */
-
-  const { error } =
-    await supabase
-      .from("fixed_income_groups")
-      .delete()
-      .eq("id", id);
-
-  if (error) {
-    console.error(
-      "删除固收分组失败:",
-      error
-    );
-
-    throw error;
-  }
-
-  /*
-   * 删除组后，未分组资产的排序重新整理。
-   */
-  await normalizeFixedIncomeAssetOrder();
-}
-
-/* =========================================================
-   Update Group Order
-========================================================= */
-
-export async function updateFixedIncomeGroupOrder(
-  groups: FixedIncomeGroup[]
-): Promise<void> {
-  if (!groups.length) {
-    return;
-  }
-
-  /*
-   * 每个组按照页面上的顺序重新编号。
-   */
-  const updates =
-    groups.map(
-      (
-        group,
-        index
-      ) => ({
-        id: group.id,
         sort_order:
-          index,
-      })
-    );
-
-  const results =
-    await Promise.all(
-      updates.map(
-        async ({
-          id,
-          sort_order,
-        }) => {
-          const {
-            error,
-          } =
-            await supabase
-              .from(
-                "fixed_income_groups"
+          row?.sort_order !== null &&
+          row?.sort_order !== undefined
+            ? toNumber(
+                row.sort_order
               )
-              .update({
-                sort_order,
-                updated_at:
-                  new Date().toISOString(),
-              })
-              .eq(
-                "id",
-                id);
+            : null,
 
-          return error;
-        }
-      )
-    );
+        created_at:
+          row?.created_at ??
+          null,
 
-  const firstError =
-    results.find(
-      (
-        item
-      ) => item
-    );
-
-  if (firstError) {
-    console.error(
-      "保存固收分组排序失败:",
-      firstError
-    );
-
-    throw firstError;
-  }
-}
-
-/* =========================================================
-   Update Asset Group
-========================================================= */
-
-export async function updateFixedIncomeAssetGroup(
-  id: string,
-  groupId: string | null
-): Promise<FixedIncomeAsset> {
-  /*
-   * 移动到目标组以后，
-   * 自动放到目标组最后。
-   */
-
-  let nextSortOrder = 0;
-
-  const {
-    data,
-    error,
-  } = groupId
-    ? await supabase
-        .from(
-          "fixed_income_assets"
-        )
-        .select("sort_order")
-        .eq(
-          "group_id",
-          groupId
-        )
-        .neq(
-          "id",
-          id
-        )
-        .order(
-          "sort_order",
-          {
-            ascending:
-              false,
-          }
-        )
-        .limit(1)
-    : await supabase
-        .from(
-          "fixed_income_assets"
-        )
-        .select("sort_order")
-        .is(
-          "group_id",
-          null
-        )
-        .neq(
-          "id",
-          id
-        )
-        .order(
-          "sort_order",
-          {
-            ascending:
-              false,
-          }
-        )
-        .limit(1);
-
-  if (error) {
-    console.error(
-      "获取目标组资产排序失败:",
-      error
-    );
-
-    throw error;
-  }
-
-  if (
-    data &&
-    data.length > 0
-  ) {
-    nextSortOrder =
-      Number(
-        data[0]
-          .sort_order ?? 0
-      ) + 1;
-  }
-
-  const {
-    data: updated,
-    error: updateError,
-  } =
-    await supabase
-      .from(
-        "fixed_income_assets"
-      )
-      .update({
-        group_id:
-          groupId,
-        sort_order:
-          nextSortOrder,
         updated_at:
-          new Date().toISOString(),
+          row?.updated_at ??
+          null,
+
       })
-      .eq(
-        "id",
-        id
-      )
-      .select("*")
-      .single();
-
-  if (updateError) {
-    console.error(
-      "移动固收资产失败:",
-      updateError
     );
 
-    throw updateError;
-  }
-
-  return normalizeAsset(
-    updated as FixedIncomeAsset
-  );
 }
 
-/* =========================================================
-   Update Asset Order
-========================================================= */
 
-export async function updateFixedIncomeAssetOrder(
-  assets: FixedIncomeAsset[]
-): Promise<void> {
-  if (!assets.length) {
-    return;
-  }
-
-  /*
-   * 每个分组单独从 0 开始排序。
-   *
-   * 未分组使用特殊 key。
-   */
-  const counters =
-    new Map<string, number>();
-
-  const updates =
-    assets.map(
-      (asset) => {
-        const groupKey =
-          asset.group_id ??
-          "__ungrouped__";
-
-        const current =
-          counters.get(
-            groupKey
-          ) ?? 0;
-
-        counters.set(
-          groupKey,
-          current + 1
-        );
-
-        return {
-          id: asset.id,
-          sort_order:
-            current,
-        };
-      }
-    );
-
-  const results =
-    await Promise.all(
-      updates.map(
-        async ({
-          id,
-          sort_order,
-        }) => {
-          const {
-            error,
-          } =
-            await supabase
-              .from(
-                "fixed_income_assets"
-              )
-              .update({
-                sort_order,
-                updated_at:
-                  new Date().toISOString(),
-              })
-              .eq(
-                "id",
-                id);
-
-          return error;
-        }
-      )
-    );
-
-  const firstError =
-    results.find(
-      (
-        item
-      ) => item
-    );
-
-  if (firstError) {
-    console.error(
-      "保存固收资产排序失败:",
-      firstError
-    );
-
-    throw firstError;
-  }
-}
-
-/* =========================================================
-   Update Single Asset
-========================================================= */
-
-export async function updateFixedIncomeAsset(
-  id: string,
-  payload: Partial<FixedIncomeAsset>
-): Promise<FixedIncomeAsset> {
-  const updatePayload: Record<
-    string,
-    unknown
-  > = {
-    ...payload,
-    updated_at:
-      new Date().toISOString(),
-  };
-
-  /*
-   * id 不允许更新。
-   */
-  delete updatePayload.id;
-
-  const {
-    data,
-    error,
-  } =
-    await supabase
-      .from(
-        "fixed_income_assets"
-      )
-      .update(
-        updatePayload
-      )
-      .eq(
-        "id",
-        id
-      )
-      .select("*")
-      .single();
-
-  if (error) {
-    console.error(
-      "更新固收资产失败:",
-      error
-    );
-
-    throw error;
-  }
-
-  return normalizeAsset(
-    data as FixedIncomeAsset
-  );
-}
-
-/* =========================================================
-   Create Asset
-========================================================= */
+/**
+ * ============================================================
+ * 创建固收资产
+ * ============================================================
+ */
 
 export async function createFixedIncomeAsset(
-  payload: Partial<FixedIncomeAsset>
-): Promise<FixedIncomeAsset> {
-  const groupId =
-    payload.group_id ??
-    null;
+  input: Partial<FixedIncomeAsset>
+) {
 
-  let nextSortOrder = 0;
-
-  /*
-   * 找目标分组当前最大的 sort_order。
-   */
-  const {
-    data,
-    error,
-  } = groupId
-    ? await supabase
-        .from(
-          "fixed_income_assets"
-        )
-        .select("sort_order")
-        .eq(
-          "group_id",
-          groupId
-        )
-        .order(
-          "sort_order",
-          {
-            ascending:
-              false,
-          }
-        )
-        .limit(1)
-    : await supabase
-        .from(
-          "fixed_income_assets"
-        )
-        .select("sort_order")
-        .is(
-          "group_id",
-          null
-        )
-        .order(
-          "sort_order",
-          {
-            ascending:
-              false,
-          }
-        )
-        .limit(1);
-
-  if (error) {
-    console.error(
-      "获取新固收资产排序失败:",
-      error
+  const amount =
+    toNumber(
+      input.amount
     );
 
-    throw error;
+  if (
+    amount <= 0
+  ) {
+
+    throw new Error(
+      "资产金额必须大于 0"
+    );
+
   }
+
+  const interestRate =
+    toNumber(
+      input.interest_rate
+    );
 
   if (
-    data &&
-    data.length > 0
+    interestRate < 0
   ) {
-    nextSortOrder =
-      Number(
-        data[0]
-          .sort_order ?? 0
-      ) + 1;
+
+    throw new Error(
+      "年利率不能小于 0"
+    );
+
   }
 
-  const insertPayload = {
-    name:
-      payload.name?.trim() ??
-      "",
+  const currency =
+    normalizeCurrency(
+      input.currency
+    );
 
-    code:
-      payload.code ??
-      null,
+  /**
+   * 新版本：
+   *
+   * USD 不再保存每日汇率。
+   *
+   * exchange_rate 保留为 null。
+   */
+    const payload = {
 
     type:
-      payload.type ??
+      input.type ??
       "其他",
 
-    amount:
-      Number(
-        payload.amount ?? 0
-      ),
+
+    name:
+      String(
+        input.name ?? ""
+      )
+        .trim(),
+
 
     institution:
-      payload.institution ??
+      input.institution ??
       null,
 
+
+    amount,
+
+
+    currency,
+
+
+    market:
+  normalizeCurrency(input.currency) === "USD"
+    ? "HK"
+    : "CN",
+
+
+    exchange_rate:
+      null,
+
+
     interest_rate:
-      payload.interest_rate ==
-      null
-        ? null
-        : Number(
-            payload.interest_rate
-          ),
+      interestRate,
+
 
     auto_interest:
       Boolean(
-        payload.auto_interest
+        input.auto_interest
       ),
 
+
     interest_date:
-      payload.interest_date ??
+      input.interest_date ??
       null,
+
 
     note:
-      payload.note ??
+      input.note ??
       null,
 
+
     group_id:
-      groupId,
+      input.group_id ??
+      null,
+
 
     sort_order:
-      nextSortOrder,
+      input.sort_order ??
+      0,
+
   };
 
+
   const {
-    data: created,
-    error: insertError,
+    data,
+    error,
   } =
     await supabase
+
       .from(
         "fixed_income_assets"
       )
+
       .insert(
-        insertPayload
+        payload
       )
+
       .select("*")
+
       .single();
 
-  if (insertError) {
+  if (
+    error
+  ) {
+
     console.error(
-      "创建固收资产失败:",
-      insertError
+      "createFixedIncomeAsset error:",
+      error
     );
 
-    throw insertError;
+    throw error;
+
   }
 
   return normalizeAsset(
-    created as FixedIncomeAsset
+    data
   );
+
 }
 
-/* =========================================================
-   Delete Asset
-========================================================= */
 
-export async function deleteFixedIncomeAsset(
-  id: string
-): Promise<void> {
-  const { error } =
+/**
+ * ============================================================
+ * 更新固收资产
+ * ============================================================
+ */
+
+export async function updateFixedIncomeAsset(
+  id: string,
+  input: Partial<FixedIncomeAsset>
+) {
+
+  const payload: any = {};
+
+
+  if (
+    input.type !== undefined
+  ) {
+
+    payload.type =
+      input.type;
+
+  }
+
+
+  if (
+    input.name !== undefined
+  ) {
+
+    payload.name =
+      String(
+        input.name
+      )
+        .trim();
+
+  }
+
+
+  if (
+    input.institution !== undefined
+  ) {
+
+    payload.institution =
+      input.institution;
+
+  }
+
+
+  if (
+    input.amount !== undefined
+  ) {
+
+    const amount =
+      toNumber(
+        input.amount
+      );
+
+    if (
+      amount <= 0
+    ) {
+
+      throw new Error(
+        "资产金额必须大于 0"
+      );
+
+    }
+
+    payload.amount =
+      amount;
+
+  }
+
+
+  if (
+    input.currency !== undefined
+  ) {
+
+    payload.currency =
+      normalizeCurrency(
+        input.currency
+      );
+
+  }
+
+if (
+ input.currency !== undefined
+) {
+
+  payload.market =
+    normalizeCurrency(
+      input.currency
+    ) === "USD"
+      ? "HK"
+      : "CN";
+
+}
+  /**
+   * 重要：
+   *
+   * 不再更新 exchange_rate。
+   *
+   * 统一使用 Dashboard asset.usd_cny。
+   */
+  if (
+    input.currency !== undefined
+  ) {
+
+    payload.exchange_rate =
+      null;
+
+  }
+
+
+  if (
+    input.interest_rate !== undefined
+  ) {
+
+    const rate =
+      toNumber(
+        input.interest_rate
+      );
+
+    if (
+      rate < 0
+    ) {
+
+      throw new Error(
+        "年利率不能小于 0"
+      );
+
+    }
+
+    payload.interest_rate =
+      rate;
+
+  }
+
+
+  if (
+    input.auto_interest !== undefined
+  ) {
+
+    payload.auto_interest =
+      Boolean(
+        input.auto_interest
+      );
+
+  }
+
+
+  if (
+    input.interest_date !== undefined
+  ) {
+
+    payload.interest_date =
+      input.interest_date;
+
+  }
+
+
+  if (
+    input.note !== undefined
+  ) {
+
+    payload.note =
+      input.note;
+
+  }
+
+
+  if (
+    input.group_id !== undefined
+  ) {
+
+    payload.group_id =
+      input.group_id;
+
+  }
+
+
+  if (
+    input.sort_order !== undefined
+  ) {
+
+    payload.sort_order =
+      input.sort_order;
+
+  }
+
+
+  const {
+    data,
+    error,
+  } =
     await supabase
+
       .from(
         "fixed_income_assets"
       )
+
+      .update(
+        payload
+      )
+
+      .eq(
+        "id",
+        id
+      )
+
+      .select("*")
+
+      .single();
+
+  if (
+    error
+  ) {
+
+    console.error(
+      "updateFixedIncomeAsset error:",
+      error
+    );
+
+    throw error;
+
+  }
+
+  return normalizeAsset(
+    data
+  );
+
+}
+
+
+/**
+ * ============================================================
+ * 删除资产
+ * ============================================================
+ */
+
+export async function deleteFixedIncomeAsset(
+  id: string
+) {
+
+  const {
+    error
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_assets"
+      )
+
       .delete()
+
       .eq(
         "id",
         id
       );
 
-  if (error) {
+  if (
+    error
+  ) {
+
     console.error(
-      "删除固收资产失败:",
+      "deleteFixedIncomeAsset error:",
       error
     );
 
     throw error;
+
   }
 
-  /*
-   * 删除后重新整理各组 sort_order，
-   * 防止中间出现空号。
-   */
-  await normalizeFixedIncomeAssetOrder();
 }
 
-/* =========================================================
-   Total
-========================================================= */
 
-export async function getFixedIncomeTotal(): Promise<number> {
+/**
+ * ============================================================
+ * 创建分组
+ * ============================================================
+ */
+
+export async function createFixedIncomeGroup(
+  name: string
+) {
+
+  const cleanName =
+    String(
+      name ?? ""
+    )
+      .trim();
+
+  if (
+    !cleanName
+  ) {
+
+    throw new Error(
+      "分组名称不能为空"
+    );
+
+  }
+
   const {
-    data,
-    error,
+    data: existing
   } =
     await supabase
+
+      .from(
+        "fixed_income_groups"
+      )
+
+      .select(
+        "sort_order"
+      )
+
+      .order(
+        "sort_order",
+        {
+          ascending: false,
+        }
+      )
+
+      .limit(
+        1
+      )
+      .maybeSingle();
+
+
+  const nextSort =
+    existing
+      ? toNumber(
+          existing.sort_order
+        ) + 1
+      : 0;
+
+
+  const {
+    data,
+    error
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_groups"
+      )
+
+      .insert({
+
+        name:
+          cleanName,
+
+        sort_order:
+          nextSort,
+
+      })
+
+      .select("*")
+
+      .single();
+
+
+  if (
+    error
+  ) {
+
+    console.error(
+      "createFixedIncomeGroup error:",
+      error
+    );
+
+    throw error;
+
+  }
+
+  return data;
+
+}
+
+
+/**
+ * ============================================================
+ * 更新分组
+ * ============================================================
+ */
+
+export async function updateFixedIncomeGroup(
+  id: string,
+  name: string
+) {
+
+  const cleanName =
+    String(
+      name ?? ""
+    )
+      .trim();
+
+  if (
+    !cleanName
+  ) {
+
+    throw new Error(
+      "分组名称不能为空"
+    );
+
+  }
+
+  const {
+    data,
+    error
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_groups"
+      )
+
+      .update({
+
+        name:
+          cleanName,
+
+      })
+
+      .eq(
+        "id",
+        id
+      )
+
+      .select("*")
+
+      .single();
+
+
+  if (
+    error
+  ) {
+
+    console.error(
+      "updateFixedIncomeGroup error:",
+      error
+    );
+
+    throw error;
+
+  }
+
+  return data;
+
+}
+
+
+/**
+ * ============================================================
+ * 删除分组
+ *
+ * 删除分组前：
+ * 将里面的资产 group_id 设为 null
+ * ============================================================
+ */
+
+export async function deleteFixedIncomeGroup(
+  id: string
+) {
+
+  const {
+    error:
+      assetError
+  } =
+    await supabase
+
       .from(
         "fixed_income_assets"
       )
-      .select("amount");
 
-  if (error) {
+      .update({
+
+        group_id:
+          null,
+
+      })
+
+      .eq(
+        "group_id",
+        id
+      );
+
+  if (
+    assetError
+  ) {
+
     console.error(
-      "获取固收总额失败:",
+      "deleteFixedIncomeGroup asset update error:",
+      assetError
+    );
+
+    throw assetError;
+
+  }
+
+
+  const {
+    error
+  } =
+    await supabase
+
+      .from(
+        "fixed_income_groups"
+      )
+
+      .delete()
+
+      .eq(
+        "id",
+        id
+      );
+
+
+  if (
+    error
+  ) {
+
+    console.error(
+      "deleteFixedIncomeGroup error:",
       error
     );
 
     throw error;
+
   }
 
-  return (
-    data?.reduce(
-      (
-        sum,
-        item
-      ) =>
-        sum +
-        Number(
-          item.amount ??
-            0
-        ),
-      0
-    ) ?? 0
-  );
 }
 
-/* =========================================================
-   Normalize Asset Order
-========================================================= */
 
-export async function normalizeFixedIncomeAssetOrder(): Promise<void> {
-  const assets =
-    await getFixedIncomeAssets();
+/**
+ * ============================================================
+ * 分组排序
+ * ============================================================
+ */
 
-  /*
-   * 注意：
-   * getFixedIncomeAssets 已经按照
-   *
-   * group_id
-   * sort_order
-   * created_at
-   *
-   * 排好。
-   *
-   * 这里仅重新给每个 group 编号。
-   */
+export async function updateFixedIncomeGroupOrder(
+  groups: FixedIncomeGroup[]
+) {
 
-  const counters =
-    new Map<string, number>();
-
-  const normalized =
-    assets.map(
-      (asset) => {
-        const key =
-          asset.group_id ??
-          "__ungrouped__";
-
-        const index =
-          counters.get(
-            key
-          ) ?? 0;
-
-        counters.set(
-          key,
-          index + 1
-        );
-
-        return {
-          ...asset,
+  const updates = groups.map(
+    (group) =>
+      supabase
+        .from("fixed_income_groups")
+        .update({
           sort_order:
-            index,
-        };
-      }
+            group.sort_order,
+        })
+        .eq(
+          "id",
+          group.id
+        )
+  );
+
+
+  const results =
+    await Promise.all(
+      updates
     );
 
-  await updateFixedIncomeAssetOrder(
-    normalized
+
+  const error =
+    results.find(
+      (result) =>
+        result.error
+    )?.error;
+
+
+  if (error) {
+    throw error;
+  }
+
+}
+
+
+/**
+ * ============================================================
+ * 资产所属分组
+ * ============================================================
+ */
+
+export async function updateFixedIncomeAssetGroup(
+  id: string,
+  groupId: string | null
+) {
+
+  const { data, error } =
+    await supabase
+      .from("fixed_income_assets")
+      .update({
+        group_id: groupId,
+      })
+      .eq(
+        "id",
+        id
+      )
+      .select()
+      .single();
+
+
+  if (error) {
+    throw error;
+  }
+
+
+  return data;
+}
+
+
+/**
+ * ============================================================
+ * 资产排序
+ * ============================================================
+ */
+/**
+ * 逐条更新资产排序。
+ * 与 page.tsx 中 `updateFixedIncomeAssetOrder(item.id, index)` 调用匹配。
+ */
+export async function updateFixedIncomeAssetOrder(
+  assets: FixedIncomeAsset[]
+) {
+
+  const updates = assets.map(
+    (asset) =>
+      supabase
+        .from("fixed_income_assets")
+        .update({
+          sort_order:
+            asset.sort_order,
+        })
+        .eq(
+          "id",
+          asset.id
+        )
   );
+
+
+  const results =
+    await Promise.all(
+      updates
+    );
+
+
+  const error =
+    results.find(
+      (result) =>
+        result.error
+    )?.error;
+
+
+  if (error) {
+    throw error;
+  }
+
+}
+
+
+/**
+ * ============================================================
+ * 固收总额
+ * ============================================================
+ */
+
+export async function getFixedIncomeTotal(
+  usdCnyRate?: number
+): Promise<number> {
+
+  const [
+    assets,
+    rate,
+  ] =
+    await Promise.all([
+
+      getFixedIncomeAssets(),
+
+      usdCnyRate !== undefined
+        ? Promise.resolve(
+            usdCnyRate
+          )
+        : getDashboardUsdCnyRate(),
+
+    ]);
+
+
+  return assets.reduce(
+
+    (
+      sum,
+      asset
+    ) => {
+
+      return (
+        sum +
+        getFixedIncomeAssetCnyAmount(
+          asset,
+          rate
+        )
+      );
+
+    },
+
+    0
+
+  );
+
 }

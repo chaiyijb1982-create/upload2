@@ -72,37 +72,13 @@ type MarketOverview = {
 // 常量
 // =====================================================
 
-const TARGETS: Record<CategoryKey, number> = {
-  fixed_income: 0.45,
-  global_stock: 0.30,
-  china_stock: 0.10,
-  gold: 0.15,
-};
-
-const RANGES: Record<
-  CategoryKey,
-  {
-    min: number;
-    max: number;
-  }
-> = {
-  fixed_income: {
-    min: 0.40,
-    max: 0.55,
-  },
-  global_stock: {
-    min: 0.25,
-    max: 0.40,
-  },
-  china_stock: {
-    min: 0.05,
-    max: 0.15,
-  },
-  gold: {
-    min: 0.10,
-    max: 0.20,
-  },
-};
+// 家庭最终资产配置目标
+// 防守资产 = 固定收益 + 中国股票
+const HOUSEHOLD_TARGETS = {
+  defensive: 0.55,
+  global_stock: 0.35,
+  gold: 0.10,
+} as const;
 
 const CATEGORY_LABELS: Record<CategoryKey, string> = {
   fixed_income: "固定收益",
@@ -117,7 +93,6 @@ const DEFAULT_VOO_PRICE = 710.72;
 const DEFAULT_GLDM_PRICE = 88.52;
 const DEFAULT_USD_CNY = 7.10;
 
-const FIXED_INCOME_DAILY = 2000;
 
 // =====================================================
 // 工具函数
@@ -199,103 +174,6 @@ function marketStatusClass(status: MarketStatus): string {
   }
 
   return "bg-emerald-100 text-emerald-700";
-}
-
-function categoryStatus(
-  key: CategoryKey,
-  currentPct: number
-): {
-  label: string;
-  className: string;
-} {
-  const range = RANGES[key];
-
-  if (currentPct < range.min) {
-    return {
-      label: "低于区间",
-      className: "bg-amber-100 text-amber-700",
-    };
-  }
-
-  if (currentPct > range.max) {
-    return {
-      label: "高于区间",
-      className: "bg-red-100 text-red-700",
-    };
-  }
-
-  return {
-    label: "区间内",
-    className: "bg-emerald-100 text-emerald-700",
-  };
-}
-
-function addBusinessDays(
-  startDate: string,
-  days: number
-): string {
-  const date = new Date(`${startDate}T12:00:00`);
-
-  let remaining = Math.max(0, days);
-
-  while (remaining > 0) {
-    date.setDate(date.getDate() + 1);
-
-    const weekday = date.getDay();
-
-    if (weekday !== 0 && weekday !== 6) {
-      remaining--;
-    }
-  }
-
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-}
-
-function getFixedIncomePlan(
-  fixedIncome: number,
-  totalAssets: number
-) {
-  if (totalAssets <= 0) {
-    return {
-      needed: 0,
-      workdays: 0,
-      stopDate: todayString(),
-      reached: false,
-    };
-  }
-
-  const target = TARGETS.fixed_income;
-
-  if (fixedIncome / totalAssets >= target) {
-    return {
-      needed: 0,
-      workdays: 0,
-      stopDate: todayString(),
-      reached: true,
-    };
-  }
-
-  const needed =
-    (target * totalAssets - fixedIncome) /
-    (1 - target);
-
-  const workdays = Math.ceil(
-    Math.max(0, needed) / FIXED_INCOME_DAILY
-  );
-
-  return {
-    needed: Math.max(0, needed),
-    workdays,
-    stopDate: addBusinessDays(
-      todayString(),
-      workdays
-    ),
-    reached: false,
-  };
 }
 
 // =====================================================
@@ -649,6 +527,11 @@ export default function FxExchangePage() {
     categoryAmounts.china_stock +
     categoryAmounts.gold;
 
+  // 新口径：防守资产 = 固定收益 + 中国股票
+  const defensiveAmount =
+    categoryAmounts.fixed_income +
+    categoryAmounts.china_stock;
+
   // ===================================================
   // 当前比例
   // ===================================================
@@ -661,6 +544,7 @@ export default function FxExchangePage() {
           global_stock: 0,
           china_stock: 0,
           gold: 0,
+          defensive: 0,
         };
       }
 
@@ -680,28 +564,16 @@ export default function FxExchangePage() {
         gold:
           categoryAmounts.gold /
           totalAssets,
+
+        defensive:
+          defensiveAmount /
+          totalAssets,
       };
     }, [
       categoryAmounts,
       totalAssets,
+      defensiveAmount,
     ]);
-
-  // ===================================================
-  // 固收未来资金
-  // ===================================================
-
-  const fixedIncomePlan =
-    useMemo(
-      () =>
-        getFixedIncomePlan(
-          categoryAmounts.fixed_income,
-          totalAssets
-        ),
-      [
-        categoryAmounts.fixed_income,
-        totalAssets,
-      ]
-    );
 
   // ===================================================
   // 香港 / USD 相关现有持仓
@@ -745,6 +617,17 @@ export default function FxExchangePage() {
         String(item.code)
           .trim()
           .toUpperCase() === "GLDM"
+    );
+
+  const currentBrk =
+    holdings.find(
+      (item) =>
+        String(item.code)
+          .trim()
+          .toUpperCase() === "BRK.B" ||
+        String(item.code)
+          .trim()
+          .toUpperCase() === "BRKB"
     );
 
   // ===================================================
@@ -803,474 +686,113 @@ const aiDecisionText =
   useMemo(() => {
     const lines: string[] = [];
 
-    lines.push(
-      "AI Wealth OS 家庭投资决策信息"
-    );
-
-    lines.push(
-      `数据日期：${todayString()}`
-    );
-
+    lines.push("AI Wealth OS 香港投资决策信息");
+    lines.push(`数据日期：${todayString()}`);
     lines.push("");
 
-    // =================================================
-    // 一、家庭资产配置
-    // =================================================
-
-    lines.push(
-      "一、家庭资产配置"
-    );
-
-    lines.push(
-      `总资产（仅 holdings）：¥${formatMoney(
-        totalAssets
-      )}`
-    );
-
-    for (const key of [
-      "fixed_income",
-      "global_stock",
-      "china_stock",
-      "gold",
-    ] as CategoryKey[]) {
-      lines.push(
-        `${CATEGORY_LABELS[key]}：¥${formatMoney(
-          categoryAmounts[key]
-        )}，当前 ${formatPct(
-          currentAllocation[key]
-        )}，目标 ${formatPct(
-          TARGETS[key]
-        )}，允许 ${formatPct(
-          RANGES[key].min
-        )}-${formatPct(
-          RANGES[key].max
-        )}`
-      );
-    }
-
+    lines.push("【一、家庭长期资产配置目标】");
+    lines.push("防守资产（含中国股票）：55%");
+    lines.push("固定收益：单独显示");
+    lines.push("中国股票：单独显示，但计入防守资产55%");
+    lines.push("全球股票：35%");
+    lines.push("黄金：10%");
+    lines.push("防守资产 = 固定收益 + 中国股票");
     lines.push("");
 
-    // =================================================
-    // 二、本次香港投资
-    // =================================================
-
+    lines.push("【二、当前家庭资产】");
+    lines.push(`家庭总资产（仅 holdings）：¥${formatMoney(totalAssets)}`);
     lines.push(
-      "二、本次香港投资"
+      `防守资产（含中国股票）：¥${formatMoney(defensiveAmount)}，当前 ${formatPct(currentAllocation.defensive)}，目标55%`
     );
-
     lines.push(
-      `本次投资金额：$${formatUsd(
-        investmentAmountUsd
-      )}`
+      `固定收益：¥${formatMoney(categoryAmounts.fixed_income)}，占家庭总资产 ${formatPct(currentAllocation.fixed_income)}`
     );
-
     lines.push(
-      `VOO 当前价格：$${formatUsd(
-        vooPrice
-      )}`
+      `中国股票：¥${formatMoney(categoryAmounts.china_stock)}，占家庭总资产 ${formatPct(currentAllocation.china_stock)}（计入防守资产）`
     );
-
     lines.push(
-      `GLDM 当前价格：$${formatUsd(
-        gldmPrice
-      )}`
+      `全球股票：¥${formatMoney(categoryAmounts.global_stock)}，当前 ${formatPct(currentAllocation.global_stock)}，目标35%`
     );
-
     lines.push(
-      `USD/CNY 当前汇率：${usdCny}`
+      `黄金：¥${formatMoney(categoryAmounts.gold)}，当前 ${formatPct(currentAllocation.gold)}，目标10%`
     );
-
     lines.push("");
 
-    // =================================================
-    // 三、市场环境
-    // =================================================
+    lines.push("【三、本次香港投资】");
+    lines.push(`本次投资金额：$${formatUsd(investmentAmountUsd)} USD`);
+    lines.push(`USD/CNY当前汇率：${usdCny}`);
+    lines.push("香港账户不能购买碎股，VOO、BRK.B、GLDM均只能购买整数股。");
+    lines.push("");
 
-    lines.push(
-      "三、当前市场环境"
-    );
+    lines.push("【四、香港现有相关持仓】");
+    lines.push(`VOO：${currentVoo?.shares ?? 0} 股`);
+    lines.push(`BRK.B：${currentBrk?.shares ?? 0} 股`);
+    lines.push(`GLDM：${currentGldm?.shares ?? 0} 股`);
+    lines.push(`VOO 当前页面价格：$${formatUsd(vooPrice)}`);
+    lines.push(`GLDM 当前页面价格：$${formatUsd(gldmPrice)}`);
+    lines.push("BRK.B当前价格：请结合实时市场价格计算，不能使用过时价格。");
+    lines.push("");
 
-    lines.push(
-      investmentDirection
-    );
-
+    lines.push("【五、当前市场环境】");
+    lines.push(investmentDirection);
     if (market?.assessment) {
-      lines.push(
-        `市场判断：${market.assessment.status ?? "unavailable"}`
-      );
-
+      lines.push(`市场判断：${market.assessment.status ?? "unavailable"}`);
       if (market.assessment.summary) {
-        lines.push(
-          `市场摘要：${market.assessment.summary}`
-        );
+        lines.push(`市场摘要：${market.assessment.summary}`);
       }
     }
-
     lines.push("");
 
-    // =================================================
-    // 四、固定收益计划
-    // =================================================
-
-    lines.push(
-      "四、固定收益计划"
-    );
-
-    lines.push(
-      `固定收益当前比例：${formatPct(
-        currentAllocation.fixed_income
-      )}`
-    );
-
-    lines.push(
-      `固定收益每个工作日投入：¥${formatMoney(
-        FIXED_INCOME_DAILY
-      )}`
-    );
-
-    if (fixedIncomePlan.reached) {
-      lines.push(
-        "固定收益已经达到约45%，原则上停止继续增加固定收益。"
-      );
-
-      lines.push(
-        "停止增加固定收益不代表停止家庭整体投资，新增资金应根据家庭整体配置转向其他低配资产。"
-      );
-    } else {
-      lines.push(
-        `按照当前计划继续每个工作日投入 ¥${formatMoney(
-          FIXED_INCOME_DAILY
-        )}，预计约 ${fixedIncomePlan.workdays} 个工作日达到45%左右。`
-      );
-
-      lines.push(
-        "达到约45%后停止增加固定收益，不把系统计算的日期作为硬性停止条件。"
-      );
-    }
-
+    lines.push("【六、长期投资规则】");
+    lines.push("家庭长期目标固定为：防守资产55%（含中国股票） / 全球股票35% / 黄金10%。");
+    lines.push("固定收益必须单独显示。");
+    lines.push("中国股票必须单独显示，但计入防守资产55%。");
+    lines.push("002849 暂停新增购买。");
+    lines.push("SCHD 暂停新增购买。");
+    lines.push("QQQ 暂停新增购买。");
+    lines.push("香港新增资金主要在 VOO、BRK.B、GLDM 三者中选择。");
+    lines.push("不能机械按照固定的VOO/BRK.B/GLDM比例购买，必须结合大陆 + 香港家庭整体资产配置决定本次买入组合。");
+    lines.push("必须计算本次买入后的家庭整体配置，而不是只看香港账户。");
+    lines.push("市场环境只用于判断一次性还是分批，不改变55%/35%/10%的长期目标。");
+    lines.push("香港不能买碎股，因此必须寻找整数股可执行组合。");
     lines.push("");
 
-    // =================================================
-    // 五、香港 / USD 现有持仓
-    // =================================================
-
-    lines.push(
-      "五、当前香港 / USD 相关持仓"
-    );
-
-    lines.push(
-      `当前 VOO：${currentVoo?.shares ?? 0} 股`
-    );
-
-    lines.push(
-      `当前 GLDM：${currentGldm?.shares ?? 0} 股`
-    );
-
-
-
+    lines.push("【七、请直接计算最终方案】");
+    lines.push(`请直接告诉我这次 $${formatUsd(investmentAmountUsd)} 在香港应该怎么买。`);
+    lines.push("请综合当前家庭总资产、固定收益、中国股票、全球股票、黄金的实际比例，以及香港现有VOO/BRK.B/GLDM持仓，计算本次最合适的整数股组合。");
     lines.push("");
-
-    // =================================================
-    // 六、投资规则
-    // =================================================
-
-    lines.push(
-      "六、投资规则"
-    );
-
-       lines.push(
-      "002849 暂停新增购买。当前中国股票已经超过允许上限，等待其他资产增长后自然稀释。"
-    );
-
-    lines.push(
-      "SCHD 暂停新增购买。"
-    );
-
-    lines.push(
-      "QQQ 暂停新增购买。"
-    );
-
-    lines.push(
-      "香港新增资金的长期基准配置为：VOO 60%、GLDM 40%。"
-    );
-
-    lines.push(
-      "VOO 60% / GLDM 40% 是香港新增资金的默认长期基准，不允许 AI CFO 每次根据短期市场波动随意改变。"
-    );
-
-    lines.push(
-      "AI CFO 首先按照 VOO 60% / GLDM 40% 计算理论资金配置，然后再结合大陆 + 香港家庭整体资产配置进行必要修正。"
-    );
-
-    lines.push(
-      "如果全球股票已经超过允许上限40%，应明显降低或暂停 VOO 新增；如果只是高于30%目标但仍在25%-40%允许区间内，不应仅因为高于目标就自动停止 VOO。"
-    );
-
-    lines.push(
-      "如果黄金低于允许下限10%，应明显提高 GLDM 优先级；如果黄金仅低于15%目标但仍在10%-20%允许区间内，可以适度提高 GLDM，但不应自动变成100% GLDM。"
-    );
-
-    lines.push(
-      "如果中国股票超过允许上限15%，禁止继续增加中国股票，002849保持暂停。"
-    );
-
-    lines.push(
-      "固定收益当前目标45%，允许区间40%-55%；当前低于45%时，大陆继续每个工作日投入¥2,000，达到约45%后停止增加固定收益。"
-    );
-
-    lines.push(
-      "停止增加固定收益不代表停止投资，后续新增资金仍应根据家庭整体资产配置重新分配。"
-    );
-
-    lines.push(
-      "家庭最终决策必须同时考虑大陆 + 香港家庭总资产，而不是只看香港账户。"
-    );
-
-    lines.push(
-      "市场环境只用于调整投资节奏和是否分批，不改变香港长期VOO 60% / GLDM 40%的基准配置。"
-    );
-
-    lines.push(
-      "市场环境normal时，原则上一次性执行；caution时可以考虑分批；risk时优先考虑分批执行，但不得因此改变长期资产配置逻辑。"
-    );
-
-    lines.push(
-      "香港账户不支持碎股，VOO 和 GLDM 均只能购买完整整数股。"
-    );
-
-    lines.push(
-      "AI CFO 必须先计算理论配置，再在整数股约束下寻找实际可执行方案。"
-    );
-
-    lines.push(
-      "整数股方案应尽可能使用本次投资资金，同时保持与60% VOO / 40% GLDM基准方向一致，并结合家庭整体资产配置进行自然再平衡。"
-    );
-
-    lines.push(
-      "AI CFO 不能只给 VOO / GLDM 投资比例，必须进一步给出具体买入股数、实际使用资金和剩余现金。"
-    );
-
-    lines.push(
-      "本页面不自动计算最佳整数股组合，最终整数股方案由 AI CFO 根据以上完整规则计算。"
-    );
+    lines.push("最后必须直接给出：");
+    lines.push("1. VOO 买几股");
+    lines.push("2. 伯克希尔 BRK.B 买几股");
+    lines.push("3. GLDM 买几股");
+    lines.push("4. VOO 花多少钱");
+    lines.push("5. BRK.B 花多少钱");
+    lines.push("6. GLDM 花多少钱");
+    lines.push("7. 总共花多少钱");
+    lines.push("8. 剩多少钱 USD");
+    lines.push("9. 按当前 USD/CNY 换算，本次新增资产折合多少人民币");
+    lines.push("10. 买完以后家庭配置变成多少：");
+    lines.push("   - 防守资产（含中国股票）多少、占多少%");
+    lines.push("   - 固定收益占多少%");
+    lines.push("   - 中国股票占多少%");
+    lines.push("   - 全球股票多少、占多少%");
+    lines.push("   - 黄金多少、占多少%");
     lines.push("");
+    lines.push("请给出唯一最终可执行方案，不要只给比例。最后用2-4条简短理由说明为什么这样买。");
 
-    // =================================================
-    // 七、最终 AI CFO 决策问题
-    // =================================================
-
-    lines.push(
-      "七、最终 AI CFO 决策"
-    );
-
-        lines.push(
-      "请基于以上完整家庭资产、当前配置、香港现有持仓、当前市场环境、本次投资金额以及 VOO / GLDM 当前价格，按照固定的 AI CFO 决策规则，给出本次香港投资的最终可执行方案。"
-    );
-
-    lines.push(
-      `1. 本次为既定的定投资金 $${formatUsd(
-        investmentAmountUsd
-      )}，不要判断“是否投资”，而是直接决定这笔资金如何配置。`
-    );
-
-    lines.push(
-      "2. 香港新增资金长期基准为 VOO 60% / GLDM 40%，先以此作为本次投资的默认配置起点。"
-    );
-
-    lines.push(
-      "3. 然后检查大陆 + 香港家庭整体资产配置：固定收益、全球股票、中国股票、黄金分别距离目标和允许区间还有多少。"
-    );
-
-    lines.push(
-      "4. 如果某一资产已经超过允许上限，应优先停止增加该资产，并利用新增资金向其他低配资产自然再平衡。"
-    );
-
-    lines.push(
-      "5. 全球股票只有在超过40%允许上限时，才应明显降低或暂停VOO；如果只是高于30%目标但仍在25%-40%允许区间内，不应仅因为高于目标就完全停止VOO。"
-    );
-
-    lines.push(
-      "6. 黄金只有在低于10%允许下限时，才需要明显提高GLDM优先级；如果黄金处于10%-20%允许区间内，则仍以60% VOO / 40% GLDM作为主要基准，并根据整体配置适度调整。"
-    );
-
-    lines.push(
-      "7. 中国股票目前已经超过15%允许上限，因此002849不得新增购买。"
-    );
-
-    lines.push(
-      "8. 固定收益继续按照每个工作日¥2,000投入，达到约45%后停止增加固定收益；香港本次投资不需要为了补固定收益而改变VOO / GLDM的长期投资框架。"
-    );
-
-    lines.push(
-      "9. 市场环境只用于判断投资节奏：normal原则上一次性投资；caution可以考虑分批；risk优先考虑分批。市场环境不能直接改变长期60% VOO / 40% GLDM基准。"
-    );
-
-    lines.push(
-      "10. 必须考虑香港账户不支持碎股，VOO和GLDM只能购买完整整数股。"
-    );
-
-    lines.push(
-      "11. 必须根据当前VOO价格、GLDM价格和本次实际投资金额，计算实际可以买入的整数股组合。"
-    );
-
-    lines.push(
-      "12. 在整数股约束下，应尽可能提高资金使用效率，同时让实际组合尽可能接近经过家庭资产配置修正后的目标比例。"
-    );
-
-    lines.push(
-      "13. 必须明确给出VOO买入股数、GLDM买入股数、实际使用美元金额以及剩余美元现金。"
-    );
-
-    lines.push(
-      "14. 如果剩余现金较多，必须判断是保留现金、增加另一只ETF的整数股，还是留到下一次定投；不能为了消耗现金而破坏家庭资产配置。"
-    );
-
-    lines.push(
-      "15. 必须明确判断是否需要分批；如果分批，必须明确第一批VOO股数、第一批GLDM股数以及第一批预计使用金额。"
-    );
-
-    lines.push(
-      "16. 必须判断本次投资完成后，大陆 + 香港合计家庭资产配置是否更加接近长期目标。"
-    );
-
-    lines.push(
-      "17. 最终输出必须给出唯一的推荐执行方案，而不是同时给出多个互相冲突的方案。"
-    );
-
-    lines.push(
-      "18. 请说明最终方案最核心的2-4个理由，重点解释为什么当前家庭资产配置决定了本次VOO和GLDM的具体比例及整数股数量。"
-    );
-
-
-    lines.push("");
-
-    lines.push(
-      "============================================================"
-    );
-
-    lines.push(
-      "AI CFO 最终输出格式"
-    );
-
-    lines.push(
-      "============================================================"
-    );
-
-    lines.push(
-      "最终必须严格按照以下结构回答："
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【问题】"
-    );
-
-    lines.push(
-      "本次香港投资需要解决的问题。"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【数据】"
-    );
-
-    lines.push(
-      "列出最终决策使用的关键数据，包括本次投资金额、VOO价格、GLDM价格、USD/CNY、当前家庭资产配置等。"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【判断】"
-    );
-
-    lines.push(
-      "说明为什么当前家庭整体资产配置决定本次投资比例。"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【监控条件】"
-    );
-
-    lines.push(
-      "如果存在明确的价格、汇率或配置阈值，必须明确写出。"
-    );
-
-    lines.push(
-      "如果没有明确阈值，写：无明确数值条件"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【Holding】"
-    );
-
-    lines.push(
-      "涉及具体持仓时必须使用：资产名称 · Code。"
-    );
-
-    lines.push(
-      "例如：VOO · VOO"
-    );
-
-    lines.push(
-      "如果没有：无"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【建议动作】"
-    );
-
-    lines.push(
-      "必须给出唯一的最终执行方案。"
-    );
-
-    lines.push(
-      "必须明确 VOO 买入股数、GLDM 买入股数、实际使用美元金额以及剩余美元现金。"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "【状态】"
-    );
-
-    lines.push(
-      "只能使用：🟢 已达到条件 / 🟡 尚未达到条件 / ⚪ 无法判断"
-    );
-
-    lines.push("");
-
-    lines.push(
-      "不要提供多个互相冲突的最终方案。"
-    );
-
-    lines.push(
-      "如果条件不足，必须明确说明无法判断，不得自行创造条件。"
-    );
-
-    lines.push("");
     return lines.join("\n");
-
   }, [
     totalAssets,
+    defensiveAmount,
     categoryAmounts,
     currentAllocation,
     investmentAmountUsd,
     vooPrice,
     gldmPrice,
     usdCny,
-    fixedIncomePlan,
     market,
-    hkUsdHoldings,
     currentVoo,
+    currentBrk,
     currentGldm,
     investmentDirection,
   ]);
@@ -1758,66 +1280,51 @@ const aiDecisionText =
 
                 <tbody>
 
-                  {(
-                    [
-                      "fixed_income",
-                      "global_stock",
-                      "china_stock",
-                      "gold",
-                    ] as CategoryKey[]
-                  ).map((key) => {
-
-                    const current =
-                      currentAllocation[key];
-
-                    const deviation =
-                      current -
-                      TARGETS[key];
-
-                    const status =
-                      categoryStatus(
-                        key,
-                        current
-                      );
+                  {[
+                    {
+                      key: "defensive",
+                      label: "防守资产（含中国股票）",
+                      amount: defensiveAmount,
+                      current: currentAllocation.defensive,
+                      target: HOUSEHOLD_TARGETS.defensive,
+                    },
+                    {
+                      key: "global_stock",
+                      label: "全球股票",
+                      amount: categoryAmounts.global_stock,
+                      current: currentAllocation.global_stock,
+                      target: HOUSEHOLD_TARGETS.global_stock,
+                    },
+                    {
+                      key: "gold",
+                      label: "黄金",
+                      amount: categoryAmounts.gold,
+                      current: currentAllocation.gold,
+                      target: HOUSEHOLD_TARGETS.gold,
+                    },
+                  ].map((item) => {
+                    const deviation = item.current - item.target;
 
                     return (
-
                       <tr
-                        key={key}
+                        key={item.key}
                         className="border-b last:border-0"
                       >
-
                         <td className="px-3 py-4 font-medium">
-                          {CATEGORY_LABELS[key]}
+                          {item.label}
                         </td>
-
                         <td className="px-3 py-4">
-                          ¥
-                          {formatMoney(
-                            categoryAmounts[key]
-                          )}
+                          ¥{formatMoney(item.amount)}
                         </td>
-
                         <td className="px-3 py-4 font-semibold">
-                          {formatPct(current)}
+                          {formatPct(item.current)}
                         </td>
-
                         <td className="px-3 py-4">
-                          {formatPct(
-                            TARGETS[key]
-                          )}
+                          {formatPct(item.target)}
                         </td>
-
-                        <td className="px-3 py-4">
-                          {formatPct(
-                            RANGES[key].min
-                          )}{" "}
-                          -{" "}
-                          {formatPct(
-                            RANGES[key].max
-                          )}
+                        <td className="px-3 py-4 text-slate-400">
+                          —
                         </td>
-
                         <td
                           className={`px-3 py-4 ${
                             deviation > 0
@@ -1827,26 +1334,15 @@ const aiDecisionText =
                               : "text-emerald-600"
                           }`}
                         >
-                          {deviation >= 0
-                            ? "+"
-                            : ""}
-                          {formatPctPoint(
-                            deviation
-                          )}
+                          {deviation >= 0 ? "+" : ""}
+                          {formatPctPoint(deviation)}
                         </td>
-
                         <td className="px-3 py-4">
-
-                          <span
-                            className={`rounded-full px-2.5 py-1 text-xs font-medium ${status.className}`}
-                          >
-                            {status.label}
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                            统一目标
                           </span>
-
                         </td>
-
                       </tr>
-
                     );
                   })}
 
@@ -1877,94 +1373,39 @@ const aiDecisionText =
           <section className="mt-5 rounded-2xl bg-white p-5 shadow-sm">
 
             <h3 className="text-lg font-semibold">
-              三、固定收益未来资金
+              三、防守资产内部结构
             </h3>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
 
               <div className="rounded-xl bg-slate-50 p-4">
-
-                <div className="text-xs text-slate-500">
-                  当前固定收益
-                </div>
-
+                <div className="text-xs text-slate-500">防守资产（含中国股票）</div>
                 <div className="mt-1 text-lg font-semibold">
-                  ¥
-                  {formatMoney(
-                    categoryAmounts.fixed_income
-                  )}
+                  ¥{formatMoney(defensiveAmount)} · {formatPct(currentAllocation.defensive)}
                 </div>
-
+                <div className="mt-1 text-xs text-slate-500">长期目标 55%</div>
               </div>
 
               <div className="rounded-xl bg-slate-50 p-4">
-
-                <div className="text-xs text-slate-500">
-                  当前比例
-                </div>
-
+                <div className="text-xs text-slate-500">固定收益</div>
                 <div className="mt-1 text-lg font-semibold">
-                  {formatPct(
-                    currentAllocation.fixed_income
-                  )}
+                  ¥{formatMoney(categoryAmounts.fixed_income)} · {formatPct(currentAllocation.fixed_income)}
                 </div>
-
+                <div className="mt-1 text-xs text-slate-500">单独统计，不单独设家庭总资产目标</div>
               </div>
 
               <div className="rounded-xl bg-slate-50 p-4">
-
-                <div className="text-xs text-slate-500">
-                  每工作日投入
-                </div>
-
+                <div className="text-xs text-slate-500">中国股票</div>
                 <div className="mt-1 text-lg font-semibold">
-                  ¥
-                  {formatMoney(
-                    FIXED_INCOME_DAILY
-                  )}
+                  ¥{formatMoney(categoryAmounts.china_stock)} · {formatPct(currentAllocation.china_stock)}
                 </div>
-
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-
-                <div className="text-xs text-slate-500">
-                  达到45%所需
-                </div>
-
-                <div className="mt-1 text-lg font-semibold">
-                  {fixedIncomePlan.reached
-                    ? "已达到"
-                    : `约 ${fixedIncomePlan.workdays} 个工作日`}
-                </div>
-
+                <div className="mt-1 text-xs text-slate-500">单独统计，但计入防守资产55%</div>
               </div>
 
             </div>
 
             <div className="mt-4 text-sm text-slate-600">
-
-              {fixedIncomePlan.reached ? (
-                <>
-                  当前固定收益已经达到约45%，
-                  原则上可以停止继续增加固定收益，
-                  后续根据家庭总资产变化重新判断。
-                </>
-              ) : (
-                <>
-                  继续按照每个工作日 ¥2,000
-                  增加固定收益，
-
-                  <strong>
-                    达到约45%后停止
-                  </strong>
-
-                  ，不把
-                  {fixedIncomePlan.stopDate}
-                  作为硬性停止条件。
-                </>
-              )}
-
+              后续新增资金不再根据旧的固定收益比例机械投入，而是根据家庭整体55%防守 / 35%全球股票 / 10%黄金配置动态判断。
             </div>
 
           </section>
@@ -2196,7 +1637,7 @@ const aiDecisionText =
 
             </div>
 
-            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
 
               <div className="rounded-xl bg-slate-50 p-4">
 
@@ -2222,6 +1663,18 @@ const aiDecisionText =
 
               </div>
 
+              <div className="rounded-xl bg-slate-50 p-4">
+
+                <div className="text-xs text-slate-500">
+                  当前 BRK.B 持仓
+                </div>
+
+                <div className="mt-1 text-lg font-semibold">
+                  {currentBrk?.shares ?? 0} 股
+                </div>
+
+              </div>
+
             </div>
 
           </section>
@@ -2239,7 +1692,7 @@ const aiDecisionText =
   <div className="mt-4 space-y-2 text-sm text-slate-700">
 
     <div>
-      • 香港新增资金长期基准：VOO 60% / GLDM 40%
+      • 家庭长期资产配置：防守资产55%（含中国股票） / 全球股票35% / 黄金10%
     </div>
 
     <div>
@@ -2259,28 +1712,27 @@ const aiDecisionText =
     </div>
 
     <div>
-      • 全球股票超过40%允许上限时，降低或暂停VOO
+      • 必须同时检查本次投资后全球股票是否更接近35%目标
     </div>
 
     <div>
-      • 黄金低于10%允许下限时，提高GLDM优先级
+      • 必须同时检查本次投资后黄金是否更接近10%目标
     </div>
 
     <div>
-      • 固定收益：每个工作日 ¥2,000，
-      达到约45%后停止
+      • 固定收益属于防守资产内部组成，不再单独决定家庭55%目标
     </div>
 
     <div>
-      • 市场环境：只调整投资节奏，不改变长期60% VOO / 40% GLDM基准
+      • 市场环境只影响一次性还是分批，不改变长期55%/35%/10%目标
     </div>
 
     <div>
-      • 香港账户不支持碎股，VOO / GLDM只能购买整数股
+      • 香港账户不支持碎股，VOO / BRK.B / GLDM只能购买整数股
     </div>
 
     <div>
-      • 最终由 AI CFO 根据家庭配置、价格、资金和整数股约束决定具体股数
+      • 最终由 AI CFO 根据家庭配置、VOO / BRK.B / GLDM价格、资金和整数股约束决定具体股数
     </div>
 
   </div>
@@ -2541,7 +1993,7 @@ const aiDecisionText =
           </section>
 
           {/* =================================================
-              九、复制给 AI CFO
+              八、一键生成给 ChatGPT
               
               注意：
               这里不包含「整数股候选组合」
@@ -2550,13 +2002,16 @@ const aiDecisionText =
           <section className="mt-5 rounded-2xl bg-white p-5 shadow-sm">
 
             <h3 className="text-lg font-semibold">
-              八、复制给 AI CFO
+              八、一键生成给 ChatGPT
             </h3>
 
             <p className="mt-1 text-sm text-slate-500">
-              复制下面完整信息，让 AI CFO 做最终投资判断。
-              不包含系统整数股候选组合。
+              点击下面按钮，一键生成完整决策信息并复制。把复制出来的整段文字直接发给我，我就可以根据当前55%/35%/10%目标帮你判断这笔香港资金具体买什么。
             </p>
+
+            <div className="mt-4 rounded-xl bg-blue-50 p-4 text-sm text-blue-800">
+              使用方法：确认投资金额和市场数据后，点击“一键生成并复制给 ChatGPT”，然后把复制出来的整段文字直接发给我。
+            </div>
 
             <textarea
               readOnly
@@ -2573,7 +2028,7 @@ const aiDecisionText =
                   );
 
                   alert(
-                    "AI 决策信息已复制"
+                    "已生成并复制，直接把这段文字发给 ChatGPT 即可"
                   );
                 } catch {
                   alert(
@@ -2583,7 +2038,7 @@ const aiDecisionText =
               }}
               className="mt-4 rounded-lg bg-slate-900 px-5 py-2 text-sm font-medium text-white"
             >
-              复制 AI 决策信息
+一键生成并复制给 ChatGPT
             </button>
 
           </section>

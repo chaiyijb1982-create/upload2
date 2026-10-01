@@ -7,6 +7,28 @@ import { supabase } from "./supabase";
 
 type AnyRecord = Record<string, any>;
 
+export type InsuranceCashValueMatrixRow = {
+    policyId: string;
+    policyName: string;
+    owner: string;
+    company: string;
+    product: string;
+    values: {
+        year: number;
+        cashValue: number;
+    }[];
+    // 实际缴费
+    paidByYear: {
+        year: number;
+        amount: number;
+    }[];
+    // 计划应缴（按 annual_premium × pay_years 从 start_date 推算）
+    plannedByYear: {
+        year: number;
+        amount: number;
+    }[];
+};
+
 
 // =====================================================
 // 工具函数
@@ -130,16 +152,6 @@ function formatPaymentDate(value: any): string | null {
 
 // =====================================================
 // 获取保单总保费
-//
-// 优先使用 premium_total
-//
-// 如果没有：
-// annual_premium × pay_years
-//
-// 注意：
-// 一次性保单如果 premium_total 存在，
-// 即使 annual_premium / pay_years 为 0，
-// 也可以正常统计。
 // =====================================================
 
 function getPolicyPremiumTotal(
@@ -226,13 +238,6 @@ async function getInsuranceHistory() {
 
 // =====================================================
 // 获取最新现金价值 Map
-//
-// 关键修复：
-//
-// 1. policy_id 全部 normalize
-// 2. 每张保单独立寻找最新历史
-// 3. 不因为 annual_premium/pay_years 为 0 排除
-// 4. 允许一次性保单正常进入
 // =====================================================
 
 async function getLatestCashValueMap() {
@@ -272,10 +277,6 @@ async function getLatestCashValueMap() {
             }
 
 
-            // -----------------------------------------
-            // 未来现金价值不使用
-            // -----------------------------------------
-
             if (
                 rowDate.getTime()
                 >
@@ -284,11 +285,6 @@ async function getLatestCashValueMap() {
                 return;
             }
 
-
-            // -----------------------------------------
-            // 因为已经 date DESC
-            // 第一笔就是最新
-            // -----------------------------------------
 
             if (
                 !latestCash[key]
@@ -300,47 +296,6 @@ async function getLatestCashValueMap() {
             }
 
         }
-    );
-
-
-    console.log(
-        "========================================"
-    );
-
-    console.log(
-        "INSURANCE CASH VALUE MAP"
-    );
-
-    console.log(
-        "========================================"
-    );
-
-    Object.entries(
-        latestCash
-    ).forEach(
-        (
-            [
-                policyId,
-                row
-            ]
-        ) => {
-
-            console.log(
-                "policy:",
-                policyId,
-                "cash:",
-                toNumber(
-                    row.cash_value
-                ),
-                "date:",
-                row.date
-            );
-
-        }
-    );
-
-    console.log(
-        "========================================"
     );
 
 
@@ -381,12 +336,6 @@ export async function getInsurancePolicies() {
     }
 
 
-    console.log(
-        "INSURANCE POLICIES:",
-        data
-    );
-
-
     return data || [];
 
 }
@@ -405,10 +354,6 @@ export async function getInsurancePoliciesWithCashValue() {
     const latestCash =
         await getLatestCashValueMap();
 
-
-    // =================================================
-    // 缴费记录
-    // =================================================
 
     const {
         data: records,
@@ -447,10 +392,6 @@ export async function getInsurancePoliciesWithCashValue() {
                 );
 
 
-            // =========================================
-            // 当前保单缴费记录
-            // =========================================
-
             const policyRecords =
                 (records || []).filter(
                     (record: AnyRecord) => {
@@ -473,10 +414,6 @@ export async function getInsurancePoliciesWithCashValue() {
                 );
 
 
-            // =========================================
-            // 截止今天已经发生的缴费
-            // =========================================
-
             const validPaidRecords =
                 policyRecords.filter(
                     (record: AnyRecord) => {
@@ -489,10 +426,6 @@ export async function getInsurancePoliciesWithCashValue() {
                     }
                 );
 
-
-            // =========================================
-            // 已缴年份
-            // =========================================
 
             const paidYearSet =
                 new Set<number>();
@@ -531,10 +464,6 @@ export async function getInsurancePoliciesWithCashValue() {
                     paidYearSet.size;
 
 
-            // =========================================
-            // 剩余年份
-            // =========================================
-
             const remainYears =
                 payYears > 0
                     ?
@@ -546,10 +475,6 @@ export async function getInsurancePoliciesWithCashValue() {
                     :
                     0;
 
-
-            // =========================================
-            // 缴费进度
-            // =========================================
 
             const progress =
                 payYears > 0
@@ -568,10 +493,6 @@ export async function getInsurancePoliciesWithCashValue() {
                     100;
 
 
-            // =========================================
-            // 今年实际缴费
-            // =========================================
-
             const currentPayment =
                 validPaidRecords.find(
                     (record: AnyRecord) => {
@@ -585,14 +506,6 @@ export async function getInsurancePoliciesWithCashValue() {
                 );
 
 
-            // =========================================
-            // 当前现金价值
-            //
-            // ★ 关键
-            // 不管 annual_premium/pay_years
-            // 直接根据 policy_id 找
-            // =========================================
-
             const cashHistory =
                 latestCash[
                     policyId
@@ -604,10 +517,6 @@ export async function getInsurancePoliciesWithCashValue() {
                     cashHistory?.cash_value
                 );
 
-
-            // =========================================
-            // 实际累计已缴
-            // =========================================
 
             const paidAmount =
                 validPaidRecords.reduce(
@@ -628,19 +537,11 @@ export async function getInsurancePoliciesWithCashValue() {
                 );
 
 
-            // =========================================
-            // 总保费
-            // =========================================
-
             const premiumTotal =
                 getPolicyPremiumTotal(
                     policy
                 );
 
-
-            // =========================================
-            // 保单是否完成
-            // =========================================
 
             const totalPolicyPaid =
                 payYears > 0
@@ -712,8 +613,6 @@ export async function getInsurancePoliciesWithCashValue() {
 
 // =====================================================
 // 保险总览
-//
-// ★ 这里是 FinancialFreedom 最重要的数据源
 // =====================================================
 
 export async function getInsuranceSummary() {
@@ -741,12 +640,6 @@ export async function getInsuranceSummary() {
     const ownerCashValue:
         Record<string, number> = {};
 
-
-    // =================================================
-    // ★ 按每张保单逐张汇总
-    //
-    // 不再依赖数据库某一个 total 字段
-    // =================================================
 
     policies.forEach(
         (policy: AnyRecord) => {
@@ -779,13 +672,6 @@ export async function getInsuranceSummary() {
                 );
 
 
-            // ★★★★★
-            // 每一张保单都直接进入现金价值总额
-            // 包括一次性保单
-            // 包括 annual_premium=0 的保单
-            // 包括 pay_years=0 的保单
-            // ★★★★★
-
             todayCashValue +=
                 cash;
 
@@ -810,34 +696,9 @@ export async function getInsuranceSummary() {
             ownerCashValue[owner] +=
                 cash;
 
-
-            // -----------------------------------------
-            // 特别调试
-            // -----------------------------------------
-
-            console.log(
-                "INSURANCE POLICY SUMMARY:",
-                {
-                    id: policy.id,
-                    owner: policy.owner,
-                    company: policy.company,
-                    product: policy.product,
-                    premiumTotal:
-                        policyPremium,
-                    cashValue:
-                        cash,
-                    cashValueDate:
-                        policy.cash_value_date
-                }
-            );
-
         }
     );
 
-
-    // =================================================
-    // 实际缴费记录
-    // =================================================
 
     const {
         data: premiumRecords,
@@ -873,10 +734,6 @@ export async function getInsuranceSummary() {
         new Date();
 
 
-    // =================================================
-    // 截止今天实际已缴
-    // =================================================
-
     const paidPremium =
         (premiumRecords || [])
             .filter(
@@ -907,10 +764,6 @@ export async function getInsuranceSummary() {
             );
 
 
-    // =================================================
-    // 未缴
-    // =================================================
-
     const unpaidPremium =
         Math.max(
             premiumTotal -
@@ -918,99 +771,89 @@ export async function getInsuranceSummary() {
             0
         );
 
-    // =================================================
-// 天天向上数据
-// =================================================
+
+    const coupleUnpaidPremium =
+        policies
+            .filter(
+                (policy: AnyRecord)=>{
+
+                    const owner =
+                        String(
+                            policy.owner || ""
+                        ).trim();
 
 
-// 自己 + 老婆未来未缴保费
-const coupleUnpaidPremium =
-    policies
-        .filter(
-            (policy: AnyRecord)=>{
-
-                const owner =
-                    String(
-                        policy.owner || ""
-                    ).trim();
-
-
-                return (
-                    owner !== "儿子"
-                );
-
-            }
-        )
-        .reduce(
-            (
-                sum:number,
-                policy:AnyRecord
-            )=>{
-
-
-                const premiumTotal =
-                    getPolicyPremiumTotal(
-                        policy
+                    return (
+                        owner !== "儿子"
                     );
 
+                }
+            )
+            .reduce(
+                (
+                    sum:number,
+                    policy:AnyRecord
+                )=>{
 
-                // 使用每张保单实际已缴
-                const paid =
-                    toNumber(
-                        policy.paid_amount
+
+                    const premiumTotal =
+                        getPolicyPremiumTotal(
+                            policy
+                        );
+
+
+                    const paid =
+                        toNumber(
+                            policy.paid_amount
+                        );
+
+
+                    return (
+                        sum +
+                        Math.max(
+                            premiumTotal -
+                            paid,
+                            0
+                        )
                     );
 
-
-                return (
-                    sum +
-                    Math.max(
-                        premiumTotal -
-                        paid,
-                        0
-                    )
-                );
-
-            },
-            0
-        );
+                },
+                0
+            );
 
 
+    const sonCashValue =
+        policies
+            .filter(
+                (policy:AnyRecord)=>{
 
-// 儿子当前现金价值
-const sonCashValue =
-    policies
-        .filter(
-            (policy:AnyRecord)=>{
+                    return (
+                        String(
+                            policy.owner || ""
+                        ).trim()
+                        ===
+                        "儿子"
+                    );
 
-                return (
-                    String(
-                        policy.owner || ""
-                    ).trim()
-                    ===
-                    "儿子"
-                );
+                }
+            )
+            .reduce(
+                (
+                    sum:number,
+                    policy:AnyRecord
+                )=>{
 
-            }
-        )
-        .reduce(
-            (
-                sum:number,
-                policy:AnyRecord
-            )=>{
+                    return (
+                        sum +
+                        toNumber(
+                            policy.cash_value
+                        )
+                    );
 
-                return (
-                    sum +
-                    toNumber(
-                        policy.cash_value
-                    )
-                );
+                },
+                0
+            );
 
-            },
-            0
-        );
-    // =================================================
-    // 完成率
-    // =================================================
 
     const premiumProgress =
         premiumTotal > 0
@@ -1027,75 +870,6 @@ const sonCashValue =
             )
             :
             0;
-
-
-    // =================================================
-    // ★ 最终调试
-    // =================================================
-
-    console.log(
-        "========================================"
-    );
-
-    console.log(
-        "INSURANCE SUMMARY FINAL"
-    );
-
-    console.log(
-        "========================================"
-    );
-
-    console.log(
-        "保单数量:",
-        policies.length
-    );
-
-    console.log(
-        "总保费:",
-        premiumTotal
-    );
-
-    console.log(
-        "累计实际已缴:",
-        paidPremium
-    );
-
-    console.log(
-        "累计未缴:",
-        unpaidPremium
-    );
-
-    console.log(
-        "完成率:",
-        premiumProgress
-    );
-
-    console.log(
-        "当前现金价值:",
-        todayCashValue
-    );
-
-    console.log(
-        "家庭现金价值:",
-        ownerCashValue
-    );
-
-    console.log(
-        "年领取:",
-        annualIncome
-    );
-
-    console.log(
-        "月领取:",
-        monthlyIncome
-    );
-
-    console.log(
-        "========================================"
-    );
-
-
-    
 
 
     return {
@@ -1152,10 +926,6 @@ const sonCashValue =
             monthlyIncome,
 
 
-        // ============================
-        // 新增
-        // ============================
-
         coupleUnpaidPremium:
             coupleUnpaidPremium,
 
@@ -1163,15 +933,13 @@ const sonCashValue =
         sonCashValue:
             sonCashValue
 
-        
-
     };
 
 }
 
 
 // =====================================================
-// 现金价值历史
+// 现金价值历史（扁平原样）
 // =====================================================
 
 export async function getInsuranceCashValueHistory() {
@@ -1214,6 +982,312 @@ export async function getInsuranceCashValueHistory() {
 
 
 // =====================================================
+// 现金价值历史 -> 按保单 × 年份 的矩阵
+//
+// 包含：
+// 1. 每年实际现金价值
+// 2. 每年实际缴费
+// 3. 每年计划应缴（未来年份）
+// =====================================================
+
+export async function getInsuranceCashValueMatrix(): Promise<InsuranceCashValueMatrixRow[]> {
+
+    const [
+        policies,
+        history,
+        premiumRes,
+    ] = await Promise.all([
+        getInsurancePolicies(),
+        getInsuranceCashValueHistory(),
+        supabase
+            .from("insurance_premium_records")
+            .select("policy_id, amount, payment_date"),
+    ]);
+
+
+    if (premiumRes.error) {
+
+        console.error(
+            "cash value matrix premium records error:",
+            premiumRes.error
+        );
+
+    }
+
+
+    const premiumRecords: AnyRecord[] =
+        premiumRes.data ?? [];
+
+
+    // -----------------------------------------
+    // 按 policy_id -> year -> 最新一条
+    // -----------------------------------------
+
+    const grouped = new Map<
+        string,
+        Map<number, { year: number; cashValue: number; date: string }>
+    >();
+
+
+    (history || []).forEach((item: AnyRecord) => {
+
+        const policyId = normalizeId(item.policy_id);
+
+        if (!policyId) {
+            return;
+        }
+
+        const d = toDate(item.date);
+
+        if (!d) {
+            return;
+        }
+
+        const year = d.getFullYear();
+
+        if (!grouped.has(policyId)) {
+            grouped.set(policyId, new Map());
+        }
+
+        const yearMap = grouped.get(policyId)!;
+
+        const existing = yearMap.get(year);
+
+        if (
+            !existing ||
+            new Date(item.date).getTime() >
+            new Date(existing.date).getTime()
+        ) {
+
+            yearMap.set(year, {
+                year,
+                cashValue: Math.round(toNumber(item.cash_value)),
+                date: item.date,
+            });
+
+        }
+
+    });
+
+
+    // -----------------------------------------
+    // 缴费记录：按 policy_id -> year 聚合
+    // -----------------------------------------
+
+    const paidMap = new Map<
+        string,
+        Map<number, number>
+    >();
+
+
+    premiumRecords.forEach((r: AnyRecord) => {
+
+        const policyId = normalizeId(r.policy_id);
+
+        if (!policyId) {
+            return;
+        }
+
+        const d = toDate(r.payment_date);
+
+        if (!d) {
+            return;
+        }
+
+        const year = d.getFullYear();
+
+        if (!paidMap.has(policyId)) {
+            paidMap.set(policyId, new Map());
+        }
+
+        const yearMap = paidMap.get(policyId)!;
+
+        const prev = yearMap.get(year) ?? 0;
+
+        yearMap.set(
+            year,
+            prev + toNumber(r.amount)
+        );
+
+    });
+
+
+    // -----------------------------------------
+    // join 保单信息
+    // -----------------------------------------
+
+    const policyMap = new Map(
+        policies.map((p: AnyRecord) => [
+            normalizeId(p.id),
+            p,
+        ])
+    );
+
+
+    const rows: InsuranceCashValueMatrixRow[] = [];
+
+
+    grouped.forEach((yearMap, policyId) => {
+
+        const policy = policyMap.get(policyId);
+
+        if (!policy) {
+            return;
+        }
+
+
+        const values = Array.from(yearMap.values())
+            .sort((a, b) => a.year - b.year)
+            .map(v => ({
+                year: v.year,
+                cashValue: v.cashValue,
+            }));
+
+
+        if (values.length === 0) {
+            return;
+        }
+
+
+        // -------------------------------------
+        // 该保单每年实际缴费
+        // -------------------------------------
+
+        const paidYearMap =
+            paidMap.get(policyId);
+
+        const paidByYear =
+            paidYearMap
+                ? Array.from(paidYearMap.entries())
+                    .map(([year, amount]) => ({
+                        year,
+                        amount: Math.round(amount),
+                    }))
+                    .sort((a, b) => a.year - b.year)
+                : [];
+
+
+        // -------------------------------------
+        // 该保单每年计划应缴
+        //
+        // annual_premium × pay_years
+        // 从 start_date 年开始，每年一笔
+        //
+        // 如果 start_date 为空，用最早缴费年份
+        // 如果最早缴费年份也没有，跳过
+        // -------------------------------------
+
+        const annualPremium = toNumber(policy.annual_premium);
+        const payYears = toNumber(policy.pay_years);
+
+        const plannedByYear: {
+            year: number;
+            amount: number;
+        }[] = [];
+
+
+        if (annualPremium > 0 && payYears > 0) {
+
+            let startYear: number | null = null;
+
+            const startDate = toDate(policy.start_date);
+
+            if (startDate) {
+                startYear = startDate.getFullYear();
+            }
+            else if (paidByYear.length > 0) {
+                startYear = paidByYear[0].year;
+            }
+
+            if (startYear !== null) {
+
+                for (let i = 0; i < payYears; i++) {
+                    plannedByYear.push({
+                        year: startYear + i,
+                        amount: Math.round(annualPremium),
+                    });
+                }
+
+            }
+
+        }
+
+
+        rows.push({
+
+            policyId,
+
+            policyName:
+                String(
+                    policy.product ??
+                    policy.insured_name ??
+                    policy.id ??
+                    ""
+                ).trim(),
+
+            owner:
+                String(policy.owner ?? "").trim(),
+
+            company:
+                String(policy.company ?? "").trim(),
+
+            product:
+                String(policy.product ?? "").trim(),
+
+            values,
+
+            paidByYear,
+
+            plannedByYear,
+
+        });
+
+    });
+
+
+    rows.sort((a, b) => {
+
+        if (a.owner !== b.owner) {
+            return a.owner.localeCompare(b.owner);
+        }
+
+        return a.policyName.localeCompare(b.policyName);
+
+    });
+
+
+    return rows;
+
+}
+
+
+// =====================================================
+// 从矩阵里抽出年份列
+//
+// 覆盖：
+// 1. 现金价值历史出现过的年份
+// 2. 实际缴费出现过的年份
+// 3. 计划应缴覆盖的年份
+// =====================================================
+
+export function getInsuranceCashValueYears(
+    matrix: InsuranceCashValueMatrixRow[]
+): number[] {
+
+    const set = new Set<number>();
+
+    matrix.forEach(row => {
+        row.values.forEach(v => set.add(v.year));
+        row.paidByYear.forEach(v => set.add(v.year));
+        row.plannedByYear.forEach(v => set.add(v.year));
+    });
+
+    return Array.from(set).sort((a, b) => a - b);
+
+}
+
+
+// =====================================================
 // 年度保费计划
 // =====================================================
 
@@ -1222,14 +1296,9 @@ export async function getInsurancePremiumPlan() {
     const today =
         new Date();
 
-
     const year =
         today.getFullYear();
 
-
-    // =================================================
-    // 保单
-    // =================================================
 
     const {
         data: policies,
@@ -1238,20 +1307,13 @@ export async function getInsurancePremiumPlan() {
         .from("insurance_policies")
         .select("*");
 
-
     if (policyError) {
-
         console.error(
             "insurance premium plan policies error:",
             policyError
         );
-
     }
 
-
-    // =================================================
-    // 缴费记录
-    // =================================================
 
     const {
         data: records,
@@ -1266,40 +1328,50 @@ export async function getInsurancePremiumPlan() {
             }
         );
 
-
     if (recordError) {
-
         console.error(
             "insurance premium plan records error:",
             recordError
         );
-
     }
 
-
-    // =================================================
-    // 当前现金价值
-    // =================================================
 
     const latestCash =
         await getLatestCashValueMap();
 
 
+    const {
+        data: paidRows,
+        error: paidError
+    } = await supabase
+        .from("insurance_paid_this_year")
+        .select("policy_id")
+        .eq("year", year);
+
+    if (paidError) {
+        console.error(
+            "insurance paid_this_year error:",
+            paidError
+        );
+    }
+
+    const paidThisYearSet =
+        new Set<string>(
+            (paidRows ?? []).map(
+                (r: AnyRecord) =>
+                    normalizeId(r.policy_id)
+            )
+        );
+
     let total =
         0;
-
 
     let paid =
         0;
 
-
     const items:
         AnyRecord[] = [];
 
-
-    // =================================================
-    // 遍历保单
-    // =================================================
 
     (policies || []).forEach(
         (policy: AnyRecord) => {
@@ -1309,22 +1381,16 @@ export async function getInsurancePremiumPlan() {
                     policy.annual_premium
                 );
 
-
             const payYears =
                 toNumber(
                     policy.pay_years
                 );
-
 
             const policyId =
                 normalizeId(
                     policy.id
                 );
 
-
-            // =========================================
-            // 当前保单记录
-            // =========================================
 
             const policyRecords =
                 (records || []).filter(
@@ -1342,10 +1408,6 @@ export async function getInsurancePremiumPlan() {
                 );
 
 
-            // =========================================
-            // 已发生缴费
-            // =========================================
-
             const validPaidRecords =
                 policyRecords.filter(
                     (record: AnyRecord) => {
@@ -1358,10 +1420,6 @@ export async function getInsurancePremiumPlan() {
                     }
                 );
 
-
-            // =========================================
-            // 实际累计已缴
-            // =========================================
 
             const paidAmount =
                 validPaidRecords.reduce(
@@ -1382,10 +1440,6 @@ export async function getInsurancePremiumPlan() {
                 );
 
 
-            // =========================================
-            // 今年缴费
-            // =========================================
-
             const currentPayment =
                 validPaidRecords.find(
                     (record: AnyRecord) => {
@@ -1398,14 +1452,9 @@ export async function getInsurancePremiumPlan() {
                     }
                 );
 
-
             const currentPaid =
                 !!currentPayment;
 
-
-            // =========================================
-            // 今年是否存在计划
-            // =========================================
 
             const hasCurrentYearRecord =
                 policyRecords.some(
@@ -1419,10 +1468,6 @@ export async function getInsurancePremiumPlan() {
                     }
                 );
 
-
-            // =========================================
-            // 所有年份
-            // =========================================
 
             const allYears =
                 policyRecords
@@ -1450,23 +1495,14 @@ export async function getInsurancePremiumPlan() {
                     );
 
 
-            // =========================================
-            // 开始日期
-            // =========================================
-
             const startDate =
                 toDate(
                     policy.start_date
                 );
 
-
             let shouldInclude =
                 false;
 
-
-            // =========================================
-            // 有今年记录
-            // =========================================
 
             if (
                 hasCurrentYearRecord
@@ -1477,11 +1513,6 @@ export async function getInsurancePremiumPlan() {
 
             }
 
-
-            // =========================================
-            // 有 start_date
-            // =========================================
-
             else if (
                 startDate &&
                 payYears > 0
@@ -1490,12 +1521,10 @@ export async function getInsurancePremiumPlan() {
                 const startYear =
                     startDate.getFullYear();
 
-
                 const payIndex =
                     year -
                     startYear +
                     1;
-
 
                 if (
                     payIndex > 0 &&
@@ -1508,11 +1537,6 @@ export async function getInsurancePremiumPlan() {
                 }
 
             }
-
-
-            // =========================================
-            // 没有 start_date
-            // =========================================
 
             else if (
                 allYears.length > 0 &&
@@ -1524,12 +1548,10 @@ export async function getInsurancePremiumPlan() {
                         ...allYears
                     );
 
-
                 const payIndex =
                     year -
                     firstYear +
                     1;
-
 
                 if (
                     payIndex > 0 &&
@@ -1543,15 +1565,6 @@ export async function getInsurancePremiumPlan() {
 
             }
 
-
-            // =========================================
-            // 一次性保单
-            //
-            // 如果没有年度缴费逻辑，
-            // 但今年确实发生实际缴费，
-            // 也纳入计划。
-            // =========================================
-
             if (
                 payYears <= 0 &&
                 currentPaid
@@ -1562,7 +1575,6 @@ export async function getInsurancePremiumPlan() {
 
             }
 
-
             if (
                 !shouldInclude
             ) {
@@ -1572,21 +1584,12 @@ export async function getInsurancePremiumPlan() {
             }
 
 
-            // =========================================
-            // 今年应缴
-            // =========================================
-
             total +=
                 premium;
 
 
-            // =========================================
-            // 已缴年份
-            // =========================================
-
             const paidYearSet =
                 new Set<number>();
-
 
             validPaidRecords.forEach(
                 (record: AnyRecord) => {
@@ -1596,11 +1599,9 @@ export async function getInsurancePremiumPlan() {
                             record.payment_date
                         );
 
-
                     if (!d) {
                         return;
                     }
-
 
                     paidYearSet.add(
                         d.getFullYear()
@@ -1608,7 +1609,6 @@ export async function getInsurancePremiumPlan() {
 
                 }
             );
-
 
             const paidYears =
                 payYears > 0
@@ -1621,12 +1621,11 @@ export async function getInsurancePremiumPlan() {
                     paidYearSet.size;
 
 
-            // =========================================
-            // 今年已缴
-            // =========================================
+            const paidThisYear =
+                paidThisYearSet.has(policyId);
 
             if (
-                currentPaid
+                paidThisYear
             ) {
 
                 paid +=
@@ -1634,10 +1633,6 @@ export async function getInsurancePremiumPlan() {
 
             }
 
-
-            // =========================================
-            // 剩余年份
-            // =========================================
 
             const remainYears =
                 payYears > 0
@@ -1650,10 +1645,6 @@ export async function getInsurancePremiumPlan() {
                     :
                     0;
 
-
-            // =========================================
-            // 进度
-            // =========================================
 
             const progress =
                 payYears > 0
@@ -1672,15 +1663,10 @@ export async function getInsurancePremiumPlan() {
                     100;
 
 
-            // =========================================
-            // 是否完成
-            // =========================================
-
             const premiumTotal =
                 getPolicyPremiumTotal(
                     policy
                 );
-
 
             const totalPolicyPaid =
                 payYears > 0
@@ -1691,15 +1677,10 @@ export async function getInsurancePremiumPlan() {
                     paidAmount >= premiumTotal;
 
 
-            // =========================================
-            // 当前现金价值
-            // =========================================
-
             const cashHistory =
                 latestCash[
                     policyId
                 ];
-
 
             const cashValue =
                 toNumber(
@@ -1711,6 +1692,9 @@ export async function getInsurancePremiumPlan() {
 
                 id:
                     policy.id,
+
+                policy_id:
+                    policyId,
 
                 owner:
                     policy.owner,
@@ -1768,6 +1752,9 @@ export async function getInsurancePremiumPlan() {
                     currentPayment ||
                     null,
 
+                paid_this_year:
+                    paidThisYear,
+
                 cash_value:
                     cashValue,
 
@@ -1780,14 +1767,12 @@ export async function getInsurancePremiumPlan() {
         }
     );
 
-
     const unpaid =
         Math.max(
             total -
             paid,
             0
         );
-
 
     const paidAmountTotal =
         items.reduce(
@@ -1806,7 +1791,6 @@ export async function getInsurancePremiumPlan() {
             },
             0
         );
-
 
     return {
 
@@ -1829,21 +1813,11 @@ export async function getInsurancePremiumPlan() {
     };
 
 }
+
+
 // =====================================================
 // 天天向上年度保险预测
-//
-// 返回：
-// 2027 - 2042
-//
-// 每年：
-// 1. 全部未来待缴保费
-// 2. 夫妻未来待缴保费
-// 3. 儿子现金价值
-//
-// 专供：
-// app/tiantian-up/page.tsx
 // =====================================================
-
 
 export async function getInsuranceYearProjection(){
 
@@ -1863,7 +1837,6 @@ export async function getInsuranceYearProjection(){
     const endYear = 2042;
 
 
-
     for(
         let year=startYear;
         year<=endYear;
@@ -1879,11 +1852,6 @@ export async function getInsuranceYearProjection(){
 
         let sonCashValue = 0;
 
-
-
-        // =====================================
-        // 根据保单计划计算未来保费
-        // =====================================
 
         policies.forEach(
             (policy:any)=>{
@@ -1975,12 +1943,6 @@ export async function getInsuranceYearProjection(){
         );
 
 
-
-        // =====================================
-        // 儿子现金价值
-        // =====================================
-
-
         history.forEach(
             (row:any)=>{
 
@@ -2009,11 +1971,11 @@ export async function getInsuranceYearProjection(){
                                 normalizeId(p.id)
                                 ===
                                 normalizeId(row.policy_id)
-                                            );
+                        );
 
 
                     if(
-                         policy &&
+                        policy &&
                         String(
                             policy.owner ?? ""
                         ).trim()
@@ -2050,18 +2012,10 @@ export async function getInsuranceYearProjection(){
 
             sonCashValue,
 
-
         });
 
 
     }
-
-
-
-    console.log(
-        "天天向上保险年度预测",
-        result
-    );
 
 
     return result;

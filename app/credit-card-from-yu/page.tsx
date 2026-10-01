@@ -18,6 +18,11 @@ import {
   type ExpenseTransaction,
 } from "@/lib/expense-transactions";
 
+import {
+  calculateRemainingPeriods,
+  calculateFinalPaymentDate,
+} from "@/lib/loan-calculations";
+
 import { supabase } from "@/lib/supabase";
 
 
@@ -33,6 +38,10 @@ interface LoanRow {
   monthly_payment?: number | string | null;
   remaining_amount?: number | string | null;
   status?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  remaining_periods?: number | string | null;
+  total_periods?: number | string | null;
   [key: string]: any;
 }
 
@@ -169,6 +178,149 @@ function getTransactionLoadRange(
 
 
 // =====================================================
+// 月份区间
+// =====================================================
+
+function getMonthRange(
+  month: string
+): {
+  start: Date;
+  end: Date;
+} | null {
+
+  const match =
+    /^(\d{4})-(\d{2})$/.exec(
+      month
+    );
+
+  if (!match) {
+
+    return null;
+
+  }
+
+  const year =
+    Number(match[1]);
+
+  const monthNumber =
+    Number(match[2]);
+
+  if (
+    !year ||
+    monthNumber < 1 ||
+    monthNumber > 12
+  ) {
+
+    return null;
+
+  }
+
+  const start =
+    new Date(
+      year,
+      monthNumber - 1,
+      1
+    );
+
+  const end =
+    new Date(
+      year,
+      monthNumber,
+      0,
+      23,
+      59,
+      59,
+      999
+    );
+
+  return {
+    start,
+    end,
+  };
+
+}
+
+
+// =====================================================
+// 日期解析
+// =====================================================
+
+function parseDate(
+  value: unknown
+): Date | null {
+
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+
+    return null;
+
+  }
+
+  if (
+    value instanceof Date
+  ) {
+
+    return Number.isNaN(
+      value.getTime()
+    )
+      ? null
+      : new Date(value);
+
+  }
+
+  const text =
+    String(value).trim();
+
+  if (!text) {
+
+    return null;
+
+  }
+
+  const dateOnlyMatch =
+    /^(\d{4})-(\d{2})-(\d{2})$/.exec(
+      text
+    );
+
+  if (dateOnlyMatch) {
+
+    const date =
+      new Date(
+        Number(dateOnlyMatch[1]),
+        Number(dateOnlyMatch[2]) - 1,
+        Number(dateOnlyMatch[3])
+      );
+
+    return Number.isNaN(
+      date.getTime()
+    )
+      ? null
+      : date;
+
+  }
+
+  const parsed =
+    new Date(text);
+
+  if (
+    Number.isNaN(
+      parsed.getTime()
+    )
+  ) {
+
+    return null;
+
+  }
+
+  return parsed;
+
+}
+
+
+// =====================================================
 // 判断是否消费
 // =====================================================
 
@@ -192,6 +344,7 @@ function isExpense(
     item.consumption_type === "self" ||
     item.consumption_type === "paid_for_others"
   );
+
 }
 
 
@@ -465,6 +618,156 @@ function loanMatchesCard(
     loanInstitution ===
     cardBank
   );
+
+}
+
+
+// =====================================================
+// LOANS：判断当前月份是否在还款期内
+//
+// 这里是本次修复的核心。
+//
+// 规则：
+// 1. 有 start_date：
+//    month 的月末 < start_date，说明还没开始，不计入
+//
+// 2. 有 end_date：
+//    month 的月初 > end_date，说明已经结束，不计入
+//
+// 3. 没有 end_date：
+//    优先使用 loan-calculations 的 calculateFinalPaymentDate
+//    如果该函数返回有效日期，则 month 月初 > 最后还款日，不计入
+//
+// 4. 再兜底使用 calculateRemainingPeriods
+//    如果剩余期数 <= 0，说明已经还完，不计入
+// =====================================================
+
+function isLoanActiveInMonth(
+  loan: LoanRow,
+  month: string
+): boolean {
+
+  const monthRange =
+    getMonthRange(month);
+
+  if (!monthRange) {
+
+    return false;
+
+  }
+
+  const monthStart =
+    monthRange.start;
+
+  const monthEnd =
+    monthRange.end;
+
+  const startDate =
+    parseDate(
+      loan.start_date
+    );
+
+  const endDate =
+    parseDate(
+      loan.end_date
+    );
+
+  // -------------------------------------------------
+  // 1. 还没开始
+  // -------------------------------------------------
+
+  if (
+    startDate &&
+    monthEnd.getTime() <
+      startDate.getTime()
+  ) {
+
+    return false;
+
+  }
+
+  // -------------------------------------------------
+  // 2. 已经结束
+  // -------------------------------------------------
+
+  if (
+    endDate &&
+    monthStart.getTime() >
+      endDate.getTime()
+  ) {
+
+    return false;
+
+  }
+
+  // -------------------------------------------------
+  // 3. 没有 end_date
+  // -------------------------------------------------
+
+  if (!endDate) {
+
+    // 3.1 先用 calculateFinalPaymentDate
+    try {
+
+      const finalDateText =
+        calculateFinalPaymentDate(
+          loan
+        );
+
+      const finalDate =
+        parseDate(
+          finalDateText
+        );
+
+      if (
+        finalDate &&
+        monthStart.getTime() >
+          finalDate.getTime()
+      ) {
+
+        return false;
+
+      }
+
+    } catch (error) {
+
+      console.error(
+        "calculateFinalPaymentDate 失败:",
+        error,
+        loan
+      );
+
+    }
+
+    // 3.2 再用 calculateRemainingPeriods 兜底
+    try {
+
+      const remainingPeriods =
+        calculateRemainingPeriods(
+          loan
+        );
+
+      if (
+        remainingPeriods <= 0
+      ) {
+
+        return false;
+
+      }
+
+    } catch (error) {
+
+      console.error(
+        "calculateRemainingPeriods 失败:",
+        error,
+        loan
+      );
+
+    }
+
+  }
+
+  return true;
 
 }
 
@@ -971,15 +1274,6 @@ function formatTransactionDate(
 
 // =====================================================
 // 获取账目分类
-//
-// 兼容 expense_transactions 中不同字段名称
-// 优先级：
-//
-// account_category
-// category
-// category_name
-// expense_category
-// 账目分类
 // =====================================================
 
 function getTransactionCategory(
@@ -1003,8 +1297,6 @@ function getTransactionCategory(
 
 // =====================================================
 // 获取交易描述
-//
-// 尽量兼容 expense_transactions 中不同字段
 // =====================================================
 
 function getTransactionDescription(
@@ -1958,10 +2250,14 @@ export default function CreditCardFromYuPage() {
 
   // ===================================================
   // LOANS 分期月供
+  //
+  // 关键修复：
+  // 只有当前 month 在该分期还款期内，才计入。
   // ===================================================
 
   function getInstallmentForCard(
-    card: CreditCard
+    card: CreditCard,
+    month: string
   ): number {
 
     const cardBank =
@@ -2016,6 +2312,21 @@ export default function CreditCardFromYuPage() {
 
       }
 
+      // =================================================
+      // 关键：当前统计月份必须在还款期内
+      // =================================================
+
+      if (
+        !isLoanActiveInMonth(
+          loan,
+          month
+        )
+      ) {
+
+        continue;
+
+      }
+
       total +=
         getLoanMonthlyPayment(
           loan
@@ -2048,7 +2359,8 @@ export default function CreditCardFromYuPage() {
 
             const installment =
               getInstallmentForCard(
-                card
+                card,
+                month
               );
 
             return {
@@ -2448,9 +2760,6 @@ export default function CreditCardFromYuPage() {
       let installment =
         0;
 
-      let estimated =
-        0;
-
       let transactionCount =
         0;
 
@@ -2471,13 +2780,14 @@ export default function CreditCardFromYuPage() {
         installment +=
           row.installmentExpense;
 
-        estimated +=
-          row.estimatedExpense;
-
         transactionCount +=
           row.transactionCount;
 
       }
+
+      const estimated =
+        selfExpense +
+        installment;
 
       return {
 
@@ -2725,70 +3035,158 @@ export default function CreditCardFromYuPage() {
             消费总览
         ================================================= */}
 
-        <div
-          className="
-            mb-6
-            rounded-xl
-            border
-            bg-white
-            px-5
-            py-4
-          "
-        >
+        <div className="mb-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
 
-          <div
-            className="
-              grid
-              grid-cols-1
-              gap-4
-              md:grid-cols-3
-            "
-          >
+          {/* ================= 左边卡片 ================= */}
+          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
 
-            <div>
-
-              <div className="text-xs text-gray-500">
-                信用卡总消费
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-lg font-bold text-gray-900">
+                  信用卡总消费
+                </div>
+                <div className="mt-0.5 text-xs text-gray-500">
+                  CNY · 账单周期口径
+                </div>
               </div>
-
-              <div className="mt-1 text-xl font-bold">
-                {formatMoney(
-                  summary.excel
-                )}
+              <div className="text-xs text-gray-400">
+                {summary.transactionCount} 笔
               </div>
-
             </div>
 
+            <div className="mt-5 border-t-2 border-black" />
 
-            <div>
-
-              <div className="text-xs text-gray-500">
-                自己消费总共
-              </div>
-
-              <div className="mt-1 text-xl font-semibold">
-                {formatMoney(
-                  summary.selfExpense
-                )}
-              </div>
-
+            <div className="mt-5 text-sm font-semibold text-gray-900">
+              平台统计
             </div>
 
+            <table className="mt-3 w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-xs text-gray-500">
+                  <th className="px-1 py-2 text-left font-medium">项目</th>
+                  <th className="px-1 py-2 text-right font-medium">当前金额</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
 
-            <div>
+                <tr>
+                  <td className="px-1 py-3 font-medium text-gray-800">
+                    自己消费总共
+                  </td>
+                  <td className="px-1 py-3 text-right font-semibold text-gray-900">
+                    {formatMoney(summary.selfExpense)}
+                  </td>
+                </tr>
 
-              <div className="text-xs text-gray-500">
-                替别人提前付总共
+                <tr>
+                  <td className="px-1 py-3 font-medium text-gray-800">
+                    替别人提前付总共
+                  </td>
+                  <td className="px-1 py-3 text-right font-semibold text-gray-900">
+                    {formatMoney(summary.paidForOthersExpense)}
+                  </td>
+                </tr>
+
+                <tr className="border-t-2 border-black bg-gray-50/60">
+                  <td className="px-1 py-3 font-bold text-gray-900">
+                    合计（信用卡总消费）
+                  </td>
+                  <td className="px-1 py-3 text-right font-bold text-red-600">
+                    {formatMoney(summary.excel)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td className="px-1 py-3 font-medium text-gray-800">
+                    分期月供
+                  </td>
+                  <td className="px-1 py-3 text-right font-semibold text-gray-900">
+                    {formatMoney(summary.installment)}
+                  </td>
+                </tr>
+
+                <tr className="border-t-2 border-black">
+                  <td colSpan={2} className="p-0"></td>
+                </tr>
+
+                <tr>
+                  <td className="px-1 py-3 font-bold text-gray-900">
+                    信用卡总还款
+                  </td>
+                  <td className="px-1 py-3 text-right font-bold text-red-600">
+                    {formatMoney(summary.excel + summary.installment)}
+                  </td>
+                </tr>
+
+              </tbody>
+            </table>
+          </div>
+
+          {/* ================= 右边卡片 ================= */}
+          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+
+            <div className="flex items-start justify-between">
+              <div>
+                <div className="text-lg font-bold text-gray-900">
+                  自己本月消费（含贷还款）
+                </div>
+                <div className="mt-0.5 text-xs text-gray-500">
+                  CNY · 自己消费 + 分期月供
+                </div>
               </div>
-
-              <div className="mt-1 text-xl font-semibold">
-                {formatMoney(
-                  summary.paidForOthersExpense
-                )}
+              <div className="text-xs text-gray-400">
+                {summary.transactionCount} 笔
               </div>
-
             </div>
 
+            <div className="mt-5 border-t-2 border-black" />
+
+            <div className="mt-5 text-sm font-semibold text-gray-900">
+              平台统计
+            </div>
+
+            <table className="mt-3 w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-xs text-gray-500">
+                  <th className="px-1 py-2 text-left font-medium">项目</th>
+                  <th className="px-1 py-2 text-right font-medium">当前金额</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+
+                <tr>
+                  <td className="px-1 py-3 font-medium text-gray-800">
+                    自己消费总共
+                  </td>
+                  <td className="px-1 py-3 text-right font-semibold text-gray-900">
+                    {formatMoney(summary.selfExpense)}
+                  </td>
+                </tr>
+
+                <tr>
+                  <td className="px-1 py-3 font-medium text-gray-800">
+                    分期月供
+                  </td>
+                  <td className="px-1 py-3 text-right font-semibold text-gray-900">
+                    {formatMoney(summary.installment)}
+                  </td>
+                </tr>
+
+                <tr className="border-t-2 border-black">
+                  <td colSpan={2} className="p-0"></td>
+                </tr>
+
+                <tr>
+                  <td className="px-1 py-3 font-bold text-gray-900">
+                    自己本月消费总共（含贷还款）
+                  </td>
+                  <td className="px-1 py-3 text-right font-bold text-red-600">
+                    {formatMoney(summary.selfExpense + summary.installment)}
+                  </td>
+                </tr>
+
+              </tbody>
+            </table>
           </div>
 
         </div>
@@ -3471,10 +3869,6 @@ export default function CreditCardFromYuPage() {
             "
           >
 
-            {/* -------------------------------------------------
-                明细标题
-            ------------------------------------------------- */}
-
             <div
               className="
                 border-b
@@ -3607,10 +4001,6 @@ export default function CreditCardFromYuPage() {
 
               </div>
 
-
-              {/* -------------------------------------------------
-                  明细统计
-              ------------------------------------------------- */}
 
               <div
                 className="
@@ -3772,10 +4162,6 @@ export default function CreditCardFromYuPage() {
             </div>
 
 
-            {/* -------------------------------------------------
-                消费明细表
-            ------------------------------------------------- */}
-
             <div
               className="
                 overflow-x-auto
@@ -3841,8 +4227,6 @@ export default function CreditCardFromYuPage() {
                         消费账户
                       </th>
 
-
-                      {/* 新增：账目分类 */}
 
                       <th
                         className="
@@ -3957,8 +4341,6 @@ export default function CreditCardFromYuPage() {
                             "
                           >
 
-                            {/* 消费日期 */}
-
                             <td
                               className="
                                 whitespace-nowrap
@@ -3973,8 +4355,6 @@ export default function CreditCardFromYuPage() {
                             </td>
 
 
-                            {/* 消费账户 */}
-
                             <td
                               className="
                                 px-5
@@ -3985,10 +4365,6 @@ export default function CreditCardFromYuPage() {
                               {account || "-"}
                             </td>
 
-
-                            {/* =================================================
-                                新增：账目分类
-                            ================================================= */}
 
                             <td
                               className="
@@ -4025,8 +4401,6 @@ export default function CreditCardFromYuPage() {
                             </td>
 
 
-                            {/* 消费内容 */}
-
                             <td
                               className="
                                 max-w-[450px]
@@ -4049,8 +4423,6 @@ export default function CreditCardFromYuPage() {
 
                             </td>
 
-
-                            {/* 消费归属 */}
 
                             <td
                               className="
@@ -4083,8 +4455,6 @@ export default function CreditCardFromYuPage() {
 
                             </td>
 
-
-                            {/* 金额 */}
 
                             <td
                               className="
@@ -4608,6 +4978,16 @@ export default function CreditCardFromYuPage() {
             ㉒ 账目分类字段兼容 account_category、category、category_name、expense_category。
           </div>
 
+
+          <div>
+            ㉓ 分期月供只统计当前统计月份仍在还款期内的「信用卡分期」。
+          </div>
+
+
+          <div>
+            ㉔ 还款期判断优先使用 loans.end_date；没有 end_date 时使用 loan-calculations 的 calculateFinalPaymentDate / calculateRemainingPeriods。
+          </div>
+
         </div>
 
       </main>
@@ -4617,4 +4997,3 @@ export default function CreditCardFromYuPage() {
   );
 
 }
-

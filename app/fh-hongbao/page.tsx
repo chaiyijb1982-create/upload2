@@ -746,7 +746,8 @@ export default function FHPage() {
     event: Event
   ) {
     clearMessage();
-
+setSelectedEventId(event.id);
+setSelectedTempleId(event.temple_id);
     setEventName(event.name);
     setEventYear(event.event_year);
 
@@ -2000,13 +2001,95 @@ export default function FHPage() {
             )
             .limit(1);
 
-        if (
-          existing &&
-          existing.length > 0
-        ) {
-          skipCount++;
-          continue;
-        }
+ if (
+  existing &&
+  existing.length > 0
+) {
+  const existingEventId = existing[0].id;
+
+  /*
+   * 法会已经存在：
+   * 不重复创建法会，
+   * 但仍然检查 2026 年的红包配置，
+   * 如果 2027 年还没有红包，则复制过去。
+   */
+  const sourcePackets = packets
+    .filter(
+      (p) =>
+        p.event_id === event.id
+    )
+    .sort(
+      (a, b) =>
+        a.sort_order -
+        b.sort_order
+    );
+
+  if (sourcePackets.length > 0) {
+    const { data: targetPackets, error: targetPacketError } =
+      await supabase
+        .from("fh_red_packets")
+        .select("id")
+        .eq(
+          "event_id",
+          existingEventId
+        )
+        .limit(1);
+
+    if (targetPacketError) {
+      throw targetPacketError;
+    }
+
+    /*
+     * 只有 2027 还没有红包配置时才复制，
+     * 避免一键 COPY 重复增加红包。
+     */
+    if (
+      !targetPackets ||
+      targetPackets.length === 0
+    ) {
+      const packetRows =
+        sourcePackets.map(
+          (packet) => ({
+            event_id:
+              existingEventId,
+
+            days:
+              packet.days || [],
+
+            item_name:
+              packet.item_name,
+
+            packet_amount:
+              packet.packet_amount,
+
+            denominations:
+              packet.denominations,
+
+            note:
+              packet.note,
+
+            sort_order:
+              packet.sort_order,
+          })
+        );
+
+      const {
+        error: packetError,
+      } = await supabase
+        .from(
+          "fh_red_packets"
+        )
+        .insert(packetRows);
+
+      if (packetError) {
+        throw packetError;
+      }
+    }
+  }
+
+  skipCount++;
+  continue;
+}
 
         let targetStart = "";
         let targetEnd = "";
@@ -2820,6 +2903,7 @@ export default function FHPage() {
 
         {showEventForm &&
           selectedTemple && (
+            
             <section className="mb-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
               <div className="mb-5 flex items-center justify-between">
                 <h2 className="text-xl font-bold">
@@ -2840,6 +2924,31 @@ export default function FHPage() {
                 </button>
               </div>
 
+ {/* 寺庙 */}
+      <div className="mb-4">
+        <label className="mb-1 block text-sm font-medium">
+          寺庙
+        </label>
+
+        <select
+          value={selectedTempleId}
+          onChange={(e) =>
+            setSelectedTempleId(e.target.value)
+          }
+          className="w-full rounded-lg border border-gray-300 px-3 py-2"
+        >
+          <option value="">请选择寺庙</option>
+
+          {temples.map((temple) => (
+            <option
+              key={temple.id}
+              value={temple.id}
+            >
+              {temple.name}
+            </option>
+          ))}
+        </select>
+      </div>
               <div className="grid gap-5">
                 {/* Name / year */}
 

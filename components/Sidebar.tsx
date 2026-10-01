@@ -119,19 +119,31 @@ const menus = [
 
   {
     id: 13,
-    name: "CASHFLOW",
+    name: "CASHFLOW-planning",
     href: "/cashflow-planning",
     icon: "💵",
   },
 
-
-
+ {
+    id: 14,
+    name: "CASHFLOW-actual",
+    href: "/cashflow-actual",
+    icon: "💵",
+    subMenu: true,
+  },
+{
+    id: 15,
+    name: "CASHFLOW-salary",
+    href: "/cashflow-salary",
+    icon: "💵",
+    subMenu: true,
+  },
   // =====================================================
   // 保险
   // =====================================================
 
   {
-    id: 14,
+    id: 16,
     name: "保险",
     href: "/insurance",
     icon: "🛡️",
@@ -142,14 +154,14 @@ const menus = [
   // =====================================================
 
   {
-    id: 15,
+    id: 17,
     name: "财务自由规划",
     href: "/financial-freedom",
     icon: "💎",
   },
 
   {
-    id: 16,
+    id: 18,
     name: "财务自由历史",
     href: "/financial-freedom-history",
     icon: "💎",
@@ -161,14 +173,14 @@ const menus = [
   // =====================================================
 
   {
-    id: 17,
+    id: 19,
     name: "天天向上当前",
     href: "/tiantian-up",
     icon: "🚀",
   },
 
   {
-    id: 18,
+    id: 20,
     name: "天天向上年度详细",
     href: "/tiantian-up-detail",
     icon: "🚀",
@@ -179,7 +191,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 19,
+    id: 21,
     name: "退休规划",
     href: "/retirement",
     icon: "🎯",
@@ -190,7 +202,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 20,
+    id: 22,
     name: "换汇记录",
     href: "/fx-exchange",
     icon: "💱",
@@ -201,7 +213,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 21,
+    id: 23,
     name: "AI CFO决策中心",
     href: "/ai-cfo",
     icon: "🧠",
@@ -212,7 +224,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 22,
+    id: 24,
     name: "RECORD",
     href: "/record",
     icon: "📝",
@@ -223,7 +235,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 23,
+    id: 25,
     name: "fh-summary",
     href: "/fh-summary",
     icon: "📝",
@@ -233,7 +245,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 24,
+    id: 26,
     name: "投资交易",
     href: "/investment-transactions",
     icon: "📈",
@@ -244,7 +256,7 @@ const menus = [
   // =====================================================
 
   {
-    id: 25,
+    id: 27,
     name: "FRAIS发票上传",
     href: "/frais-upload",
     icon: "🧾",

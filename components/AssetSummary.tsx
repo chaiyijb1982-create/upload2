@@ -13,6 +13,27 @@ interface Props {
 
 
 // =====================================================
+// 涨红跌绿工具
+// =====================================================
+
+function trendColor(
+  value: number
+): string {
+
+  if (value > 0) {
+    return "text-red-600";
+  }
+
+  if (value < 0) {
+    return "text-green-600";
+  }
+
+  return "text-gray-400";
+
+}
+
+
+// =====================================================
 // Comparison
 // =====================================================
 
@@ -81,7 +102,23 @@ function ComparisonRow({
 
 
   const positive =
-    change >= 0;
+    change > 0;
+
+  const negative =
+    change < 0;
+
+  const sign =
+    positive
+      ? "+"
+      : negative
+      ? "-"
+      : "";
+
+
+  const colorClass =
+    trendColor(
+      change
+    );
 
 
   const money =
@@ -149,18 +186,11 @@ function ComparisonRow({
           className={`
             text-sm
             font-semibold
-            ${
-              positive
-                ? "text-green-600"
-                : "text-red-600"
-            }
+            ${colorClass}
           `}
         >
 
-          {positive
-            ? "+"
-            : "-"}
-
+          {sign}
           ¥{money}
 
         </span>
@@ -171,19 +201,12 @@ function ComparisonRow({
             ml-2
             text-xs
             font-medium
-            ${
-              positive
-                ? "text-green-600"
-                : "text-red-600"
-            }
+            ${colorClass}
           `}
         >
 
           (
-          {positive
-            ? "+"
-            : "-"}
-
+          {sign}
           {Math.abs(
             changeRate
           ).toFixed(2)}
@@ -358,6 +381,29 @@ export default function AssetSummary({
       asset?.total_asset ?? 0
     );
 
+      // =====================================================
+  // 人民币 / 美元资产
+  // =====================================================
+
+  const rmbAsset =
+    Number(
+      asset?.rmb_asset ?? 0
+    );
+
+  const usdAsset =
+    Number(
+      asset?.usd_asset ?? 0
+    );
+
+  const rmbAssetPercent =
+    Number(
+      asset?.rmb_asset_percent ?? 0
+    );
+
+  const usdAssetPercent =
+    Number(
+      asset?.usd_asset_percent ?? 0
+    );
 
   // =====================================================
   // Investment Total
@@ -618,6 +664,177 @@ export default function AssetSummary({
               ¥{money(total)}
             </h2>
 
+          {/* =================================================
+    人民币 / 美元资产
+    ================================================= */}
+
+<div
+  className="
+    mt-5
+    grid
+    grid-cols-1
+    sm:grid-cols-2
+    gap-3
+  "
+>
+
+  {/* =================================================
+      人民币资产
+      ================================================= */}
+
+  <div
+    className="
+      relative
+      overflow-hidden
+      rounded-2xl
+      border
+      border-red-100
+      bg-gradient-to-br
+      from-red-50
+      via-rose-50
+      to-white
+      px-5
+      py-4
+      shadow-sm
+    "
+  >
+
+    <div className="relative z-10">
+
+      <div
+        className="
+          flex
+          items-center
+          gap-2
+        "
+      >
+        <span
+          className="
+            text-lg
+          "
+        >
+          🇨🇳
+        </span>
+
+        <p
+          className="
+            text-sm
+            font-semibold
+            text-red-700
+          "
+        >
+          人民币资产
+        </p>
+      </div>
+
+      <p
+        className="
+          mt-2
+          text-2xl
+          font-bold
+          tracking-tight
+          text-red-700
+        "
+      >
+        ¥{money(rmbAsset)}
+      </p>
+
+      <p
+        className="
+          mt-1
+          text-xs
+          font-bold
+          text-red-500
+        "
+      >
+         {Math.round(rmbAssetPercent)}%
+      </p>
+
+    </div>
+
+  </div>
+
+
+  {/* =================================================
+      美元资产
+      ================================================= */}
+
+  <div
+    className="
+      relative
+      overflow-hidden
+      rounded-2xl
+      border
+      border-blue-100
+      bg-gradient-to-br
+      from-blue-50
+      via-sky-50
+      to-white
+      px-5
+      py-4
+      shadow-sm
+    "
+  >
+
+
+
+    <div className="relative z-10">
+
+      <div
+        className="
+          flex
+          items-center
+          gap-2
+        "
+      >
+        <span
+          className="
+            text-lg
+          "
+        >
+          🇺🇸
+        </span>
+
+        <p
+          className="
+            text-sm
+            font-semibold
+            text-blue-700
+          "
+        >
+          美元资产
+        </p>
+      </div>
+
+      <p
+        className="
+          mt-2
+          text-2xl
+          font-bold
+          tracking-tight
+          text-blue-700
+        "
+      >
+        ¥{money(usdAsset)}
+      </p>
+
+      <p
+        className="
+          mt-1
+          text-xs
+          font-bold
+          text-blue-500
+        "
+      >
+         {Math.round(usdAssetPercent)}%
+      </p>
+
+    </div>
+
+  </div>
+
+</div>
+
           </div>
 
 
@@ -646,15 +863,11 @@ export default function AssetSummary({
                 mt-2
                 text-xl
                 font-bold
-                ${
-                  totalProfit >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(totalProfit)}
               `}
             >
 
-              {totalProfit >= 0
+              {totalProfit > 0
                 ? "+"
                 : ""}
 
@@ -668,15 +881,11 @@ export default function AssetSummary({
                 mt-1
                 text-sm
                 font-semibold
-                ${
-                  totalRate >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(totalRate)}
               `}
             >
 
-              {totalRate >= 0
+              {totalRate > 0
                 ? "+"
                 : ""}
 
@@ -909,15 +1118,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  totalProfit >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(totalProfit)}
               `}
             >
 
-              {totalProfit >= 0
+              {totalProfit > 0
                 ? "+"
                 : ""}
 
@@ -929,15 +1134,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  totalRate >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(totalRate)}
               `}
             >
 
-              {totalRate >= 0
+              {totalRate > 0
                 ? "+"
                 : ""}
 
@@ -1031,15 +1232,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  cnProfit >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(cnProfit)}
               `}
             >
 
-              {cnProfit >= 0
+              {cnProfit > 0
                 ? "+"
                 : ""}
 
@@ -1051,15 +1248,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  cnRate >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(cnRate)}
               `}
             >
 
-              {cnRate >= 0
+              {cnRate > 0
                 ? "+"
                 : ""}
 
@@ -1153,15 +1346,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  hkProfit >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(hkProfit)}
               `}
             >
 
-              {hkProfit >= 0
+              {hkProfit > 0
                 ? "+"
                 : ""}
 
@@ -1173,15 +1362,11 @@ export default function AssetSummary({
             <p
               className={`
                 font-semibold
-                ${
-                  hkRate >= 0
-                    ? "text-green-600"
-                    : "text-red-600"
-                }
+                ${trendColor(hkRate)}
               `}
             >
 
-              {hkRate >= 0
+              {hkRate > 0
                 ? "+"
                 : ""}
 

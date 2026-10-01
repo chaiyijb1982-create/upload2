@@ -9,6 +9,13 @@ import {
   type CashflowState,
 } from "@/lib/cashflow-planning";
 
+import {
+  getLoans,
+} from "@/lib/loan";
+
+import {
+  calculateRemainingPeriods,
+} from "@/lib/loan-calculations";
 
 import {
   DndContext,
@@ -27,45 +34,41 @@ import {
 } from "@dnd-kit/sortable";
 
 import { CSS } from "@dnd-kit/utilities";
+
 // ============================================================
 // AI Wealth OS
 // CASHFLOW-PLANNING
 //
 // 功能：
-// 1. Excel 模板导入
-// 2. 收入 / 支出分开
-// 3. 新增项目 → 同步全部年月
-// 4. 改名 → 同项目全部年月同步
-// 5. 删除 → 同项目全部年月删除
-// 6. 独立 → 当前年月脱离联动
-// 7. 金额 → 每个月独立
-// 8. Excel 原始现金 / 年金计算
-// 9. AI 分析数据导出
+// 1. 收入 / 支出分开
+// 2. 新增项目 → 同步全部年月
+// 3. 改名 → 同项目全部年月同步
+// 4. 删除 → 同项目全部年月删除
+// 5. 独立 → 当前年月脱离联动
+// 6. 金额 → 每个月独立填写
+// 7. AI 分析数据导出
+// 8. 还信用卡常规 → 自动读取 /loan 里的信用卡分期
+//
+// 重要：
+// years 不再手写汇总，全部由 months 实时重算。
 // ============================================================
 
 const TARGET_START_YEAR = 2026;
 
 const TARGET_END_YEAR = 2042;
 
-// type / interface
-// TARGET_START_YEAR / TARGET_END_YEAR
-// 其他工具函数
+// ============================================================
+// 还信用卡常规
+// ============================================================
 
-
-
-
-
-
+const CREDIT_CARD_REGULAR_PROJECT_ID =
+  "shared:expense:还信用卡常规";
 
 // ============================================================
 // 类型
 // ============================================================
 
 type Role = "income" | "expense";
-
-// Excel 导入诊断信息。
-// 当前版本业务数据已经以 Supabase 为主，诊断信息仅作为可选结构保留。
-type ExcelDiagnostics = Record<string, unknown>;
 
 type Project = {
   projectId: string;
@@ -111,7 +114,6 @@ type MonthData = {
   income: CellItem[];
   expense: CellItem[];
 
-  // 手动覆盖计算结果；修改后会作为后续月份的滚动起点
   manualRemaining?: number;
   manualTotalCash?: number;
   manualAnnuity?: number;
@@ -138,13 +140,6 @@ type YearCalculation = {
   months: CalculationMonth[];
   endingCash: number;
   endingAnnuity: number;
-};
-
-
-type ParsedExcel = {
-  years: YearData[];
-  projects: Project[];
-  diagnostics: ExcelDiagnostics;
 };
 
 // ============================================================
@@ -240,51 +235,135 @@ function isValidName(name: string) {
   return normalizeName(name).length > 0;
 }
 
+// ============================================================
+// 判断是不是「还信用卡常规」
+// ============================================================
 
-function extractFormulaAdjustment(
-  value: unknown
+function isCreditCardRegular(
+  item: Pick<CellItem, "projectId" | "name">
 ) {
-  if (typeof value !== "string") {
-    return 0;
+  if (
+    item.projectId ===
+    CREDIT_CARD_REGULAR_PROJECT_ID
+  ) {
+    return true;
   }
 
-  const formula = value.trim();
-
-  if (!formula.startsWith("=")) {
-    return 0;
-  }
-
-  const matches = formula.match(
-    /([+-])\s*(\d+(?:\.\d+)?)(?![A-Z0-9])/gi
+  return (
+    normalizeName(item.name) ===
+    "还信用卡常规"
   );
-
-  if (!matches || matches.length === 0) {
-    return 0;
-  }
-
-  const last =
-    matches[matches.length - 1];
-
-  const sign = last
-    .trim()
-    .startsWith("-")
-    ? -1
-    : 1;
-
-  const numberPart = last
-    .replace(/[+-]/g, "")
-    .trim();
-
-  const n = Number(numberPart);
-
-  if (!Number.isFinite(n)) {
-    return 0;
-  }
-
-  return sign * n;
 }
 
+// ============================================================
+// 取「还信用卡常规」动态金额
+// ============================================================
 
+function getCreditCardRegularAmount(
+  creditCardMonthlyMap: Map<string, number>,
+  year: number,
+  month: number
+) {
+  const key = `${year}-${String(month).padStart(
+    2,
+    "0"
+  )}`;
+
+  return creditCardMonthlyMap.get(key) || 0;
+}
+
+// ============================================================
+// 计算某个支出项目的实际金额
+// ============================================================
+
+function getExpenseItemAmount(
+  item: CellItem,
+  creditCardMonthlyMap: Map<string, number>
+) {
+  if (isCreditCardRegular(item)) {
+    return getCreditCardRegularAmount(
+      creditCardMonthlyMap,
+      item.year,
+      item.month
+    );
+  }
+
+  return item.value;
+}
+
+// ============================================================
+// 信用卡分期每月应还合计
+// ============================================================
+
+async function getCreditCardMonthlyMap() {
+  const loans = await getLoans();
+
+  const map = new Map<string, number>();
+
+  const today = new Date();
+
+  for (const loan of loans || []) {
+    if (loan.type !== "信用卡分期") {
+      continue;
+    }
+
+    const monthly = Number(
+      loan.monthly_payment || 0
+    );
+
+    if (monthly <= 0) {
+      continue;
+    }
+
+    let periods = 0;
+
+    let startDate: Date | null = null;
+
+    if (loan.start_date) {
+      startDate = new Date(loan.start_date);
+    }
+
+    if (loan.end_date) {
+      const end = new Date(loan.end_date);
+
+      const start = startDate || today;
+
+      periods =
+        (end.getFullYear() -
+          start.getFullYear()) *
+          12 +
+        (end.getMonth() -
+          start.getMonth()) +
+        1;
+    } else {
+      periods =
+        calculateRemainingPeriods(loan);
+
+      startDate = today;
+    }
+
+    if (!startDate || periods <= 0) {
+      continue;
+    }
+
+    for (let i = 0; i < periods; i++) {
+      const d = new Date(startDate);
+
+      d.setMonth(d.getMonth() + i);
+
+      const key = `${d.getFullYear()}-${String(
+        d.getMonth() + 1
+      ).padStart(2, "0")}`;
+
+      map.set(
+        key,
+        (map.get(key) || 0) + monthly
+      );
+    }
+  }
+
+  return map;
+}
 
 // ============================================================
 // 项目
@@ -361,14 +440,6 @@ function addGlobalProject(
     projects.push(project);
   }
 
-  /**
-   * ==========================================================
-   * 核心：
-   *
-   * 新增项目同步全部年份 × 全部月份
-   * ==========================================================
-   */
-
   for (const year of years) {
     for (const month of year.months) {
       const list =
@@ -423,15 +494,6 @@ function addGlobalProject(
 // 单月新增项目
 // ============================================================
 
-// ============================================================
-// 单月新增项目
-//
-// 特殊规则：
-// 1. SAL：同一年 + 同一个月只能存在 1 条有效记录
-// 2. 转去养老保险：同一年 + 同一个月只能存在 1 条有效记录
-//
-// 普通项目保持原来的“单月独立新增”逻辑。
-// ============================================================
 function addMonthlyProject(
   years: YearData[],
   yearValue: number,
@@ -472,14 +534,6 @@ function addMonthlyProject(
           ? month.income
           : month.expense;
 
-      // ======================================================
-      // SAL / 转去养老保险：
-      //
-      // 无论 projectId 是什么，只要：
-      // 年 + 月 + role + name 相同
-      //
-      // 就认为是同一条业务记录。
-      // ======================================================
       if (
         isSAL ||
         isTransferToPension
@@ -493,8 +547,6 @@ function addMonthlyProject(
                 normalizedName
           );
 
-        // 已经有有效记录：
-        // 不再 push 新记录，而是直接更新第一条。
         if (matches.length > 0) {
           const target =
             matches[0];
@@ -515,7 +567,6 @@ function addMonthlyProject(
               true;
           }
 
-          // 同时把同月其余重复记录从页面状态清掉。
           for (
             const duplicate of matches.slice(1)
           ) {
@@ -565,10 +616,6 @@ function addMonthlyProject(
           });
         }
       } else {
-        // ====================================================
-        // 普通单月项目：
-        // 保持原来的逻辑。
-        // ====================================================
         list.push({
           id: uid("cell"),
 
@@ -591,7 +638,6 @@ function addMonthlyProject(
               ? value
               : 0,
 
-          // 单月新增 = 只属于当前年月
           independent:
             true,
 
@@ -605,11 +651,6 @@ function addMonthlyProject(
     }
   }
 
-  // ==========================================================
-  // “转去养老保险”以后：
-  //
-  // 当前月及后续月份不能继续使用旧 manualAnnuity。
-  // ==========================================================
   if (isTransferToPension) {
     for (const year of years) {
       for (const month of year.months) {
@@ -639,21 +680,6 @@ function deleteProject(
   projects: Project[],
   item: CellItem
 ) {
-  /*
-   * DEL 不再真正从数组删除。
-   *
-   * 原因：
-   * POST 保存的是 Supabase 快照，但 POST 不 DELETE 数据库记录。
-   * 如果这里只从 React state 删除，重新打开页面时，
-   * Supabase 里的旧记录会再次回来。
-   *
-   * 所以统一使用 deleted=true 做软删除。
-   */
-
-  /*
-   * 独立项目：
-   * 只删除当前 occurrence。
-   */
   if (item.independent) {
     for (const year of years) {
       for (const month of year.months) {
@@ -685,10 +711,9 @@ function deleteProject(
     };
   }
 
-  /*
-   * 非独立项目：
-   * 全部年月软删除。
-   */
+  const normalized =
+    normalizeName(item.name);
+
   for (const year of years) {
     for (const month of year.months) {
       for (const x of [
@@ -696,8 +721,8 @@ function deleteProject(
         ...month.expense,
       ]) {
         if (
-          x.projectId === item.projectId &&
-          x.role === item.role
+          x.role === item.role &&
+          normalizeName(x.name) === normalized
         ) {
           x.deleted = true;
         }
@@ -705,17 +730,14 @@ function deleteProject(
     }
   }
 
-  /*
-   * 项目本身从当前 projects 列表移除。
-   *
-   * 数据库里的 CellItem 仍然保留，
-   * 但 deleted=true。
-   */
   return {
     years,
     projects: projects.filter(
       (p) =>
-        p.projectId !== item.projectId
+        !(
+          p.role === item.role &&
+          normalizeName(p.name) === normalized
+        )
     ),
   };
 }
@@ -729,9 +751,6 @@ function toggleIndependent(
   projects: Project[],
   item: CellItem
 ) {
-  /**
-   * 共享 → 独立
-   */
   if (!item.independent) {
     const newProjectId =
       projectUid(item.role);
@@ -778,9 +797,6 @@ function toggleIndependent(
     };
   }
 
-  /**
-   * 独立 → 共享
-   */
   let targetProject =
     findSharedProject(
       projects,
@@ -855,10 +871,6 @@ function renameItem(
     };
   }
 
-  /**
-   * 独立：
-   * 只改当前月份
-   */
   if (item.independent) {
     for (const year of years) {
       for (const month of year.months) {
@@ -893,10 +905,6 @@ function renameItem(
     };
   }
 
-  /**
-   * 共享：
-   * 全部年月一起改
-   */
   const project =
     getProjectById(
       projects,
@@ -936,19 +944,6 @@ function renameItem(
 // 金额
 // ============================================================
 
-// ============================================================
-// 金额
-// ============================================================
-//
-// propagate = true
-//   用户确认“同步后续月份”
-//
-// propagate = false
-//   用户取消同步，只修改当前月份
-//
-// 无论是否同步：
-// 当前月份金额变化后，后续现金/年金计算都必须重新计算。
-// ============================================================
 function updateItemValue(
   years: YearData[],
   item: CellItem,
@@ -960,20 +955,10 @@ function updateItemValue(
       ? value
       : 0;
 
-  // 固定“本月交养老保险”仍然不能通过普通金额修改
-  // 去同步后面的月份。
   const shouldPropagate =
     propagate &&
     item.isPensionPayment !== true;
 
-  /*
-   * “转去养老保险”：
-   * 修改当前月份以后，积累年金必须重新滚动。
-   *
-   * 即使用户选择“不同步后续金额”，
-   * 当前月份的金额发生变化后，
-   * 后面的积累年金计算仍然必须重新计算。
-   */
   const shouldResetAnnuity =
     item.role === "expense" &&
     (
@@ -999,10 +984,7 @@ function updateItemValue(
           x.role === item.role;
 
         const shouldUpdate =
-          // 当前这一条永远修改
           x.id === item.id ||
-          // 用户确认同步以后，
-          // 当前月份之后的同项目一起修改
           (
             shouldPropagate &&
             sameProject &&
@@ -1014,19 +996,6 @@ function updateItemValue(
         }
       }
 
-      /*
-       * 当前金额发生变化以后：
-       *
-       * 本月剩下
-       * 总现金剩下
-       *
-       * 从当前月份开始重新计算。
-       *
-       * 注意：
-       * 这里不能使用 shouldPropagate，
-       * 因为即使用户取消“同步其他月份”，
-       * 当前月份金额变化仍然会影响后面的现金滚动。
-       */
       if (
         isAfterOrEqual &&
         (
@@ -1039,10 +1008,6 @@ function updateItemValue(
         delete month.manualTotalCash;
       }
 
-      /*
-       * 转去养老保险 / 本月交养老保险
-       * 修改后重新计算后续积累年金。
-       */
       if (
         shouldResetAnnuity &&
         isAfterOrEqual
@@ -1053,22 +1018,8 @@ function updateItemValue(
   }
 }
 
-
-
 // ============================================================
 // 固定养老保险缴费
-//
-// 规则：
-// 2026：从现有 Supabase 数据读取，不自动新增
-// 2027：7月 503000，10月 221000
-// 2028-2032：7月 393000，10月 221000
-// 2033：7月 130000，10月 221000
-// 2034-2037：7月 130000，10月 129000
-// 2038：10月 129000
-// 2039-2042：10月 39000
-//
-// “本月交养老保险”只影响积累年金，
-// 不进入普通家庭现金支出。
 // ============================================================
 
 function getPensionPayment(
@@ -1076,7 +1027,6 @@ function getPensionPayment(
   month: number
 ): number {
   if (year === 2026) {
-   
     if (month === 10) return 221000;
     return 0;
   }
@@ -1120,14 +1070,12 @@ function getPensionPayment(
 
 function ensurePensionPaymentItems(
   years: YearData[],
-  projects: Project[]
+  projects: Project[],
+  preserveExistingValues = true
 ) {
   const nextYears = clone(years);
   const nextProjects = clone(projects);
 
-  // 固定项目 ID。
-  // 必须稳定，不能每次初始化都生成新的 projectId，
-  // 否则会造成重复项目。
   const projectId = "fixed:pension-payment";
 
   let project =
@@ -1148,7 +1096,6 @@ function ensurePensionPaymentItems(
 
     nextProjects.push(project);
   } else {
-    // 确保旧数据也具有正确标记
     project.role = "expense";
     project.name = "本月交养老保险";
     project.isPensionPayment = true;
@@ -1162,7 +1109,6 @@ function ensurePensionPaymentItems(
         month.month
       );
 
-      // 找到这个月现有的养老保险项目
       const existingIndex =
         month.expense.findIndex(
           (item) =>
@@ -1184,7 +1130,11 @@ function ensurePensionPaymentItems(
           item.projectId = projectId;
           item.name = "本月交养老保险";
           item.role = "expense";
-          item.value = amount;
+
+          if (!preserveExistingValues) {
+            item.value = amount;
+          }
+
           item.independent = false;
           item.fromExcel = false;
           item.isPensionPayment = true;
@@ -1206,8 +1156,6 @@ function ensurePensionPaymentItems(
           });
         }
       } else {
-        // 非缴费月份：
-        // 如果以前有自动生成的养老保险项目，则删除。
         if (existingIndex >= 0) {
           month.expense.splice(
             existingIndex,
@@ -1225,36 +1173,12 @@ function ensurePensionPaymentItems(
 }
 
 // ============================================================
-// 年金特殊调整
-// ============================================================
-
-function getExcelAnnuityAdjustment(
-  year: number,
-  month: number
-) {
-  if (
-    year === 2027 &&
-    month === 7
-  ) {
-    return -503000;
-  }
-
-  if (
-    year === 2027 &&
-    month === 10
-  ) {
-    return -221000;
-  }
-
-  return 0;
-}
-
-// ============================================================
 // 计算
 // ============================================================
 
 function calculateYears(
-  years: YearData[]
+  years: YearData[],
+  creditCardMonthlyMap: Map<string, number>
 ): YearCalculation[] {
   const sorted =
     [...years].sort(
@@ -1278,12 +1202,12 @@ function calculateYears(
       [];
 
     let runningCash: number =
-  previousCash ??
-  year.originalOpeningCash;
+      previousCash ??
+      year.originalOpeningCash;
 
-   let runningAnnuity: number =
-  previousAnnuity ??
-  year.originalOpeningAnnuity;
+    let runningAnnuity: number =
+      previousAnnuity ??
+      year.originalOpeningAnnuity;
 
     for (const month of year.months) {
       const income =
@@ -1296,8 +1220,6 @@ function calculateYears(
           0
         );
 
-      // “本月交养老保险”只从“积累年金”扣除，
-      // 不属于家庭现金流支出，因此不能进入 expense / 本月剩下 / 总现金剩下。
       const expense =
         month.expense
           .filter(
@@ -1307,26 +1229,25 @@ function calculateYears(
           )
           .reduce(
             (sum, item) =>
-              sum + item.value,
+              sum +
+              getExpenseItemAmount(
+                item,
+                creditCardMonthlyMap
+              ),
             0
           );
 
       const calculatedRemaining =
         income - expense;
 
-      // 本月剩下可以手动修改。修改后的值会影响后续月份。
       const remaining =
         Number.isFinite(month.manualRemaining)
           ? month.manualRemaining!
           : calculatedRemaining;
 
-      // 总现金剩下严格按月滚动：
-      // 本月“本月剩下” + 上个月“总现金剩下”。
-      // 第一笔的 runningCash 就是 Excel 提供的期初现金。
       const calculatedTotalCash =
         runningCash + remaining;
 
-      // 总现金剩下可以手动修改。修改后的值直接作为下个月现金起点。
       const totalCash =
         Number.isFinite(month.manualTotalCash)
           ? month.manualTotalCash!
@@ -1360,13 +1281,11 @@ function calculateYears(
             0
           );
 
-      // 积累年金 = 上个月积累年金 + 当月转去养老保险 - 当月交养老保险。
       const calculatedAnnuity =
         runningAnnuity +
         annuityContribution -
         pensionPayment;
 
-      // 积累年金可以手动修改。修改后的值直接作为下个月年金起点。
       const annuity =
         Number.isFinite(month.manualAnnuity)
           ? month.manualAnnuity!
@@ -1383,14 +1302,14 @@ function calculateYears(
       });
     }
 
-    const endingCash: number = 
+    const endingCash: number =
       months.length > 0
         ? months[
             months.length - 1
           ].totalCash
         : runningCash;
 
-    const endingAnnuity: number  =
+    const endingAnnuity: number =
       months.length > 0
         ? months[
             months.length - 1
@@ -1418,78 +1337,78 @@ function calculateYears(
 }
 
 // ============================================================
-// AI 数据生成
+// 年度汇总（和 months 对齐）
 // ============================================================
 
-function buildAIExport(
+function buildYearSummary(
   years: YearData[],
-  calculations: YearCalculation[]
+  calculations: YearCalculation[],
+  creditCardMonthlyMap: Map<string, number>
 ) {
-  const yearSummary =
-    years.map((year) => {
+  return years
+    .map((year) => {
       const calc =
         calculations.find(
           (x) =>
             x.year === year.year
         );
 
-      const yearIncome =
-        year.months.reduce(
-          (sum, month) =>
-            sum +
-            month.income.reduce(
-              (
-                s,
-                item
-              ) =>
-                s +
-                item.value,
-              0
-            ),
-          0
-        );
+      let totalIncome = 0;
+      let totalExpense = 0;
 
-      const yearExpense =
-        year.months.reduce(
-          (sum, month) =>
-            sum +
-            month.expense
-              .filter(
-                (item) =>
-                  !item.deleted &&
-                  !item.isPensionPayment
-              )
-              .reduce(
-                (s, item) =>
-                  s + item.value,
-                0
-              ),
-          0
-        );
+      for (const month of year.months) {
+        for (const item of month.income) {
+          if (item.deleted) continue;
+          totalIncome += item.value;
+        }
+
+        for (const item of month.expense) {
+          if (item.deleted) continue;
+          if (item.isPensionPayment) continue;
+
+          totalExpense +=
+            getExpenseItemAmount(
+              item,
+              creditCardMonthlyMap
+            );
+        }
+      }
 
       return {
-        year:
-          year.year,
+        year: year.year,
 
-        totalIncome:
-          yearIncome,
+        totalIncome,
 
-        totalExpense:
-          yearExpense,
+        totalExpense,
 
         netCashFlow:
-          yearIncome -
-          yearExpense,
+          totalIncome - totalExpense,
 
         endingCash:
-          calc?.endingCash ??
-          0,
+          calc?.endingCash ?? 0,
 
         endingAnnuity:
-          calc?.endingAnnuity ??
-          0,
+          calc?.endingAnnuity ?? 0,
       };
-    });
+    })
+    .sort((a, b) => a.year - b.year);
+}
+
+// ============================================================
+// AI 数据生成
+// ============================================================
+
+function buildAIExport(
+  years: YearData[],
+  calculations: YearCalculation[],
+  creditCardMonthlyMap: Map<string, number>
+) {
+  const yearSummary =
+    buildYearSummary(
+      years,
+      calculations,
+      creditCardMonthlyMap
+    );
 
   const monthData =
     years.flatMap(
@@ -1552,7 +1471,10 @@ function buildAIExport(
                         x.name,
 
                       amount:
-                        x.value,
+                        getExpenseItemAmount(
+                          x,
+                          creditCardMonthlyMap
+                        ),
 
                       independent:
                         x.independent,
@@ -1658,6 +1580,9 @@ function buildAIExport(
         amount:
           "金额每个月独立填写",
 
+        creditCardRegular:
+          "还信用卡常规自动读取 /loan 里的信用卡分期",
+
         negativeBalanceInterest:
           false,
       },
@@ -1676,12 +1601,14 @@ function buildAIExport(
 
 function buildAIPrompt(
   years: YearData[],
-  calculations: YearCalculation[]
+  calculations: YearCalculation[],
+  creditCardMonthlyMap: Map<string, number>
 ) {
   const data =
     buildAIExport(
       years,
-      calculations
+      calculations,
+      creditCardMonthlyMap
     );
 
   return `你现在是我的家庭财务 CFO。
@@ -1748,12 +1675,297 @@ ${JSON.stringify(
 }
 
 // ============================================================
+// Year Summary Table
+// ============================================================
+
+type ExpenseRow = {
+  name: string;
+  amount: number;
+  transferToPensionTotal?: number;
+};
+
+type YearSummaryTableProps = {
+  year: YearData;
+  creditCardMonthlyMap: Map<string, number>;
+};
+
+function YearSummaryTable({
+  year,
+  creditCardMonthlyMap,
+}: YearSummaryTableProps) {
+  const incomeMap = new Map<string, number>();
+  const expenseMap = new Map<string, ExpenseRow>();
+
+  let totalIncome = 0;
+  let totalExpense = 0;
+
+  let transferToPensionTotal = 0;
+  let pensionPaymentTotal = 0;
+  let monthlyInvestTotal = 0;
+
+  for (const month of year.months) {
+    for (const item of month.income) {
+      if (item.deleted) continue;
+
+      const key = item.name;
+
+      incomeMap.set(
+        key,
+        (incomeMap.get(key) || 0) + item.value
+      );
+
+      totalIncome += item.value;
+    }
+
+    for (const item of month.expense) {
+      if (item.deleted) continue;
+
+      const amount =
+        getExpenseItemAmount(
+          item,
+          creditCardMonthlyMap
+        );
+
+      const isTransferToPension =
+        normalizeName(item.name) === "转去养老保险";
+
+      const isPensionPayment =
+        normalizeName(item.name) === "本月交养老保险";
+
+      const isMonthlyInvest =
+        normalizeName(item.name) === "下月定投";
+
+      // 转去养老保险：单独累计，不直接进 expenseMap
+      if (isTransferToPension) {
+        transferToPensionTotal += amount;
+        continue;
+      }
+
+      // 本月交养老保险：单独累计，不直接进 expenseMap
+      if (isPensionPayment) {
+        pensionPaymentTotal += amount;
+        continue;
+      }
+
+      // 下月定投：正常进 expenseMap 和 totalExpense，
+      // 同时额外累计，用于“支出合计(不算下月定投)”
+      if (isMonthlyInvest) {
+        monthlyInvestTotal += amount;
+      }
+
+      const key = item.name;
+
+      const existing = expenseMap.get(key);
+
+      if (existing) {
+        existing.amount += amount;
+      } else {
+        expenseMap.set(key, {
+          name: item.name,
+          amount,
+        });
+      }
+
+      totalExpense += amount;
+    }
+  }
+
+  // 合并“本月交养老保险”和“转去养老保险”
+  if (pensionPaymentTotal > 0) {
+    expenseMap.set("本月交养老保险", {
+      name: "本月交养老保险",
+      amount: pensionPaymentTotal,
+      transferToPensionTotal,
+    });
+
+    totalExpense += pensionPaymentTotal;
+  }
+
+  const incomeRows = Array.from(
+    incomeMap.entries()
+  ).sort((a, b) => b[1] - a[1]);
+
+  const expenseRows = Array.from(
+    expenseMap.entries()
+  ).sort((a, b) => b[1].amount - a[1].amount);
+
+  const totalExpenseWithoutMonthlyInvest =
+    totalExpense - monthlyInvestTotal;
+
+  const netCashFlow =
+    totalIncome - totalExpense;
+
+  return (
+    <div className="border-b border-gray-200 bg-white px-4 py-4">
+      <div className="mb-3 flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="text-sm font-semibold text-gray-800">
+            {year.year} 年收支明细统计
+          </div>
+
+          <div className="mt-0.5 text-xs text-gray-500">
+            按项目汇总全年收入与支出
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-4 text-xs">
+          <div>
+            <span className="text-gray-500">
+              全年收入
+            </span>
+
+            <span className="ml-2 font-semibold text-emerald-600">
+              ¥{formatMoney(totalIncome)}
+            </span>
+          </div>
+
+          <div>
+            <span className="text-gray-500">
+              全年支出
+            </span>
+
+            <span className="ml-2 font-semibold text-rose-600">
+              ¥{formatMoney(totalExpense)}
+            </span>
+          </div>
+
+          <div>
+            <span className="text-gray-500">
+              净现金流
+            </span>
+
+            <span
+              className={`ml-2 font-semibold ${
+                netCashFlow >= 0
+                  ? "text-emerald-600"
+                  : "text-rose-600"
+              }`}
+            >
+              ¥{formatSigned(netCashFlow)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        {/* 收入明细 */}
+        <div className="overflow-hidden rounded-xl border border-emerald-100">
+          <div className="border-b border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+            收入明细
+          </div>
+
+          <div className="divide-y divide-emerald-50">
+            {incomeRows.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-400">
+                无收入项目
+              </div>
+            ) : (
+              incomeRows.map(([name, amount]) => (
+                <div
+                  key={name}
+                  className="flex items-center justify-between px-3 py-2 text-xs"
+                >
+                  <span className="truncate text-gray-700">
+                    {name}
+                  </span>
+
+                  <span className="ml-3 shrink-0 font-medium text-emerald-600">
+                    ¥{formatMoney(amount)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-emerald-100 bg-emerald-50 px-3 py-2 text-xs font-semibold">
+            <span className="text-emerald-700">
+              收入合计
+            </span>
+
+            <span className="text-emerald-700">
+              ¥{formatMoney(totalIncome)}
+            </span>
+          </div>
+        </div>
+
+        {/* 支出明细 */}
+        <div className="overflow-hidden rounded-xl border border-rose-100">
+          <div className="border-b border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">
+            支出明细
+          </div>
+
+          <div className="divide-y divide-rose-50">
+            {expenseRows.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-gray-400">
+                无支出项目
+              </div>
+            ) : (
+              expenseRows.map(([key, row]) => (
+                <div
+                  key={key}
+                  className="flex items-center justify-between px-3 py-2 text-xs"
+                >
+                  <span className="truncate text-gray-700">
+                    {row.name}
+
+                    {typeof row.transferToPensionTotal ===
+                      "number" &&
+                      row.transferToPensionTotal > 0 && (
+                        <>
+                          {" "}
+                          [
+                          <span className="text-orange-500">
+                            转去养老保险 ¥
+                            {formatMoney(
+                              row.transferToPensionTotal
+                            )}
+                          </span>
+                          ]
+                        </>
+                      )}
+                  </span>
+
+                  <span className="ml-3 shrink-0 font-medium text-rose-600">
+                    ¥{formatMoney(row.amount)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="flex items-center justify-between border-t border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold">
+            <span className="text-rose-700">
+              支出合计
+            </span>
+
+            <span className="text-rose-700">
+              ¥{formatMoney(totalExpense)}
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between border-t border-rose-100 bg-rose-50 px-3 py-2 text-xs font-semibold">
+            <span className="text-rose-700">
+              支出合计(不算下月定投)
+            </span>
+
+            <span className="text-rose-700">
+              ¥{formatMoney(totalExpenseWithoutMonthlyInvest)}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // Month Card
 // ============================================================
 
 type MonthCardProps = {
   month: MonthData;
   monthCalc?: CalculationMonth;
+  creditCardMonthlyMap: Map<string, number>;
 
   editingId: string | null;
   editingValue: string;
@@ -1779,17 +1991,22 @@ type MonthCardProps = {
     item: CellItem
   ) => void;
 
+  onDeleteMonth: (
+    year: number,
+    month: number
+  ) => void;
+
   onToggleIndependent: (
     item: CellItem
   ) => void;
 
   onReorderItems: (
-  year: number,
-  month: number,
-  role: Role,
-  activeId: string,
-  overId: string
-) => void;
+    year: number,
+    month: number,
+    role: Role,
+    activeId: string,
+    overId: string
+  ) => void;
 
   onAddMonthlyItem: (
     year: number,
@@ -1811,6 +2028,7 @@ type MonthCardProps = {
 function MonthCard({
   month,
   monthCalc,
+  creditCardMonthlyMap,
   editingId,
   editingValue,
   setEditingId,
@@ -1818,6 +2036,7 @@ function MonthCard({
   onRename,
   onValueCommit,
   onDelete,
+  onDeleteMonth,
   onToggleIndependent,
   onReorderItems,
   onAddMonthlyItem,
@@ -1829,60 +2048,60 @@ function MonthCard({
 }: MonthCardProps) {
   const [addingRole, setAddingRole] = useState<Role | null>(null);
   const [addingName, setAddingName] = useState("");
-  
+
   const sensors = useSensors(
-  useSensor(PointerSensor, {
-    activationConstraint: {
-      distance: 6,
-    },
-  })
-);
-
-function handleDragEnd(event: DragEndEvent) {
-  const { active, over } = event;
-
-  if (!over || active.id === over.id) {
-    return;
-  }
-
-  const activeId = String(active.id);
-  const overId = String(over.id);
-
-  const incomeIds = month.income.map(
-    (item) => item.id
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 6,
+      },
+    })
   );
 
-  const expenseIds = month.expense.map(
-    (item) => item.id
-  );
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
 
-  if (
-    incomeIds.includes(activeId) &&
-    incomeIds.includes(overId)
-  ) {
-    onReorderItems(
-      month.year,
-      month.month,
-      "income",
-      activeId,
-      overId
-    );
-    return;
-  }
+    if (!over || active.id === over.id) {
+      return;
+    }
 
-  if (
-    expenseIds.includes(activeId) &&
-    expenseIds.includes(overId)
-  ) {
-    onReorderItems(
-      month.year,
-      month.month,
-      "expense",
-      activeId,
-      overId
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    const incomeIds = month.income.map(
+      (item) => item.id
     );
+
+    const expenseIds = month.expense.map(
+      (item) => item.id
+    );
+
+    if (
+      incomeIds.includes(activeId) &&
+      incomeIds.includes(overId)
+    ) {
+      onReorderItems(
+        month.year,
+        month.month,
+        "income",
+        activeId,
+        overId
+      );
+      return;
+    }
+
+    if (
+      expenseIds.includes(activeId) &&
+      expenseIds.includes(overId)
+    ) {
+      onReorderItems(
+        month.year,
+        month.month,
+        "expense",
+        activeId,
+        overId
+      );
+    }
   }
-}
 
   function submitMonthlyItem() {
     if (!addingRole || !addingName.trim()) return;
@@ -1908,8 +2127,6 @@ function handleDragEnd(event: DragEndEvent) {
       0
     );
 
-  // “本月交养老保险”不计入家庭现金支出合计，
-  // 它只在“积累年金”计算中扣除。
   const expenseTotal =
     month.expense
       .filter(
@@ -1919,245 +2136,273 @@ function handleDragEnd(event: DragEndEvent) {
       )
       .reduce(
         (sum, item) =>
-          sum + item.value,
+          sum +
+          getExpenseItemAmount(
+            item,
+            creditCardMonthlyMap
+          ),
         0
       );
 
-return (
-  <DndContext
-    sensors={sensors}
-    collisionDetection={closestCenter}
-    onDragEnd={handleDragEnd}
-  >
-    <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragEnd={handleDragEnd}
+    >
+      <div className="min-w-0 overflow-hidden rounded-xl border border-gray-200">
 
-      {/* 月份 */}
+        <div className="flex items-center justify-between border-b border-gray-200 bg-white px-3 py-2.5">
 
-      <div className="border-b border-gray-200 bg-white px-3 py-2.5">
-        <div className="text-sm font-semibold">
-          {month.month}月
-        </div>
-      </div>
-
-      {/* ======================================================
-          收入
-      ====================================================== */}
-
-      <div className="bg-slate-50 px-2.5 py-2.5">
-
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-xs font-semibold text-gray-700">
-            收入
+          <div className="text-sm font-semibold">
+            {month.month}月
           </div>
 
-          <div className="text-xs font-medium">
-            ¥
-            {formatMoney(
-              incomeTotal
+          <button
+            type="button"
+            onClick={() =>
+              onDeleteMonth(
+                month.year,
+                month.month
+              )
+            }
+            className="
+              rounded
+              px-2
+              py-1
+              text-[10px]
+              font-medium
+              text-gray-400
+              transition
+              hover:bg-gray-100
+              hover:text-gray-700
+            "
+            title={`删除 ${month.year}年${month.month}月`}
+          >
+            DEL
+          </button>
+
+        </div>
+
+        <div className="bg-slate-50 px-2.5 py-2.5">
+
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-xs font-semibold text-gray-700">
+              收入
+            </div>
+
+            <div className="text-xs font-medium">
+              ¥
+              {formatMoney(
+                incomeTotal
+              )}
+            </div>
+          </div>
+
+          <SortableContext
+            items={month.income.map((item) => item.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-1.5">
+              {month.income.filter((item) => !item.deleted).length === 0 ? (
+                <div className="py-2 text-center text-xs text-gray-400">
+                  无收入项目
+                </div>
+              ) : (
+                month.income
+                  .filter((item) => !item.deleted)
+                  .map((item) => (
+                    <ProjectRow
+                      key={item.id}
+                      item={item}
+                      editingId={editingId}
+                      editingValue={editingValue}
+                      setEditingId={setEditingId}
+                      setEditingValue={setEditingValue}
+                      onRename={onRename}
+                      onValueCommit={onValueCommit}
+                      onDelete={onDelete}
+                      onToggleIndependent={onToggleIndependent}
+                    />
+                  ))
+              )}
+            </div>
+          </SortableContext>
+
+          <div className="mt-2 flex items-center gap-1.5">
+            {addingRole === "income" ? (
+              <div className="flex min-w-0 flex-1 gap-1.5">
+                <input
+                  autoFocus
+                  value={addingName}
+                  onChange={(e) => setAddingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitMonthlyItem();
+                    if (e.key === "Escape") {
+                      setAddingRole(null);
+                      setAddingName("");
+                    }
+                  }}
+                  placeholder="收入项目名称"
+                  className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs outline-none focus:border-gray-500"
+                />
+                <button
+                  type="button"
+                  onClick={submitMonthlyItem}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-xs hover:bg-gray-100"
+                >
+                  添加
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAddingRole("income")}
+                className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
+              >
+                ＋收入
+              </button>
             )}
           </div>
         </div>
 
-        <SortableContext
-  items={month.income.map((item) => item.id)}
-  strategy={verticalListSortingStrategy}
->
-  <div className="space-y-1.5">
-    {month.income.length === 0 ? (
-      <div className="py-2 text-center text-xs text-gray-400">
-        无收入项目
-      </div>
-    ) : (
-      month.income
-  .filter((item) => !item.deleted)
-  .map((item) => (
-    <ProjectRow
-          key={item.id}
-          item={item}
-          editingId={editingId}
-          editingValue={editingValue}
-          setEditingId={setEditingId}
-          setEditingValue={setEditingValue}
-          onRename={onRename}
-          onValueCommit={onValueCommit}
-          onDelete={onDelete}
-          onToggleIndependent={onToggleIndependent}
-        />
-      ))
-    )}
-  </div>
-</SortableContext>
+        <div className="border-t border-gray-200 bg-stone-50 px-2.5 py-2.5">
 
-        <div className="mt-2 flex items-center gap-1.5">
-          {addingRole === "income" ? (
-            <div className="flex min-w-0 flex-1 gap-1.5">
-              <input
-                autoFocus
-                value={addingName}
-                onChange={(e) => setAddingName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") submitMonthlyItem();
-                  if (e.key === "Escape") {
-                    setAddingRole(null);
-                    setAddingName("");
-                  }
-                }}
-                placeholder="收入项目名称"
-                className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs outline-none focus:border-gray-500"
-              />
-              <button
-                type="button"
-                onClick={submitMonthlyItem}
-                className="rounded border border-gray-300 bg-white px-2 py-1 text-xs hover:bg-gray-100"
-              >
-                添加
-              </button>
+          <div className="mb-2 flex items-center justify-between">
+            <div className="text-xs font-semibold text-gray-700">
+              支出
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAddingRole("income")}
-              className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
-            >
-              ＋收入
-            </button>
-          )}
-        </div>
-      </div>
 
-      {/* ======================================================
-          支出
-      ====================================================== */}
-
-      <div className="border-t border-gray-200 bg-stone-50 px-2.5 py-2.5">
-
-        <div className="mb-2 flex items-center justify-between">
-          <div className="text-xs font-semibold text-gray-700">
-            支出
+            <div className="text-xs font-medium">
+              ¥
+              {formatMoney(
+                expenseTotal
+              )}
+            </div>
           </div>
 
-          <div className="text-xs font-medium">
-            ¥
-            {formatMoney(
-              expenseTotal
+          <SortableContext
+            items={month.expense.map((item) => item.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="space-y-1.5">
+              {month.expense.filter((item) => !item.deleted).length === 0 ? (
+                <div className="py-2 text-center text-xs text-gray-400">
+                  无支出项目
+                </div>
+              ) : (
+                month.expense
+                  .filter((item) => !item.deleted)
+                  .map((item) => {
+                    const dynamicAmount =
+                      isCreditCardRegular(item)
+                        ? getCreditCardRegularAmount(
+                            creditCardMonthlyMap,
+                            item.year,
+                            item.month
+                          )
+                        : null;
+
+                    return (
+                      <ProjectRow
+                        key={item.id}
+                        item={item}
+                        dynamicAmount={dynamicAmount}
+                        editingId={editingId}
+                        editingValue={editingValue}
+                        setEditingId={setEditingId}
+                        setEditingValue={setEditingValue}
+                        onRename={onRename}
+                        onValueCommit={onValueCommit}
+                        onDelete={onDelete}
+                        onToggleIndependent={onToggleIndependent}
+                      />
+                    );
+                  })
+              )}
+            </div>
+          </SortableContext>
+
+          <div className="mt-2 flex items-center gap-1.5">
+            {addingRole === "expense" ? (
+              <div className="flex min-w-0 flex-1 gap-1.5">
+                <input
+                  autoFocus
+                  value={addingName}
+                  onChange={(e) => setAddingName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitMonthlyItem();
+                    if (e.key === "Escape") {
+                      setAddingRole(null);
+                      setAddingName("");
+                    }
+                  }}
+                  placeholder="支出项目名称"
+                  className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs outline-none focus:border-gray-500"
+                />
+                <button
+                  type="button"
+                  onClick={submitMonthlyItem}
+                  className="rounded border border-gray-300 bg-white px-2 py-1 text-xs hover:bg-gray-100"
+                >
+                  添加
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAddingRole("expense")}
+                className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
+              >
+                ＋支出
+              </button>
             )}
           </div>
         </div>
 
+        <div className="border-t border-gray-200 bg-white px-3 py-2.5">
 
+          <CalculationEditRow
+            label="本月剩下"
+            value={monthCalc?.remaining ?? incomeTotal - expenseTotal}
+            signed
+            editKey={`${month.year}-${month.month}-remaining`}
+            editingCalcKey={editingCalcKey}
+            editingCalcValue={editingCalcValue}
+            setEditingCalcKey={setEditingCalcKey}
+            setEditingCalcValue={setEditingCalcValue}
+            onCommit={() =>
+              onCalculationCommit(month, "remaining")
+            }
+          />
 
-        <SortableContext
-  items={month.expense.map((item) => item.id)}
-  strategy={verticalListSortingStrategy}
->
-  <div className="space-y-1.5">
-    {month.expense.length === 0 ? (
-      <div className="py-2 text-center text-xs text-gray-400">
-        无支出项目
-      </div>
-    ) : (
-      month.expense.map((item) => (
-        <ProjectRow
-          key={item.id}
-          item={item}
-          editingId={editingId}
-          editingValue={editingValue}
-          setEditingId={setEditingId}
-          setEditingValue={setEditingValue}
-          onRename={onRename}
-          onValueCommit={onValueCommit}
-          onDelete={onDelete}
-          onToggleIndependent={onToggleIndependent}
-        />
-      ))
-    )}
-  </div>
-</SortableContext>
+          <CalculationEditRow
+            label="总现金剩下"
+            value={monthCalc?.totalCash ?? 0}
+            editKey={`${month.year}-${month.month}-totalCash`}
+            editingCalcKey={editingCalcKey}
+            editingCalcValue={editingCalcValue}
+            setEditingCalcKey={setEditingCalcKey}
+            setEditingCalcValue={setEditingCalcValue}
+            onCommit={() =>
+              onCalculationCommit(month, "totalCash")
+            }
+          />
 
-        <div className="mt-2 flex items-center gap-1.5">
-          {addingRole === "expense" ? (
-            <div className="flex min-w-0 flex-1 gap-1.5">
-              <input
-                autoFocus
-                value={addingName}
-                onChange={(e) => setAddingName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") submitMonthlyItem();
-                  if (e.key === "Escape") {
-                    setAddingRole(null);
-                    setAddingName("");
-                  }
-                }}
-                placeholder="支出项目名称"
-                className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-xs outline-none focus:border-gray-500"
-              />
-              <button
-                type="button"
-                onClick={submitMonthlyItem}
-                className="rounded border border-gray-300 bg-white px-2 py-1 text-xs hover:bg-gray-100"
-              >
-                添加
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setAddingRole("expense")}
-              className="rounded border border-gray-300 bg-white px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-100"
-            >
-              ＋支出
-            </button>
-          )}
+          <CalculationEditRow
+            label="积累年金"
+            value={monthCalc?.annuity ?? 0}
+            editKey={`${month.year}-${month.month}-annuity`}
+            editingCalcKey={editingCalcKey}
+            editingCalcValue={editingCalcValue}
+            setEditingCalcKey={setEditingCalcKey}
+            setEditingCalcValue={setEditingCalcValue}
+            onCommit={() =>
+              onCalculationCommit(month, "annuity")
+            }
+          />
         </div>
       </div>
-
-      {/* ======================================================
-          计算
-      ====================================================== */}
-
-      <div className="border-t border-gray-200 bg-white px-3 py-2.5">
-
-        <CalculationEditRow
-          label="本月剩下"
-          value={monthCalc?.remaining ?? incomeTotal - expenseTotal}
-          signed
-          editKey={`${month.year}-${month.month}-remaining`}
-          editingCalcKey={editingCalcKey}
-          editingCalcValue={editingCalcValue}
-          setEditingCalcKey={setEditingCalcKey}
-          setEditingCalcValue={setEditingCalcValue}
-          onCommit={() =>
-            onCalculationCommit(month, "remaining")
-          }
-        />
-
-        <CalculationEditRow
-          label="总现金剩下"
-          value={monthCalc?.totalCash ?? 0}
-          editKey={`${month.year}-${month.month}-totalCash`}
-          editingCalcKey={editingCalcKey}
-          editingCalcValue={editingCalcValue}
-          setEditingCalcKey={setEditingCalcKey}
-          setEditingCalcValue={setEditingCalcValue}
-          onCommit={() =>
-            onCalculationCommit(month, "totalCash")
-          }
-        />
-
-        <CalculationEditRow
-          label="积累年金"
-          value={monthCalc?.annuity ?? 0}
-          editKey={`${month.year}-${month.month}-annuity`}
-          editingCalcKey={editingCalcKey}
-          editingCalcValue={editingCalcValue}
-          setEditingCalcKey={setEditingCalcKey}
-          setEditingCalcValue={setEditingCalcValue}
-          onCommit={() =>
-            onCalculationCommit(month, "annuity")
-          }
-        />
-      </div>
-    </div>
     </DndContext>
   );
 }
@@ -2247,6 +2492,8 @@ function CalculationEditRow({
 type ProjectRowProps = {
   item: CellItem;
 
+  dynamicAmount?: number | null;
+
   editingId: string | null;
   editingValue: string;
 
@@ -2278,6 +2525,7 @@ type ProjectRowProps = {
 
 function ProjectRow({
   item,
+  dynamicAmount = null,
   editingId,
   editingValue,
   setEditingId,
@@ -2294,50 +2542,54 @@ function ProjectRow({
     editingId ===
     `value:${item.id}`;
 
-const {
-  attributes,
-  listeners,
-  setNodeRef,
-  transform,
-  transition,
-  isDragging,
-} = useSortable({
-  id: item.id,
-});
+  const hasDynamicAmount =
+    typeof dynamicAmount === "number";
 
-const style = {
-  transform: CSS.Transform.toString(transform),
-  transition,
-  opacity: isDragging ? 0.5 : 1,
-  zIndex: isDragging ? 10 : undefined,
-};
+  const displayValue =
+    hasDynamicAmount
+      ? dynamicAmount
+      : item.value;
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: item.id,
+  });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
 
   return (
     <div
-  ref={setNodeRef}
-  style={style}
-  className={`rounded-lg border border-gray-200 bg-white px-2 py-1.5 ${
-    isDragging ? "shadow-lg" : ""
-  }`}
->
+      ref={setNodeRef}
+      style={style}
+      className={`rounded-lg border border-gray-200 bg-white px-2 py-1.5 ${
+        isDragging ? "shadow-lg" : ""
+      }`}
+    >
 
- <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 items-center gap-1.5">
 
-  {/* 拖拽 */}
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          title="拖动调整顺序"
+          className="shrink-0 cursor-grab touch-none rounded px-1 text-gray-300 hover:bg-gray-100 hover:text-gray-500 active:cursor-grabbing"
+        >
+          ⋮⋮
+        </button>
 
-  <button
-    type="button"
-    {...attributes}
-    {...listeners}
-    title="拖动调整顺序"
-    className="shrink-0 cursor-grab touch-none rounded px-1 text-gray-300 hover:bg-gray-100 hover:text-gray-500 active:cursor-grabbing"
-  >
-    ⋮⋮
-  </button>
-
-  {/* 名称 */}
-
-  <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1">
 
           {nameEditing ? (
             <input
@@ -2422,8 +2674,6 @@ const style = {
           )}
         </div>
 
-        {/* 独立 */}
-
         <label
           title={
             item.independent
@@ -2450,18 +2700,23 @@ const style = {
           </span>
         </label>
 
-        {/* 金额 */}
-
         <div className="w-[82px] shrink-0">
           <input
             value={
-              valueEditing
-                ? editingValue
-                : String(
-                    item.value
-                  )
+              hasDynamicAmount
+                ? String(displayValue)
+                : valueEditing
+                  ? editingValue
+                  : String(displayValue)
+            }
+            readOnly={
+              hasDynamicAmount
             }
             onFocus={() => {
+              if (hasDynamicAmount) {
+                return;
+              }
+
               setEditingId(
                 `value:${item.id}`
               );
@@ -2472,12 +2727,20 @@ const style = {
                 )
               );
             }}
-            onChange={(e) =>
+            onChange={(e) => {
+              if (hasDynamicAmount) {
+                return;
+              }
+
               setEditingValue(
                 e.target.value
-              )
-            }
+              );
+            }}
             onBlur={() => {
+              if (hasDynamicAmount) {
+                return;
+              }
+
               if (
                 valueEditing
               ) {
@@ -2487,6 +2750,10 @@ const style = {
               }
             }}
             onKeyDown={(e) => {
+              if (hasDynamicAmount) {
+                return;
+              }
+
               if (
                 e.key ===
                 "Enter"
@@ -2510,11 +2777,13 @@ const style = {
               }
             }}
             inputMode="decimal"
-            className="w-full rounded border border-gray-200 bg-white px-1.5 py-1 text-right text-xs outline-none focus:border-gray-400"
+            className={`w-full rounded border bg-white px-1.5 py-1 text-right text-xs outline-none focus:border-gray-400 ${
+              hasDynamicAmount
+                ? "border-gray-100 bg-gray-50 text-gray-500"
+                : "border-gray-200"
+            }`}
           />
         </div>
-
-        {/* DEL */}
 
         <button
           type="button"
@@ -2544,231 +2813,133 @@ const style = {
 // ============================================================
 // 年份清洗
 // ============================================================
-// 防止旧版本 localStorage 中残留 2025 或重复年份。
-// ============================================================
-// 年份清洗
-//
-// 目标：
-// 1. 只保留 2026 ~ 2042
-// 2. deleted=true 的记录不进入页面
-// 3. SAL：同一年 + 同一个月只保留 1 条
-// 4. 转去养老保险：同一年 + 同一个月只保留 1 条
-// 5. 本月交养老保险：同一年 + 同一个月只保留 1 条
-// 6. 普通共享项目：仍按 projectId 去重
-// 7. 普通 independent 项目：保持允许同名
-// ============================================================
-function sanitizeYears(
-  years: YearData[]
-) {
-  const map =
-    new Map<number, YearData>();
+
+function sanitizeYears(years: YearData[]) {
+  const map = new Map<number, YearData>();
 
   for (const sourceYear of years) {
     if (
-      sourceYear.year <
-        TARGET_START_YEAR ||
-      sourceYear.year >
-        TARGET_END_YEAR
+      sourceYear.year < TARGET_START_YEAR ||
+      sourceYear.year > TARGET_END_YEAR
     ) {
       continue;
     }
 
-    if (
-      map.has(
-        sourceYear.year
-      )
-    ) {
+    if (map.has(sourceYear.year)) {
       continue;
     }
 
-    const year =
-      sourceYear;
+    const year = sourceYear;
 
     for (const month of year.months) {
-      // ======================================================
-      // 第一步：
-      // 先删除 deleted=true
-      // ======================================================
-      month.income =
-        month.income.filter(
-          (item) =>
-            item.deleted !== true
-        );
+      month.income = month.income.filter(
+        (item) => item.deleted !== true
+      );
 
-      month.expense =
-        month.expense.filter(
-          (item) =>
-            item.deleted !== true
-        );
+      month.expense = month.expense.filter(
+        (item) => item.deleted !== true
+      );
 
-      // ======================================================
-      // 第二步：
-      // 特殊项目去重
-      // ======================================================
-      const dedupeSpecial =
-        (
-          items: CellItem[]
-        ) => {
-          const seen =
-            new Set<string>();
+      const dedupeSpecial = (items: CellItem[]) => {
+        const seen = new Set<string>();
 
-          const result: CellItem[] =
-            [];
+        const result: CellItem[] = [];
 
-          for (const item of items) {
-            const normalized =
-              normalizeName(
-                item.name
-              );
+        const sharedMap = new Map<string, CellItem>();
 
-            const isSAL =
-              item.role ===
-                "income" &&
-              normalized ===
-                "sal";
+        for (const item of items) {
+          const normalized = normalizeName(item.name);
 
-            const isTransferToPension =
-              item.role ===
-                "expense" &&
-              normalized ===
-                "转去养老保险";
+          const isSAL =
+            item.role === "income" && normalized === "sal";
 
-            const isPensionPayment =
-              item.role ===
-                "expense" &&
-              (
-                item.projectId ===
-                  "fixed:pension-payment" ||
-                item.isPensionPayment ===
-                  true
-              );
+          const isTransferToPension =
+            item.role === "expense" &&
+            normalized === "转去养老保险";
 
-            // =================================================
-            // SAL
-            // =================================================
-            if (isSAL) {
-              const key =
-                `${item.year}::${item.month}::income::sal`;
+          const isPensionPayment =
+            item.role === "expense" &&
+            (item.projectId === "fixed:pension-payment" ||
+              item.isPensionPayment === true ||
+              normalized === "本月交养老保险");
 
-              if (
-                seen.has(key)
-              ) {
-                continue;
-              }
+          if (isSAL) {
+            const key = `${item.year}::${item.month}::income::sal`;
 
-              seen.add(key);
-              result.push(item);
-              continue;
-            }
-
-            // =================================================
-            // 转去养老保险
-            // =================================================
-            if (
-              isTransferToPension
-            ) {
-              const key =
-                `${item.year}::${item.month}::expense::转去养老保险`;
-
-              if (
-                seen.has(key)
-              ) {
-                continue;
-              }
-
-              // 确保这个项目始终计入积累年金
-              item.isAnnuityContribution =
-                true;
-
-              seen.add(key);
-              result.push(item);
-              continue;
-            }
-
-            // =================================================
-            // 本月交养老保险
-            // =================================================
-            if (
-              isPensionPayment
-            ) {
-              const key =
-                `${item.year}::${item.month}::expense::fixed:pension-payment`;
-
-              if (
-                seen.has(key)
-              ) {
-                continue;
-              }
-
-              item.projectId =
-                "fixed:pension-payment";
-
-              item.isPensionPayment =
-                true;
-
-              item.isAnnuityContribution =
-                false;
-
-              seen.add(key);
-              result.push(item);
-              continue;
-            }
-
-            // =================================================
-            // 普通项目
-            //
-            // independent=true：
-            // 允许同名，不处理。
-            // =================================================
-            if (
-              item.independent
-            ) {
-              result.push(item);
-              continue;
-            }
-
-            // =================================================
-            // 普通共享项目：
-            // role + projectId + name
-            // =================================================
-            const key =
-              `${item.role}::${item.projectId}::${normalized}`;
-
-            if (
-              seen.has(key)
-            ) {
+            if (seen.has(key)) {
               continue;
             }
 
             seen.add(key);
             result.push(item);
+            continue;
           }
 
-          return result;
-        };
+          if (isTransferToPension) {
+            const key = `${item.year}::${item.month}::expense::转去养老保险`;
 
-      month.income =
-        dedupeSpecial(
-          month.income
-        );
+            if (seen.has(key)) {
+              continue;
+            }
 
-      month.expense =
-        dedupeSpecial(
-          month.expense
-        );
+            item.isAnnuityContribution = true;
+
+            seen.add(key);
+            result.push(item);
+            continue;
+          }
+
+          if (isPensionPayment) {
+            const key = `${item.year}::${item.month}::expense::fixed:pension-payment`;
+
+            if (seen.has(key)) {
+              continue;
+            }
+
+            item.projectId = "fixed:pension-payment";
+
+            item.isPensionPayment = true;
+
+            item.isAnnuityContribution = false;
+
+            seen.add(key);
+            result.push(item);
+            continue;
+          }
+
+          if (item.independent) {
+            result.push(item);
+            continue;
+          }
+
+          const sharedKey = `${item.role}::${normalized}`;
+
+          const existing = sharedMap.get(sharedKey);
+
+          if (!existing) {
+            item.projectId = `shared:${item.role}:${normalized}`;
+
+            sharedMap.set(sharedKey, item);
+
+            result.push(item);
+          } else {
+            // 丢弃重复
+          }
+        }
+
+        return result;
+      };
+
+      month.income = dedupeSpecial(month.income);
+
+      month.expense = dedupeSpecial(month.expense);
     }
 
-    map.set(
-      year.year,
-      year
-    );
+    map.set(year.year, year);
   }
 
-  return Array.from(
-    map.values()
-  ).sort(
-    (a, b) =>
-      a.year - b.year
+  return Array.from(map.values()).sort(
+    (a, b) => a.year - b.year
   );
 }
 
@@ -2804,15 +2975,15 @@ function parseQuickEntry(text: string) {
     scheduleRegex.lastIndex = 0;
     if (!firstMatch) continue;
 
-const roleIndex = roleMatch.index ?? 0;
+    const roleIndex = roleMatch.index ?? 0;
 
-const name = line
-  .slice(
-    roleIndex + roleMatch[0].length,
-    firstMatch.index
-  )
-  .replace(/^[\s:：\-—]+|[\s:：\-—]+$/g, "")
-  .trim();
+    const name = line
+      .slice(
+        roleIndex + roleMatch[0].length,
+        firstMatch.index
+      )
+      .replace(/^[\s:：\-—]+|[\s:：\-—]+$/g, "")
+      .trim();
 
     if (!name) continue;
 
@@ -2880,9 +3051,6 @@ function applyQuickEntry(
       entry.name
     );
 
-    // ========================================================
-    // 关键：判断是不是“转去养老保险”
-    // ========================================================
     const isTransferToPension =
       entry.role === "expense" &&
       normalizeName(entry.name) ===
@@ -2900,8 +3068,6 @@ function applyQuickEntry(
 
       projects.push(project);
     } else if (isTransferToPension) {
-      // 已经存在的“转去养老保险”项目，
-      // 也强制标记为累计年金来源。
       project.isAnnuityContribution = true;
     }
 
@@ -2912,15 +3078,6 @@ function applyQuickEntry(
             ? month.income
             : month.expense;
 
-        // ======================================================
-        // 找当前月份真正应该使用的记录
-        //
-        // SAL / 转去养老保险：
-        // 不再使用 projectId 判断唯一性。
-        //
-        // 只认：
-        // year + month + role + name
-        // ======================================================
         const normalizedEntryName =
           normalizeName(
             entry.name
@@ -2971,10 +3128,6 @@ function applyQuickEntry(
         let target =
           matches[0];
 
-        // ======================================================
-        // 同一个月出现多个重复：
-        // 页面只保留第一条。
-        // ======================================================
         for (
           const duplicate of
             matches.slice(1)
@@ -3032,8 +3185,6 @@ function applyQuickEntry(
           );
         }
 
-        // “转去养老保险”无论原来是什么状态，
-        // 都必须进入积累年金。
         if (
           isTransferToPension
         ) {
@@ -3041,40 +3192,6 @@ function applyQuickEntry(
             true;
         }
 
-        // 快速录入时，同一共享项目同一月份只保留一条
-        for (const duplicate of matches.slice(1)) {
-          const index =
-            list.indexOf(duplicate);
-
-          if (index >= 0) {
-            list.splice(index, 1);
-          }
-        }
-
-        if (!target) {
-          target = {
-            id: uid("quick"),
-            year: year.year,
-            month: month.month,
-            role: entry.role,
-            projectId:
-              project!.projectId,
-            name: project!.name,
-            value: 0,
-            independent: false,
-            fromExcel: false,
-
-            // ==================================================
-            // 关键修改
-            // ==================================================
-            isAnnuityContribution:
-              isTransferToPension,
-          };
-
-          list.push(target);
-        }
-
-        // 只修改用户明确填写的月份
         const value =
           entry.monthValues.get(
             month.month
@@ -3088,11 +3205,6 @@ function applyQuickEntry(
           target.value = value;
           target.deleted = false;
 
-          // ==================================================
-          // 关键修改
-          // 即使这个项目以后被设为 independent，
-          // 也必须保留累计年金标记。
-          // ==================================================
           if (isTransferToPension) {
             target.isAnnuityContribution =
               true;
@@ -3102,8 +3214,6 @@ function applyQuickEntry(
     }
   }
 
-  // 修改普通收入/支出后，
-  // 旧的手工计算结果不能继续卡住现金滚动。
   for (const year of years) {
     for (const month of year.months) {
       delete month.manualRemaining;
@@ -3129,6 +3239,13 @@ export default function CashflowPlanningPage() {
 
   const [projects, setProjects] =
     useState<Project[]>([]);
+
+  const [
+    creditCardMonthlyMap,
+    setCreditCardMonthlyMap,
+  ] = useState<Map<string, number>>(
+    new Map()
+  );
 
   const [selectedYear, setSelectedYear] =
     useState<number | null>(
@@ -3158,13 +3275,10 @@ export default function CashflowPlanningPage() {
       null
     );
 
-  const [excelDiagnostics, setExcelDiagnostics] =
-    useState<ExcelDiagnostics | null>(null);
-
-  const [showExcelDiagnostics, setShowExcelDiagnostics] =
+  const [saved, setSaved] =
     useState(false);
 
-  const [saved, setSaved] =
+  const [saving, setSaving] =
     useState(false);
 
   const [newIncomeName, setNewIncomeName] =
@@ -3172,10 +3286,6 @@ export default function CashflowPlanningPage() {
 
   const [newExpenseName, setNewExpenseName] =
     useState("");
-
-  // ==========================================================
-  // 快速录入
-  // ==========================================================
 
   const [quickEntryText, setQuickEntryText] =
     useState(
@@ -3185,8 +3295,6 @@ export default function CashflowPlanningPage() {
   const [quickEntryMessage, setQuickEntryMessage] =
     useState<string | null>(null);
 
-
-
   const [editingId, setEditingId] =
     useState<string | null>(
       null
@@ -3195,31 +3303,20 @@ export default function CashflowPlanningPage() {
   const [editingValue, setEditingValue] =
     useState("");
 
-    // ==========================================================
-// 金额修改同步确认
-// ==========================================================
-//
-// 用户修改一个月份的金额后，
-// 如果后面存在同项目月份，先弹窗确认。
-// ==========================================================
-const [
-  pendingValueChange,
-  setPendingValueChange,
-] = useState<{
-  item: CellItem;
-  value: number;
-  affectedMonths: string[];
-} | null>(null);
+  const [
+    pendingValueChange,
+    setPendingValueChange,
+  ] = useState<{
+    item: CellItem;
+    value: number;
+    affectedMonths: string[];
+  } | null>(null);
 
   const [editingCalcKey, setEditingCalcKey] =
     useState<string | null>(null);
 
   const [editingCalcValue, setEditingCalcValue] =
     useState("");
-
-  // ==========================================================
-  // AI
-  // ==========================================================
 
   const [aiText, setAiText] =
     useState("");
@@ -3230,34 +3327,58 @@ const [
   const [copied, setCopied] =
     useState(false);
 
-  
-
-    // ==========================================================
-  // Supabase 保存控制
-  //
-  // 关键规则：
-  // 1. 首次从 Supabase 读取时，绝不自动反写。
-  // 2. 用户真正修改 state 后才保存。
-  // 3. 保存请求严格串行，避免旧 POST 晚于新 POST 完成，
-  //    用旧快照把新数据（例如 2037）覆盖掉。
-  // ==========================================================
-
   const skipInitialSaveRef = useRef(true);
+
+  const skipNextAutoSaveRef = useRef(false);
 
   const saveChainRef = useRef<Promise<void>>(
     Promise.resolve()
   );
 
+  const pendingMonthDeletesRef = useRef<
+    Array<{
+      year: number;
+      month: number;
+    }>
+  >([]);
+
+  // ==========================================================
+  // 加载信用卡分期每月应还
+  // ==========================================================
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadCreditCardMonthly() {
+      try {
+        const map =
+          await getCreditCardMonthlyMap();
+
+        if (!mounted) return;
+
+        setCreditCardMonthlyMap(map);
+
+        console.log(
+          "[CASHFLOW] 信用卡分期每月应还：",
+          Array.from(map.entries())
+        );
+      } catch (error) {
+        console.error(
+          "[CASHFLOW] 读取信用卡分期失败：",
+          error
+        );
+      }
+    }
+
+    loadCreditCardMonthly();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   // ==========================================================
   // Supabase 初始化
-  //
-  // 唯一数据来源：
-  // 页面打开 → Supabase
-  //
-  // 不再从 NEW.xlsx 初始化
-  // 不再从 localStorage 恢复业务数据
   // ==========================================================
-
   useEffect(() => {
     let mounted = true;
 
@@ -3293,15 +3414,15 @@ const [
           cloud
         );
 
-console.log(
-  "[CASHFLOW] 原始 Supabase 年份明细：",
-  [...new Set((cloud.state?.years ?? []).map((y) => y.year))]
-);
+        console.log(
+          "[CASHFLOW] 原始 Supabase 年份明细：",
+          [...new Set((cloud.state?.years ?? []).map((y) => y.year))]
+        );
 
         console.log(
-  "[CASHFLOW] loadCashflowPlanning 年份：",
-  cloud.state?.years?.map((y) => y.year)
-);
+          "[CASHFLOW] loadCashflowPlanning 年份：",
+          cloud.state?.years?.map((y) => y.year)
+        );
 
         if (
           !cloud.hasData ||
@@ -3316,10 +3437,6 @@ console.log(
           );
         }
 
-        // ======================================================
-        // 从 Supabase 恢复数据
-        // ======================================================
-
         const rebuilt =
           rebuildProjectLinks(
             sanitizeYears(
@@ -3332,13 +3449,10 @@ console.log(
             )
           );
 
-          console.log(
-  "[CASHFLOW] rebuildProjectLinks 后年份：",
-  rebuilt.years.map((y) => y.year)
-);
-        // ======================================================
-        // 自动确保养老保险项目存在
-        // ======================================================
+        console.log(
+          "[CASHFLOW] rebuildProjectLinks 后年份：",
+          rebuilt.years.map((y) => y.year)
+        );
 
         const withPension =
           ensurePensionPaymentItems(
@@ -3346,21 +3460,14 @@ console.log(
             rebuilt.projects
           );
 
-   
         console.log(
-  "[CASHFLOW] ensurePensionPaymentItems 后年份：",
-  withPension.years.map((y) => y.year)
-);
+          "[CASHFLOW] ensurePensionPaymentItems 后年份：",
+          withPension.years.map((y) => y.year)
+        );
 
         if (!mounted) {
           return;
         }
-
-        // ======================================================
-        // 非常重要：
-        // 第一次从 Supabase 读取以后，
-        // 不允许初始化数据立即反向 POST。
-        // ======================================================
 
         skipInitialSaveRef.current =
           true;
@@ -3373,7 +3480,6 @@ console.log(
           withPension.projects
         );
 
-        // 默认打开 2026
         setSelectedYear(
           withPension.years.find(
             (year) =>
@@ -3423,41 +3529,128 @@ console.log(
   }, []);
 
   // ==========================================================
-  // 自动保存：Supabase 正式数据
-  //
-  // 注意：API POST 是“整套快照 DELETE + INSERT”。
-  // 因此这里必须保证：
-  // - 初始化读取不能触发保存；
-  // - 同一时间只能有一个保存请求；
-  // - 后来的快照必须排在前一个保存完成之后。
+  // 自动保存
   // ==========================================================
-
   useEffect(() => {
     if (loading || years.length === 0) return;
 
-    // 首次从 Supabase 加载出来的数据，只是初始化快照，不能立即 POST。
     if (skipInitialSaveRef.current) {
       skipInitialSaveRef.current = false;
       return;
     }
 
-    // 在 effect 中立即复制，避免后续 state 变化影响本次快照。
+    if (skipNextAutoSaveRef.current) {
+      skipNextAutoSaveRef.current = false;
+      return;
+    }
+
     const snapshot: CashflowState = clone({
       years,
       projects,
     });
 
-    setSaved(true);
+    const deleteMonths =
+      pendingMonthDeletesRef.current.map(
+        (item) => ({
+          year: item.year,
+          month: item.month,
+        })
+      );
 
-    const savedTimer = window.setTimeout(() => {
+    pendingMonthDeletesRef.current = [];
+
+    setSaved(true);
+    setSaving(true);
+
+    const savedTimer =
+      window.setTimeout(() => {
+        setSaved(false);
+      }, 1000);
+
+    const saveTimer =
+      window.setTimeout(() => {
+        saveChainRef.current =
+          saveChainRef.current
+            .catch((previousError) => {
+              console.error(
+                "CASHFLOW-PLANNING 上一次 Supabase 保存失败：",
+                previousError
+              );
+            })
+            .then(async () => {
+              try {
+                await saveCashflowPlanning(
+                  snapshot,
+                  deleteMonths
+                );
+              } catch (saveError) {
+                console.error(
+                  "CASHFLOW-PLANNING Supabase 保存失败：",
+                  saveError
+                );
+
+                throw saveError;
+              } finally {
+                setSaving(false);
+              }
+            });
+      }, 700);
+
+    return () => {
+      window.clearTimeout(savedTimer);
+      window.clearTimeout(saveTimer);
+    };
+  }, [
+    years,
+    projects,
+    loading,
+  ]);
+
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
+      if (saving) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () =>
+      window.removeEventListener(
+        "beforeunload",
+        handleBeforeUnload
+      );
+  }, [saving]);
+
+  function saveImmediately(
+    nextYears: YearData[],
+    nextProjects: Project[]
+  ) {
+    const snapshot: CashflowState = clone({
+      years: nextYears,
+      projects: nextProjects,
+    });
+
+    const deleteMonths =
+      pendingMonthDeletesRef.current.map(
+        (item) => ({
+          year: item.year,
+          month: item.month,
+        })
+      );
+
+    pendingMonthDeletesRef.current = [];
+
+    setSaved(true);
+    setSaving(true);
+
+    window.setTimeout(() => {
       setSaved(false);
     }, 1000);
 
-    const saveTimer = window.setTimeout(() => {
-      // 严格串行保存。
-      // 如果旧请求还没结束，新请求必须等旧请求完成后再执行，
-      // 防止旧快照最后完成并覆盖最新数据。
-      saveChainRef.current = saveChainRef.current
+    saveChainRef.current =
+      saveChainRef.current
         .catch((previousError) => {
           console.error(
             "CASHFLOW-PLANNING 上一次 Supabase 保存失败：",
@@ -3466,36 +3659,34 @@ console.log(
         })
         .then(async () => {
           try {
-            await saveCashflowPlanning(snapshot);
+            await saveCashflowPlanning(
+              snapshot,
+              deleteMonths
+            );
           } catch (saveError) {
             console.error(
               "CASHFLOW-PLANNING Supabase 保存失败：",
               saveError
             );
+
             throw saveError;
+          } finally {
+            setSaving(false);
           }
         });
-    }, 700);
-
-    return () => {
-      window.clearTimeout(savedTimer);
-      window.clearTimeout(saveTimer);
-    };
-  }, [years, projects, loading]);
-
-
+  }
 
   // ==========================================================
   // 计算
   // ==========================================================
-
   const calculations =
     useMemo(
       () =>
         calculateYears(
-          years
+          years,
+          creditCardMonthlyMap
         ),
-      [years]
+      [years, creditCardMonthlyMap]
     );
 
   const calculationMap =
@@ -3516,10 +3707,6 @@ console.log(
       return map;
     }, [calculations]);
 
-  // ==========================================================
-  // 当前年份
-  // ==========================================================
-
   const visibleYears =
     selectedYear == null
       ? years
@@ -3528,10 +3715,6 @@ console.log(
             year.year ===
             selectedYear
         );
-
-  // ==========================================================
-  // 单月新增收入 / 支出
-  // ==========================================================
 
   function handleAddMonthlyItem(
     yearValue: number,
@@ -3549,10 +3732,6 @@ console.log(
 
     setYears(nextYears);
   }
-
-  // ==========================================================
-  // 新增（全局项目）
-  // ==========================================================
 
   function handleAddProject(
     role: Role
@@ -3597,10 +3776,6 @@ console.log(
     }
   }
 
-  // ==========================================================
-  // 快速填写
-  // ==========================================================
-
   function handleQuickEntry() {
     const nextYears = clone(years);
     const nextProjects = clone(projects);
@@ -3616,19 +3791,20 @@ console.log(
     setQuickEntryMessage(result.message);
   }
 
-  // ==========================================================
-  // 删除
-  // ==========================================================
-
   function handleDelete(
     item: CellItem
   ) {
+    const nextYears = clone(years);
+    const nextProjects = clone(projects);
+
     const result =
       deleteProject(
-        clone(years),
-        clone(projects),
+        nextYears,
+        nextProjects,
         item
       );
+
+    skipNextAutoSaveRef.current = true;
 
     setYears(
       result.years
@@ -3637,80 +3813,135 @@ console.log(
     setProjects(
       result.projects
     );
+
+    saveImmediately(
+      result.years,
+      result.projects
+    );
   }
 
-// ==========================================================
-// 拖拽排序：只调整当前月份、当前收入/支出的项目顺序
-// 不修改金额、项目属性或任何计算逻辑
-// ==========================================================
-function handleReorderItems(
-  yearValue: number,
-  monthValue: number,
-  role: Role,
-  activeId: string,
-  overId: string
-) {
-  const nextYears = clone(years);
-
-  const targetYear = nextYears.find(
-    (year) =>
-      year.year === yearValue
-  );
-
-  const targetMonth =
-    targetYear?.months.find(
-      (month) =>
-        month.month === monthValue
+  function handleDeleteMonth(
+    yearValue: number,
+    monthValue: number
+  ) {
+    const confirmed = window.confirm(
+      `确定删除 ${yearValue} 年 ${monthValue} 月吗？\n\n这个月份的收入、支出、现金和年金数据都会被删除。`
     );
 
-  if (!targetMonth) {
-    return;
+    if (!confirmed) {
+      return;
+    }
+
+    const nextDeleteMonths = [
+      ...pendingMonthDeletesRef.current,
+    ];
+
+    const alreadyPending =
+      nextDeleteMonths.some(
+        (item) =>
+          item.year === yearValue &&
+          item.month === monthValue
+      );
+
+    if (!alreadyPending) {
+      nextDeleteMonths.push({
+        year: yearValue,
+        month: monthValue,
+      });
+    }
+
+    pendingMonthDeletesRef.current =
+      nextDeleteMonths;
+
+    console.log(
+      "[CASHFLOW] pending month delete:",
+      pendingMonthDeletesRef.current
+    );
+
+    const nextYears = clone(years);
+
+    for (const year of nextYears) {
+      if (year.year !== yearValue) {
+        continue;
+      }
+
+      year.months =
+        year.months.filter(
+          (month) =>
+            month.month !== monthValue
+        );
+    }
+
+    skipNextAutoSaveRef.current = true;
+
+    setYears(nextYears);
+
+    saveImmediately(nextYears, projects);
   }
 
-  const list =
-    role === "income"
-      ? targetMonth.income
-      : targetMonth.expense;
-
-  const oldIndex = list.findIndex(
-    (item) =>
-      item.id === activeId
-  );
-
-  const newIndex = list.findIndex(
-    (item) =>
-      item.id === overId
-  );
-
-  if (
-    oldIndex < 0 ||
-    newIndex < 0 ||
-    oldIndex === newIndex
+  function handleReorderItems(
+    yearValue: number,
+    monthValue: number,
+    role: Role,
+    activeId: string,
+    overId: string
   ) {
-    return;
+    const nextYears = clone(years);
+
+    const targetYear = nextYears.find(
+      (year) =>
+        year.year === yearValue
+    );
+
+    const targetMonth =
+      targetYear?.months.find(
+        (month) =>
+          month.month === monthValue
+      );
+
+    if (!targetMonth) {
+      return;
+    }
+
+    const list =
+      role === "income"
+        ? targetMonth.income
+        : targetMonth.expense;
+
+    const oldIndex = list.findIndex(
+      (item) =>
+        item.id === activeId
+    );
+
+    const newIndex = list.findIndex(
+      (item) =>
+        item.id === overId
+    );
+
+    if (
+      oldIndex < 0 ||
+      newIndex < 0 ||
+      oldIndex === newIndex
+    ) {
+      return;
+    }
+
+    const reordered = arrayMove(
+      list,
+      oldIndex,
+      newIndex
+    );
+
+    if (role === "income") {
+      targetMonth.income =
+        reordered;
+    } else {
+      targetMonth.expense =
+        reordered;
+    }
+
+    setYears(nextYears);
   }
-
-  const reordered = arrayMove(
-    list,
-    oldIndex,
-    newIndex
-  );
-
-  if (role === "income") {
-    targetMonth.income =
-      reordered;
-  } else {
-    targetMonth.expense =
-      reordered;
-  }
-
-  setYears(nextYears);
-}
-
-
-  // ==========================================================
-  // 独立
-  // ==========================================================
 
   function handleToggleIndependent(
     item: CellItem
@@ -3730,10 +3961,6 @@ function handleReorderItems(
       result.projects
     );
   }
-
-  // ==========================================================
-  // 改名
-  // ==========================================================
 
   function handleRename(
     item: CellItem,
@@ -3756,180 +3983,123 @@ function handleReorderItems(
     );
   }
 
-  // ==========================================================
-  // 金额
-  // ==========================================================
+  function commitValue(
+    item: CellItem
+  ) {
+    const value =
+      Number(
+        editingValue
+          .replace(/,/g, "")
+          .trim()
+      );
 
-  
-  // ==========================================================
-// 金额修改
-// ==========================================================
-//
-// 修改一个月份后：
-//
-// 1. 如果后面没有同项目
-//    → 直接修改
-//
-// 2. 如果后面存在同项目
-//    → 弹窗询问
-//
-//    取消：
-//      只修改当前月份
-//
-//    确认同步：
-//      当前月份 + 后续同项目月份一起修改
-// ==========================================================
-function commitValue(
-  item: CellItem
-) {
-  const value =
-    Number(
-      editingValue
-        .replace(/,/g, "")
-        .trim()
-    );
+    const safeValue =
+      Number.isFinite(value)
+        ? value
+        : 0;
 
-  const safeValue =
-    Number.isFinite(value)
-      ? value
-      : 0;
+    const affectedMonths: string[] = [];
 
-  /*
-   * 找出当前月份之后，
-   * 同一个 projectId + role 的项目。
-   */
-  const affectedMonths: string[] = [];
+    for (const year of years) {
+      for (const month of year.months) {
+        const isAfter =
+          year.year > item.year ||
+          (
+            year.year === item.year &&
+            month.month > item.month
+          );
 
-  for (const year of years) {
-    for (const month of year.months) {
-      const isAfter =
-        year.year > item.year ||
-        (
-          year.year === item.year &&
-          month.month > item.month
-        );
+        if (!isAfter) {
+          continue;
+        }
 
-      if (!isAfter) {
-        continue;
-      }
+        const list =
+          item.role === "income"
+            ? month.income
+            : month.expense;
 
-      const list =
-        item.role === "income"
-          ? month.income
-          : month.expense;
+        const exists =
+          list.some(
+            (x) =>
+              x.projectId ===
+                item.projectId &&
+              x.role === item.role &&
+              !x.deleted
+          );
 
-      const exists =
-        list.some(
-          (x) =>
-            x.projectId ===
-              item.projectId &&
-            x.role === item.role &&
-            !x.deleted
-        );
-
-      if (exists) {
-        affectedMonths.push(
-          `${year.year}年${month.month}月`
-        );
+        if (exists) {
+          affectedMonths.push(
+            `${year.year}年${month.month}月`
+          );
+        }
       }
     }
+
+    setEditingId(null);
+    setEditingValue("");
+
+    if (affectedMonths.length === 0) {
+      const nextYears =
+        clone(years);
+
+      updateItemValue(
+        nextYears,
+        item,
+        safeValue,
+        false
+      );
+
+      setYears(nextYears);
+
+      return;
+    }
+
+    setPendingValueChange({
+      item,
+      value: safeValue,
+      affectedMonths,
+    });
   }
 
-  /*
-   * 关闭当前编辑状态。
-   */
-  setEditingId(null);
-  setEditingValue("");
+  function handleCancelValuePropagation() {
+    if (!pendingValueChange) {
+      return;
+    }
 
-  /*
-   * 如果没有后续月份，
-   * 不需要弹窗，直接修改。
-   */
-  if (affectedMonths.length === 0) {
     const nextYears =
       clone(years);
 
     updateItemValue(
       nextYears,
-      item,
-      safeValue,
+      pendingValueChange.item,
+      pendingValueChange.value,
       false
     );
 
     setYears(nextYears);
 
-    return;
+    setPendingValueChange(null);
   }
 
-  /*
-   * 有后续月份：
-   * 暂时不修改任何数据。
-   *
-   * 等用户在弹窗里选择：
-   *
-   * 取消
-   * 或
-   * 确认同步
-   */
-  setPendingValueChange({
-    item,
-    value: safeValue,
-    affectedMonths,
-  });
-}
+  function handleConfirmValuePropagation() {
+    if (!pendingValueChange) {
+      return;
+    }
 
-// ==========================================================
-// 取消同步
-//
-// 只修改当前月份。
-// ==========================================================
-function handleCancelValuePropagation() {
-  if (!pendingValueChange) {
-    return;
+    const nextYears =
+      clone(years);
+
+    updateItemValue(
+      nextYears,
+      pendingValueChange.item,
+      pendingValueChange.value,
+      true
+    );
+
+    setYears(nextYears);
+
+    setPendingValueChange(null);
   }
-
-  const nextYears =
-    clone(years);
-
-  updateItemValue(
-    nextYears,
-    pendingValueChange.item,
-    pendingValueChange.value,
-    false
-  );
-
-  setYears(nextYears);
-
-  setPendingValueChange(null);
-}
-
-// ==========================================================
-// 确认同步
-//
-// 当前月份 + 后续同项目月份一起修改。
-// ==========================================================
-function handleConfirmValuePropagation() {
-  if (!pendingValueChange) {
-    return;
-  }
-
-  const nextYears =
-    clone(years);
-
-  updateItemValue(
-    nextYears,
-    pendingValueChange.item,
-    pendingValueChange.value,
-    true
-  );
-
-  setYears(nextYears);
-
-  setPendingValueChange(null);
-}
-  // ==========================================================
-  // 计算结果手动修改
-  // ==========================================================
 
   function commitCalculation(
     month: MonthData,
@@ -3970,15 +4140,12 @@ function handleConfirmValuePropagation() {
     setEditingCalcValue("");
   }
 
-  // ==========================================================
-  // AI 生成
-  // ==========================================================
-
   function handleGenerateAI() {
     const prompt =
       buildAIPrompt(
         years,
-        calculations
+        calculations,
+        creditCardMonthlyMap
       );
 
     setAiText(
@@ -4010,10 +4177,6 @@ function handleConfirmValuePropagation() {
     );
   }
 
-  // ==========================================================
-  // 复制
-  // ==========================================================
-
   async function handleCopyAI() {
     if (!aiText) {
       return;
@@ -4037,17 +4200,9 @@ function handleConfirmValuePropagation() {
         1800
       );
     } catch {
-      /**
-       * 某些浏览器 clipboard API
-       * 不可用时，不报错。
-       */
       setCopied(false);
     }
   }
-
-  // ==========================================================
-  // 下载
-  // ==========================================================
 
   function handleDownloadAI() {
     if (!aiText) {
@@ -4084,10 +4239,6 @@ function handleConfirmValuePropagation() {
       url
     );
   }
-
-  // ==========================================================
-  // 复制年度计划
-  // ==========================================================
 
   function handleCopyYearRange() {
     if (copySourceYear == null) {
@@ -4167,7 +4318,8 @@ function handleConfirmValuePropagation() {
     const rebuilt = rebuildProjectLinks(sortedYears, projects);
     const withPension = ensurePensionPaymentItems(
       rebuilt.years,
-      rebuilt.projects
+      rebuilt.projects,
+      false
     );
 
     setYears(withPension.years);
@@ -4178,35 +4330,22 @@ function handleConfirmValuePropagation() {
     );
   }
 
-
-
- 
-
-
-  // ==========================================================
-  // 清除保存
-  // ==========================================================
-
- async function clearSaved() {
-  try {
-    await clearCashflowPlanning();
-    window.location.reload();
-  } catch (clearError) {
-    console.error(
-      "清除 Supabase CASHFLOW-PLANNING 失败：",
-      clearError
-    );
-    setError(
-      clearError instanceof Error
-        ? clearError.message
-        : "清除 Supabase 数据失败"
-    );
+  async function clearSaved() {
+    try {
+      await clearCashflowPlanning();
+      window.location.reload();
+    } catch (clearError) {
+      console.error(
+        "清除 Supabase CASHFLOW-PLANNING 失败：",
+        clearError
+      );
+      setError(
+        clearError instanceof Error
+          ? clearError.message
+          : "清除 Supabase 数据失败"
+      );
+    }
   }
-}
-
-  // ==========================================================
-  // Loading
-  // ==========================================================
 
   if (loading) {
     return (
@@ -4218,10 +4357,6 @@ function handleConfirmValuePropagation() {
     );
   }
 
-  // ==========================================================
-  // Error
-  // ==========================================================
-
   if (error) {
     return (
       <main className="min-h-screen bg-white p-6">
@@ -4232,18 +4367,10 @@ function handleConfirmValuePropagation() {
     );
   }
 
-  // ==========================================================
-  // 页面
-  // ==========================================================
-
   return (
     <main className="min-h-screen bg-white text-gray-900">
 
       <div className="mx-auto max-w-[1800px] px-4 py-5 md:px-6">
-
-        {/* ====================================================
-            Header
-        ==================================================== */}
 
         <div className="mb-5 flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
 
@@ -4253,7 +4380,7 @@ function handleConfirmValuePropagation() {
             </h1>
 
             <div className="mt-1 text-xs text-gray-500">
-              CASHFLOW-PLANNING · Excel 模型版
+              CASHFLOW-PLANNING · Supabase 版
             </div>
           </div>
 
@@ -4437,7 +4564,6 @@ function handleConfirmValuePropagation() {
               )}
             </div>
 
-
             <button
               type="button"
               onClick={
@@ -4448,19 +4574,17 @@ function handleConfirmValuePropagation() {
               清除保存
             </button>
 
-            {saved && (
+            {saving ? (
+              <span className="text-xs font-medium text-blue-500">
+                保存中…
+              </span>
+            ) : saved ? (
               <span className="text-xs text-gray-400">
                 已保存
               </span>
-            )}
+            ) : null}
           </div>
         </div>
-
-
-
-        {/* ====================================================
-            规则
-        ==================================================== */}
 
         <div className="mb-5 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600">
 
@@ -4500,12 +4624,15 @@ function handleConfirmValuePropagation() {
               </b>
               每个月独立填写
             </span>
+
+            <span>
+              <b>
+                还信用卡常规：
+              </b>
+              自动读取 /loan 里的信用卡分期
+            </span>
           </div>
         </div>
-
-        {/* ====================================================
-            快速填写
-        ==================================================== */}
 
         <section className="mb-5 rounded-xl border border-gray-200 bg-white p-4">
           <div className="mb-2 flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
@@ -4552,13 +4679,7 @@ function handleConfirmValuePropagation() {
           </div>
         </section>
 
-        {/* ====================================================
-            新增项目
-        ==================================================== */}
-
         <section className="mb-6 grid gap-3 lg:grid-cols-2">
-
-          {/* 收入 */}
 
           <div className="rounded-xl border border-gray-200 bg-slate-50 p-4">
 
@@ -4610,8 +4731,6 @@ function handleConfirmValuePropagation() {
               </button>
             </div>
           </div>
-
-          {/* 支出 */}
 
           <div className="rounded-xl border border-gray-200 bg-stone-50 p-4">
 
@@ -4665,10 +4784,6 @@ function handleConfirmValuePropagation() {
           </div>
         </section>
 
-        {/* ====================================================
-            年度
-        ==================================================== */}
-
         <div className="space-y-6">
 
           {visibleYears.map(
@@ -4686,8 +4801,6 @@ function handleConfirmValuePropagation() {
                   className="overflow-hidden rounded-2xl border border-gray-200 bg-white"
                 >
 
-                  {/* 年标题 */}
-
                   <div className="flex flex-col gap-2 border-b border-gray-200 bg-gray-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
 
                     <div>
@@ -4696,7 +4809,7 @@ function handleConfirmValuePropagation() {
                       </div>
 
                       <div className="text-xs text-gray-500">
-                        共 12 个月
+                         共 {year.months.length} 个月
                       </div>
                     </div>
 
@@ -4732,8 +4845,6 @@ function handleConfirmValuePropagation() {
                     </div>
                   </div>
 
-                  {/* 月份 */}
-
                   <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-4">
 
                     {year.months.map(
@@ -4751,6 +4862,9 @@ function handleConfirmValuePropagation() {
                               ?.months[
                               monthIndex
                             ]
+                          }
+                          creditCardMonthlyMap={
+                            creditCardMonthlyMap
                           }
                           editingId={
                             editingId
@@ -4773,6 +4887,9 @@ function handleConfirmValuePropagation() {
                           onDelete={
                             handleDelete
                           }
+                          onDeleteMonth={
+                             handleDeleteMonth
+                          }
                           onToggleIndependent={
                             handleToggleIndependent
                           }
@@ -4793,22 +4910,21 @@ function handleConfirmValuePropagation() {
                       )
                     )}
                   </div>
+
+                  <YearSummaryTable
+                    year={year}
+                    creditCardMonthlyMap={creditCardMonthlyMap}
+                  />
                 </section>
               );
             }
           )}
         </div>
 
-        {/* ====================================================
-            AI CFO
-        ==================================================== */}
-
         <section
           id="ai-analysis-box"
           className="mt-8 overflow-hidden rounded-2xl border border-gray-200 bg-white"
         >
-
-          {/* AI Header */}
 
           <div className="border-b border-gray-200 bg-gray-50 px-5 py-4">
 
@@ -4836,8 +4952,6 @@ function handleConfirmValuePropagation() {
               </button>
             </div>
           </div>
-
-          {/* AI 内容 */}
 
           <div className="p-5">
 
@@ -4920,14 +5034,10 @@ function handleConfirmValuePropagation() {
           </div>
         </section>
 
-        {/* ====================================================
-            金额同步确认弹窗
-        ==================================================== */}
         {pendingValueChange && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 px-4">
             <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white shadow-2xl">
-              
-              {/* Header */}
+
               <div className="border-b border-gray-200 px-5 py-4">
                 <div className="text-base font-semibold text-gray-900">
                   确认同步修改？
@@ -4939,7 +5049,6 @@ function handleConfirmValuePropagation() {
                 </div>
               </div>
 
-              {/* Content */}
               <div className="px-5 py-4">
 
                 <div className="rounded-xl bg-gray-50 px-4 py-3">
@@ -4997,7 +5106,6 @@ function handleConfirmValuePropagation() {
                 </div>
               </div>
 
-              {/* Buttons */}
               <div className="flex justify-end gap-2 border-t border-gray-200 px-5 py-4">
                 <button
                   type="button"

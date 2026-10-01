@@ -20,9 +20,14 @@ import {
   updateFixedIncomeGroupOrder,
   updateFixedIncomeAssetGroup,
   updateFixedIncomeAssetOrder,
+  getFixedIncomeAssetCnyAmount,
+  getFixedIncomeAssetDailyInterest,
+  getFixedIncomeAssetAnnualInterest,
   type FixedIncomeAsset,
   type FixedIncomeGroup,
   type FixedIncomeType,
+  type FixedIncomeCurrency,
+  getDashboardUsdCnyRate
 } from "@/lib/fixed-income";
 
 import TopBar from "@/components/TopBar";
@@ -37,6 +42,7 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+// 人民币金额
 function money(value: number): string {
   return value.toLocaleString("zh-CN", {
     style: "currency",
@@ -45,6 +51,7 @@ function money(value: number): string {
   });
 }
 
+// 人民币金额，固定 2 位
 function moneyExact(value: number): string {
   return value.toLocaleString("zh-CN", {
     style: "currency",
@@ -54,27 +61,17 @@ function moneyExact(value: number): string {
   });
 }
 
-function getDailyInterest(
-  asset: FixedIncomeAsset
-): number {
-  if (!asset.auto_interest) {
-    return 0;
-  }
-
-  const amount = toNumber(asset.amount);
-  const rate = toNumber(asset.interest_rate);
-
-  if (amount <= 0 || rate <= 0) {
-    return 0;
-  }
-
-  return (amount * rate) / 100 / 365;
-}
-
-function getAnnualInterest(
-  asset: FixedIncomeAsset
-): number {
-  return getDailyInterest(asset) * 365;
+// 原币种金额
+function moneyByCurrency(
+  value: number,
+  currency: FixedIncomeCurrency
+): string {
+  return value.toLocaleString("zh-CN", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 // =====================================================
@@ -101,8 +98,12 @@ export default function FixedIncomePage() {
   // 数据
   // ===================================================
 
+const [usdCnyRate, setUsdCnyRate] =
+  useState<number>(0);
+
   const [assets, setAssets] =
     useState<FixedIncomeAsset[]>([]);
+
 
   const [groups, setGroups] =
     useState<FixedIncomeGroup[]>([]);
@@ -140,6 +141,19 @@ export default function FixedIncomePage() {
 
   const [amount, setAmount] =
     useState("");
+
+  // ===================================================
+  // 币种
+  // ===================================================
+
+  const [currency, setCurrency] =
+    useState<FixedIncomeCurrency>("CNY");
+
+  const [market,setMarket] =
+  useState<"CN" | "HK">("CN");
+
+  const [exchangeRate, setExchangeRate] =
+    useState("6.7071");
 
   const [interestRate, setInterestRate] =
     useState("");
@@ -208,42 +222,124 @@ export default function FixedIncomePage() {
   // 加载
   // ===================================================
 
-  async function loadData() {
-    try {
-      setLoading(true);
-      setError("");
+async function loadData() {
 
-      const [assetData, groupData] =
-        await Promise.all([
-          getFixedIncomeAssets(),
-          getFixedIncomeGroups(),
-        ]);
+  try {
 
-      // 排序完全来自 Supabase
-      setAssets(assetData);
+    setLoading(true);
 
-      setGroups(
-        [...groupData].sort(
-          (a, b) =>
-            toNumber(a.sort_order) -
-            toNumber(b.sort_order)
-        )
-      );
-    } catch (err) {
-      console.error(
-        "加载固收数据失败:",
-        err
-      );
+    setError("");
 
-      setError("加载固收数据失败");
-    } finally {
-      setLoading(false);
-    }
+
+    const [
+      assetData,
+      groupData,
+      rate,
+    ] =
+      await Promise.all([
+
+        getFixedIncomeAssets(),
+
+        getFixedIncomeGroups(),
+
+        getDashboardUsdCnyRate(),
+
+      ]);
+
+
+
+    setAssets(
+
+      assetData.map(
+
+        (asset) => ({
+
+          ...asset,
+
+          // 地区优先级：
+          // 1. 数据库 market
+          // 2. 老数据按币种回退
+          market:
+            asset.market === "HK" ||
+            asset.market === "CN"
+              ? asset.market
+              : asset.currency === "USD"
+                ? "HK"
+                : "CN",
+
+        })
+
+      )
+
+    );
+
+
+
+    setUsdCnyRate(
+      rate
+    );
+
+
+
+    setGroups(
+
+      [...groupData].sort(
+
+        (
+          a,
+          b
+        ) =>
+
+          toNumber(
+            a.sort_order
+          )
+
+          -
+
+          toNumber(
+            b.sort_order
+          )
+
+      )
+
+    );
+
+
+  } catch (err) {
+
+
+    console.error(
+
+      "加载固收数据失败:",
+
+      err
+
+    );
+
+
+    setError(
+
+      "加载固收数据失败"
+
+    );
+
+
+  } finally {
+
+
+    setLoading(false);
+
+
   }
 
-  useEffect(() => {
-    void loadData();
-  }, []);
+}
+
+
+useEffect(() => {
+
+  void loadData();
+
+}, []);
 
   // ===================================================
   // 资产拖动
@@ -253,7 +349,6 @@ export default function FixedIncomePage() {
     event: DragEvent,
     id: string
   ) {
-    // 如果正在拖组，不允许启动资产拖动
     if (draggingGroupId) {
       event.preventDefault();
       return;
@@ -270,7 +365,6 @@ export default function FixedIncomePage() {
       id
     );
 
-    // 同时写 text/plain，保证浏览器 drop 时稳定
     event.dataTransfer.setData(
       "text/plain",
       `asset:${id}`
@@ -291,7 +385,6 @@ export default function FixedIncomePage() {
       return;
     }
 
-    // 如果正在拖组，不响应资产排序
     if (draggingGroupId) {
       return;
     }
@@ -326,7 +419,6 @@ export default function FixedIncomePage() {
     event.preventDefault();
     event.stopPropagation();
 
-    // 如果是组拖拽，不处理资产 drop
     if (draggingGroupId) {
       return;
     }
@@ -375,7 +467,6 @@ export default function FixedIncomePage() {
       return;
     }
 
-    // 不允许跨组直接排序
     if (
       (source.group_id ?? null) !==
       (target.group_id ?? null)
@@ -435,10 +526,6 @@ export default function FixedIncomePage() {
       movedAsset
     );
 
-    /*
-     * 当前组在整个 assets 中重新生成顺序。
-     * 其他组完全不动。
-     */
     const originalGroupIndexes =
       assets
         .map(
@@ -528,7 +615,6 @@ export default function FixedIncomePage() {
     event.preventDefault();
     event.stopPropagation();
 
-    // 正在拖组时，完全不处理资产移动
     if (draggingGroupId) {
       return;
     }
@@ -549,7 +635,6 @@ export default function FixedIncomePage() {
     event.preventDefault();
     event.stopPropagation();
 
-    // 正在拖组时不能移动资产
     if (draggingGroupId) {
       return;
     }
@@ -610,19 +695,18 @@ export default function FixedIncomePage() {
         );
 
       setAssets(
-        (prev) => {
-          const without =
-            prev.filter(
-              (asset) =>
-                asset.id !== sourceId
-            );
-
-          return [
-            ...without,
-            updated,
-          ];
-        }
-      );
+  (prev) =>
+    prev.map(
+      (asset) =>
+        asset.id === sourceId
+          ? {
+              ...asset,
+              ...updated,
+              group_id: groupId,
+            }
+          : asset
+    )
+);
 
       const targetName =
         groupId === null
@@ -660,17 +744,11 @@ export default function FixedIncomePage() {
     event: DragEvent<HTMLDivElement>,
     groupId: string
   ) {
-    /*
-     * 非常重要：
-     * 组拖拽只从 ⠿ 手柄启动。
-     */
-
     event.stopPropagation();
 
     setDraggingGroupId(groupId);
     setDragOverGroupOrderId(null);
 
-    // 清除资产拖拽状态
     setDraggingAssetId(null);
     setDragOverAssetId(null);
     setDragOverGroupId(null);
@@ -678,14 +756,6 @@ export default function FixedIncomePage() {
     event.dataTransfer.effectAllowed =
       "move";
 
-    /*
-     * 同时设置两个 MIME 类型。
-     *
-     * Chrome / Edge 对自定义 MIME 有时会出现
-     * drop 事件拿不到数据的问题。
-     *
-     * text/plain 可以保证稳定。
-     */
     event.dataTransfer.setData(
       "text/fixed-income-group",
       groupId
@@ -701,31 +771,17 @@ export default function FixedIncomePage() {
     event: DragEvent<HTMLDivElement>,
     groupId: string
   ) {
-    /*
-     * 必须 preventDefault，
-     * 否则浏览器不会允许 drop。
-     */
     event.preventDefault();
     event.stopPropagation();
 
-    /*
-     * 如果正在拖资产，
-     * 绝对不能触发组排序。
-     */
     if (draggingAssetId) {
       return;
     }
 
-    /*
-     * 没有正在拖组时不处理。
-     */
     if (!draggingGroupId) {
       return;
     }
 
-    /*
-     * 拖到自己身上没有意义。
-     */
     if (
       draggingGroupId === groupId
     ) {
@@ -769,10 +825,6 @@ export default function FixedIncomePage() {
     event.preventDefault();
     event.stopPropagation();
 
-    /*
-     * 先从 state 取，
-     * state 没有时再从 dataTransfer 取。
-     */
     let sourceId =
       draggingGroupId ||
       event.dataTransfer.getData(
@@ -802,10 +854,6 @@ export default function FixedIncomePage() {
       return;
     }
 
-    /*
-     * 如果实际是资产拖拽，
-     * 这里直接退出。
-     */
     if (draggingAssetId) {
       handleGroupDragEnd();
       return;
@@ -831,9 +879,6 @@ export default function FixedIncomePage() {
       return;
     }
 
-    /*
-     * 生成新的组顺序。
-     */
     const next =
       [...groups];
 
@@ -843,11 +888,6 @@ export default function FixedIncomePage() {
         1
       );
 
-    /*
-     * 注意：
-     * source 在 target 前面时，
-     * 删除 source 后 target index - 1。
-     */
     const adjustedTargetIndex =
       sourceIndex <
       targetIndex
@@ -860,10 +900,6 @@ export default function FixedIncomePage() {
       movedGroup
     );
 
-    /*
-     * 从 0 开始重新编号。
-     * 这就是 Supabase 中最终保存的 sort_order。
-     */
     const normalized =
       next.map(
         (group, index) => ({
@@ -872,9 +908,6 @@ export default function FixedIncomePage() {
         })
       );
 
-    /*
-     * 页面先立即变化。
-     */
     setGroups(normalized);
 
     handleGroupDragEnd();
@@ -883,9 +916,6 @@ export default function FixedIncomePage() {
       setError("");
       setMessage("");
 
-      /*
-       * 真正保存到 Supabase。
-       */
       await updateFixedIncomeGroupOrder(
         normalized
       );
@@ -903,10 +933,6 @@ export default function FixedIncomePage() {
         "保存分组顺序失败"
       );
 
-      /*
-       * 如果数据库保存失败，
-       * 恢复成数据库实际顺序。
-       */
       await loadData();
     }
   }
@@ -954,97 +980,303 @@ export default function FixedIncomePage() {
   // 总统计
   // ===================================================
 
-  const totalAmount =
-    useMemo(
-      () =>
-        assets.reduce(
-          (sum, asset) =>
-            sum +
-            toNumber(
-              asset.amount
-            ),
-          0
-        ),
-      [assets]
-    );
+const cnFixedIncomeTotal =
+  useMemo(() => {
 
+    return assets
+      .filter(
+        asset =>
+          asset.market === "CN"
+      )
+      .reduce(
+        (
+          sum,
+          asset
+        ) =>
+          sum +
+          getFixedIncomeAssetCnyAmount(
+            asset,
+            usdCnyRate
+          ),
+        0
+      );
+
+  }, [
+    assets,
+    usdCnyRate
+  ]);
+
+
+
+
+const hkFixedIncomeTotal =
+  useMemo(() => {
+
+    return assets
+      .filter(
+        (asset) =>
+          asset.market === "HK"
+      )
+      .reduce(
+        (
+          sum,
+          asset
+        ) => {
+
+          // 香港 CNY 资产，不强行套美元汇率
+          if (asset.currency === "CNY") {
+            return (
+              sum +
+              getFixedIncomeAssetCnyAmount(
+                asset
+              )
+            );
+          }
+
+          // 香港 USD 资产，缺汇率时用 dashboard 汇率兜底
+          return (
+            sum +
+            getFixedIncomeAssetCnyAmount(
+              {
+                ...asset,
+                exchange_rate:
+                  asset.exchange_rate ??
+                  usdCnyRate,
+              }
+            )
+          );
+        },
+        0
+      );
+
+  }, [
+    assets,
+    usdCnyRate
+  ]);
+
+ const totalAmount =
+  useMemo(
+    () =>
+      assets.reduce(
+        (sum, asset) => {
+
+          if (asset.currency === "CNY") {
+            return (
+              sum +
+              getFixedIncomeAssetCnyAmount(
+                asset
+              )
+            );
+          }
+
+          return (
+            sum +
+            getFixedIncomeAssetCnyAmount(
+              {
+                ...asset,
+                exchange_rate:
+                  asset.exchange_rate ??
+                  usdCnyRate,
+              }
+            )
+          );
+        },
+        0
+      ),
+    [
+      assets,
+      usdCnyRate
+    ]
+  );
+
+  /*
+   * 每日利息统一折算人民币。
+   *
+   * 香港 USD 资产缺汇率时用 dashboard 汇率兜底。
+   */
   const totalDailyInterest =
     useMemo(
       () =>
         assets.reduce(
-          (sum, asset) =>
-            sum +
-            getDailyInterest(
-              asset
-            ),
+          (sum, asset) => {
+
+            if (asset.currency === "CNY") {
+              return (
+                sum +
+                getFixedIncomeAssetDailyInterest(
+                  asset
+                )
+              );
+            }
+
+            return (
+              sum +
+              getFixedIncomeAssetDailyInterest(
+                {
+                  ...asset,
+                  exchange_rate:
+                    asset.exchange_rate ??
+                    usdCnyRate,
+                }
+              )
+            );
+          },
           0
         ),
-      [assets]
+      [assets, usdCnyRate]
     );
 
   const totalAnnualInterest =
     useMemo(
       () =>
-        totalDailyInterest * 365,
-      [totalDailyInterest]
+        assets.reduce(
+          (sum, asset) => {
+
+            if (asset.currency === "CNY") {
+              return (
+                sum +
+                getFixedIncomeAssetAnnualInterest(
+                  asset
+                )
+              );
+            }
+
+            return (
+              sum +
+              getFixedIncomeAssetAnnualInterest(
+                {
+                  ...asset,
+                  exchange_rate:
+                    asset.exchange_rate ??
+                    usdCnyRate,
+                }
+              )
+            );
+          },
+          0
+        ),
+      [assets, usdCnyRate]
     );
 
-  const autoInterestAssets =
-    useMemo(
-      () =>
-        assets.filter(
-          (asset) =>
-            asset.auto_interest
-        ),
-      [assets]
-    );
+const autoInterestAssets = useMemo(
+  () =>
+    (assets || []).filter(
+      (asset): asset is NonNullable<typeof asset> =>
+        !!asset && !!asset.auto_interest
+    ),
+  [assets]
+);
 
   // ===================================================
   // 已选统计
   // ===================================================
 
-  const selectedAssets =
-    useMemo(
-      () =>
-        assets.filter(
-          (asset) =>
-            selectedIds.includes(
-              asset.id
-            )
-        ),
-      [assets, selectedIds]
-    );
+ const selectedAssets = useMemo(
+  () =>
+    assets.filter(
+      (asset) =>
+        asset &&
+        asset.id &&
+        selectedIds.includes(asset.id)
+    ),
+  [assets, selectedIds]
+);
 
   const selectedAmount =
     useMemo(
       () =>
         selectedAssets.reduce(
-          (sum, asset) =>
-            sum +
-            toNumber(
-              asset.amount
-            ),
+          (sum, asset) => {
+
+            if (asset.currency === "CNY") {
+              return (
+                sum +
+                getFixedIncomeAssetCnyAmount(
+                  asset
+                )
+              );
+            }
+
+            return (
+              sum +
+              getFixedIncomeAssetCnyAmount(
+                {
+                  ...asset,
+                  exchange_rate:
+                    asset.exchange_rate ??
+                    usdCnyRate,
+                }
+              )
+            );
+          },
           0
         ),
-      [selectedAssets]
+      [selectedAssets, usdCnyRate]
     );
 
   const selectedDailyInterest =
     useMemo(
       () =>
         selectedAssets.reduce(
-          (sum, asset) =>
-            sum +
-            getDailyInterest(
-              asset
-            ),
+          (sum, asset) => {
+
+            if (asset.currency === "CNY") {
+              return (
+                sum +
+                getFixedIncomeAssetDailyInterest(
+                  asset
+                )
+              );
+            }
+
+            return (
+              sum +
+              getFixedIncomeAssetDailyInterest(
+                {
+                  ...asset,
+                  exchange_rate:
+                    asset.exchange_rate ??
+                    usdCnyRate,
+                }
+              )
+            );
+          },
           0
         ),
-      [selectedAssets]
+      [selectedAssets, usdCnyRate]
     );
 
   const selectedAnnualInterest =
-    selectedDailyInterest * 365;
+    useMemo(
+      () =>
+        selectedAssets.reduce(
+          (sum, asset) => {
+
+            if (asset.currency === "CNY") {
+              return (
+                sum +
+                getFixedIncomeAssetAnnualInterest(
+                  asset
+                )
+              );
+            }
+
+            return (
+              sum +
+              getFixedIncomeAssetAnnualInterest(
+                {
+                  ...asset,
+                  exchange_rate:
+                    asset.exchange_rate ??
+                    usdCnyRate,
+                }
+              )
+            );
+          },
+          0
+        ),
+      [selectedAssets, usdCnyRate]
+    );
 
   // ===================================================
   // 分组
@@ -1066,24 +1298,25 @@ export default function FixedIncomePage() {
     );
 
   function getGroupAssets(
-    groupId: string | null
-  ) {
-    return assets
-      .filter(
-        (asset) =>
-          (asset.group_id ?? null) ===
-          groupId
-      )
-      .sort(
-        (a, b) =>
-          toNumber(
-            a.sort_order
-          ) -
-          toNumber(
-            b.sort_order
-          )
-      );
-  }
+  groupId: string | null
+) {
+  return (assets ?? [])
+    .filter(Boolean)
+    .filter(
+      (asset) =>
+        (asset.group_id ?? null) ===
+        groupId
+    )
+    .sort(
+      (a, b) =>
+        toNumber(
+          a.sort_order
+        ) -
+        toNumber(
+          b.sort_order
+        )
+    );
+}
 
   function getGroupStats(
     groupId: string | null
@@ -1093,28 +1326,95 @@ export default function FixedIncomePage() {
         groupId
       );
 
+    /*
+     * 分组金额全部转换成人民币。
+     */
     const amount =
       groupAssets.reduce(
-        (sum, asset) =>
-          sum +
-          toNumber(
-            asset.amount
-          ),
+        (sum, asset) => {
+
+          if (asset.currency === "CNY") {
+            return (
+              sum +
+              getFixedIncomeAssetCnyAmount(
+                asset
+              )
+            );
+          }
+
+          return (
+            sum +
+            getFixedIncomeAssetCnyAmount(
+              {
+                ...asset,
+                exchange_rate:
+                  asset.exchange_rate ??
+                  usdCnyRate,
+              }
+            )
+          );
+        },
         0
       );
 
+    /*
+     * 分组每日利息全部转换成人民币。
+     */
     const dailyInterest =
       groupAssets.reduce(
-        (sum, asset) =>
-          sum +
-          getDailyInterest(
-            asset
-          ),
+        (sum, asset) => {
+
+          if (asset.currency === "CNY") {
+            return (
+              sum +
+              getFixedIncomeAssetDailyInterest(
+                asset
+              )
+            );
+          }
+
+          return (
+            sum +
+            getFixedIncomeAssetDailyInterest(
+              {
+                ...asset,
+                exchange_rate:
+                  asset.exchange_rate ??
+                  usdCnyRate,
+              }
+            )
+          );
+        },
         0
       );
 
     const annualInterest =
-      dailyInterest * 365;
+      groupAssets.reduce(
+        (sum, asset) => {
+
+          if (asset.currency === "CNY") {
+            return (
+              sum +
+              getFixedIncomeAssetAnnualInterest(
+                asset
+              )
+            );
+          }
+
+          return (
+            sum +
+            getFixedIncomeAssetAnnualInterest(
+              {
+                ...asset,
+                exchange_rate:
+                  asset.exchange_rate ??
+                  usdCnyRate,
+              }
+            )
+          );
+        },
+        0
+      );
 
     const percentage =
       totalAmount > 0
@@ -1142,6 +1442,13 @@ export default function FixedIncomePage() {
     setName("");
     setInstitution("");
     setAmount("");
+
+    // 默认人民币
+    setCurrency("CNY");
+
+    // 默认汇率
+    setExchangeRate("6.7071");
+
     setInterestRate("");
     setAutoInterest(false);
     setInterestDate("");
@@ -1150,67 +1457,105 @@ export default function FixedIncomePage() {
   }
 
   function startEdit(
-    asset: FixedIncomeAsset
-  ) {
-    setEditingId(asset.id);
+  asset: FixedIncomeAsset
+) {
+  setEditingId(asset.id);
 
-    setType(
-      asset.type ||
-        "固收理财"
-    );
+setType(
+  ASSET_TYPES.includes(
+    asset.type as FixedIncomeType
+  )
+    ? (asset.type as FixedIncomeType)
+    : "固收理财"
+);
 
-    setName(
-      asset.name || ""
-    );
+  setName(
+    asset.name || ""
+  );
 
-    setInstitution(
-      asset.institution || ""
-    );
+  setInstitution(
+    asset.institution || ""
+  );
 
-    setAmount(
-      String(
-        asset.amount ?? ""
-      )
-    );
+  setAmount(
+    String(
+      asset.amount ?? ""
+    )
+  );
 
-    setInterestRate(
-      asset.interest_rate ===
-        null ||
-      asset.interest_rate ===
-        undefined
-        ? ""
-        : String(
-            asset.interest_rate
-          )
-    );
+  /*
+   * 读取地区
+   *
+   * 优先级：
+   * 1. 数据库 market
+   * 2. 老数据按币种回退
+   */
+  setMarket(
+    asset.market === "HK"
+      ? "HK"
+      : asset.market === "CN"
+        ? "CN"
+        : asset.currency === "USD"
+          ? "HK"
+          : "CN"
+  );
 
-    setAutoInterest(
-      Boolean(
-        asset.auto_interest
-      )
-    );
+  /*
+   * 读取币种
+   */
+  setCurrency(
+    asset.currency === "USD"
+      ? "USD"
+      : "CNY"
+  );
 
-    setInterestDate(
-      asset.interest_date ||
-        ""
-    );
+  /*
+   * 编辑时读取原来的汇率
+   */
+  setExchangeRate(
+    asset.exchange_rate == null
+      ? "6.7071"
+      : String(
+          asset.exchange_rate
+        )
+  );
 
-    setNote(
-      asset.note || ""
-    );
+  setInterestRate(
+    asset.interest_rate === null ||
+    asset.interest_rate === undefined
+      ? ""
+      : String(
+          asset.interest_rate
+        )
+  );
 
-    setAssetGroupId(
-      asset.group_id ?? null
-    );
+  setAutoInterest(
+    Boolean(
+      asset.auto_interest
+    )
+  );
 
-    setMessage("");
-    setError("");
+  setInterestDate(
+    asset.interest_date ||
+      ""
+  );
 
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-  }
+  setNote(
+    asset.note || ""
+  );
+
+  setAssetGroupId(
+    asset.group_id ?? null
+  );
+
+  setMessage("");
+  setError("");
+
+  window.scrollTo({
+    top: 0,
+    behavior: "smooth",
+  });
+}
 
   async function handleSave() {
     setMessage("");
@@ -1235,6 +1580,51 @@ export default function FixedIncomePage() {
       return;
     }
 
+    /*
+     * USD 必须输入有效汇率。
+     */
+    const exchangeRateNumber =
+      currency === "USD"
+        ? toNumber(
+            exchangeRate
+          )
+        : null;
+
+    if (
+      currency === "USD" &&
+      (!exchangeRateNumber ||
+        exchangeRateNumber <= 0)
+    ) {
+      setError(
+        "请输入正确的 USD/CNY 汇率"
+      );
+
+      return;
+    }
+
+    /*
+     * 年利率如果填写了，
+     * 必须不能小于 0。
+     */
+    const interestRateNumber =
+      interestRate.trim() === ""
+        ? null
+        : toNumber(
+            interestRate
+          );
+
+    if (
+      interestRateNumber !==
+        null &&
+      interestRateNumber < 0
+    ) {
+      setError(
+        "年利率不能小于 0"
+      );
+
+      return;
+    }
+
     try {
       setSaving(true);
 
@@ -1244,21 +1634,37 @@ export default function FixedIncomePage() {
         institution:
           institution.trim() ||
           undefined,
+
         amount: amountNumber,
+         
+        market,
+        /*
+         * 币种
+         */
+        currency,
+
+        /*
+         * USD 保存汇率。
+         * CNY 为 null。
+         */
+        exchange_rate:
+          currency === "USD"
+            ? exchangeRateNumber
+            : null,
+
         interest_rate:
-          interestRate.trim() ===
-          ""
-            ? null
-            : toNumber(
-                interestRate
-              ),
+          interestRateNumber,
+
         auto_interest:
           autoInterest,
+
         interest_date:
           interestDate || null,
+
         note:
           note.trim() ||
           undefined,
+
         group_id:
           assetGroupId,
       };
@@ -1530,7 +1936,7 @@ export default function FixedIncomePage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <TopBar title="固收资产"/>
+      <TopBar title="固收资产" />
 
       <main className="mx-auto max-w-7xl px-6 py-6">
 
@@ -1544,7 +1950,7 @@ export default function FixedIncomePage() {
           </h1>
 
           <p className="mt-1 text-sm text-gray-500">
-            自定义分组管理固收资产
+            自定义分组管理固收资产 · CNY / USD 均支持，页面统计统一折算人民币
           </p>
         </div>
 
@@ -1570,35 +1976,54 @@ export default function FixedIncomePage() {
 
         <div className="mb-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
 
-          <StatCard
-            label="固收总资产"
-            value={money(
-              totalAmount
-            )}
-            hint="全部固收资产"
-          />
+         <StatCard
+  label="固收总资产"
+  value={money(
+    totalAmount
+  )}
+  hint="全部固收资产 · 已统一折算人民币"
+/>
 
-          <StatCard
-            label="固收资产"
-            value={`${assets.length} 笔`}
-            hint={`自定义分组 ${groups.length} 个`}
-          />
 
-          <StatCard
-            label="今日预计利息"
-            value={moneyExact(
-              totalDailyInterest
-            )}
-            valueClassName="text-green-600"
-          />
+<StatCard
+  label="大陆固收"
+  value={money(
+    cnFixedIncomeTotal
+  )}
+  hint="中国大陆固收资产"
+/>
 
+
+<StatCard
+  label="香港固收"
+  value={money(
+    hkFixedIncomeTotal
+  )}
+  hint="香港固收资产 · 已折算人民币"
+/>
+
+
+<StatCard
+  label="固收资产"
+  value={`${assets.length} 笔`}
+  hint={`自定义分组 ${groups.length} 个`}
+/>
+
+
+<StatCard
+  label="今日预计利息"
+  value={moneyExact(
+    totalDailyInterest
+  )}
+  valueClassName="text-red-600"
+/>
           <StatCard
             label="年预计利息"
             value={money(
               totalAnnualInterest
             )}
             hint={`自动计息 ${autoInterestAssets.length} 笔`}
-            valueClassName="text-green-600"
+            valueClassName="text-red-600"
           />
 
         </div>
@@ -1750,12 +2175,6 @@ export default function FixedIncomePage() {
                       key={
                         group.id
                       }
-
-                      /*
-                       * =================================================
-                       * 组排序 Drop Zone
-                       * =================================================
-                       */
                       onDragEnter={(
                         event
                       ) =>
@@ -1780,7 +2199,6 @@ export default function FixedIncomePage() {
                           group.id
                         )
                       }
-
                       className={`rounded-lg border bg-white transition ${
                         orderDragOver
                           ? "border-gray-500 bg-gray-50"
@@ -1800,10 +2218,6 @@ export default function FixedIncomePage() {
 
                         <div
                           draggable
-
-                          /*
-                           * 只允许这个 ⠿ 启动组拖动。
-                           */
                           onDragStart={(
                             event
                           ) => {
@@ -1812,21 +2226,14 @@ export default function FixedIncomePage() {
                               group.id
                             );
                           }}
-
                           onDragEnd={
                             handleGroupDragEnd
                           }
-
-                          /*
-                           * 防止手柄的 drag 事件
-                           * 被父级 / 其他区域干扰。
-                           */
                           onMouseDown={(
                             event
                           ) => {
                             event.stopPropagation();
                           }}
-
                           className="cursor-grab select-none text-lg text-gray-400 active:cursor-grabbing"
                           title="拖动调整组的位置"
                         >
@@ -1865,7 +2272,7 @@ export default function FixedIncomePage() {
 
                             <span>
                               今日：
-                              <strong className="ml-1 text-green-600">
+                              <strong className="ml-1 text-red-600">
                                 {moneyExact(
                                   stats.dailyInterest
                                 )}
@@ -1874,7 +2281,7 @@ export default function FixedIncomePage() {
 
                             <span>
                               年利息：
-                              <strong className="ml-1 text-green-600">
+                              <strong className="ml-1 text-red-600">
                                 {money(
                                   stats.annualInterest
                                 )}
@@ -2026,7 +2433,64 @@ export default function FixedIncomePage() {
               />
             </FormField>
 
-            <FormField label="资产金额">
+
+<FormField label="地区">
+
+<select
+  value={market}
+  onChange={(event)=>
+    setMarket(
+      event.target.value as "CN" | "HK"
+    )
+  }
+  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+>
+
+<option value="CN">
+🇨🇳 大陆
+</option>
+
+<option value="HK">
+🇭🇰 香港
+</option>
+
+</select>
+
+</FormField>
+            {/* =================================================
+                币种
+            ================================================= */}
+
+            <FormField label="币种">
+              <select
+                value={currency}
+                onChange={(
+                  event
+                ) =>
+                  setCurrency(
+                    event.target
+                      .value as FixedIncomeCurrency
+                  )
+                }
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+              >
+                <option value="CNY">
+                  CNY 人民币
+                </option>
+
+                <option value="USD">
+                  USD 美元
+                </option>
+              </select>
+            </FormField>
+
+            {/* =================================================
+                资产金额
+            ================================================= */}
+
+            <FormField
+              label={`资产金额（${currency}）`}
+            >
               <input
                 value={
                   amount
@@ -2041,10 +2505,46 @@ export default function FixedIncomePage() {
                 type="number"
                 min="0"
                 step="0.01"
-                placeholder="0.00"
+                placeholder={
+                  currency ===
+                  "USD"
+                    ? "例如：10000"
+                    : "0.00"
+                }
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
               />
             </FormField>
+
+            {/* =================================================
+                USD 汇率
+            ================================================= */}
+
+            {currency ===
+              "USD" && (
+              <FormField label="USD/CNY 汇率">
+                <input
+                  value={
+                    exchangeRate
+                  }
+                  onChange={(
+                    event
+                  ) =>
+                    setExchangeRate(
+                      event.target.value
+                    )
+                  }
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  placeholder="例如：6.7071"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                />
+
+                <div className="mt-1 text-[11px] text-gray-400">
+                  页面统计将按此汇率折算成人民币
+                </div>
+              </FormField>
+            )}
 
             <FormField label="年利率 %">
               <input
@@ -2168,6 +2668,40 @@ export default function FixedIncomePage() {
 
           </div>
 
+          {/* =================================================
+              USD 预览
+          ================================================= */}
+
+          {currency ===
+            "USD" &&
+            toNumber(amount) >
+              0 &&
+            toNumber(
+              exchangeRate
+            ) > 0 && (
+              <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+                当前资产：
+                {moneyByCurrency(
+                  toNumber(
+                    amount
+                  ),
+                  "USD"
+                )}
+                {" → "}
+                折合人民币{" "}
+                <strong>
+                  {money(
+                    toNumber(
+                      amount
+                    ) *
+                      toNumber(
+                        exchangeRate
+                      )
+                  )}
+                </strong>
+              </div>
+            )}
+
           <div className="mt-5 flex gap-3">
 
             <button
@@ -2218,7 +2752,7 @@ export default function FixedIncomePage() {
               </div>
 
               <div className="mt-1 text-xs text-gray-500">
-                勾选下面的资产后自动统计
+                勾选下面的资产后自动统计，USD 自动折算人民币
               </div>
 
             </div>
@@ -2281,7 +2815,7 @@ export default function FixedIncomePage() {
                 已选年预计利息
               </div>
 
-              <div className="mt-1 text-xl font-bold text-green-600">
+              <div className="mt-1 text-xl font-bold text-red-600">
                 {money(
                   selectedAnnualInterest
                 )}
@@ -2349,6 +2883,10 @@ export default function FixedIncomePage() {
               dragOverGroupId={
                 dragOverGroupId
               }
+
+              usdCnyRate={
+                usdCnyRate
+              }
               onToggleSelected={
                 toggleSelected
               }
@@ -2412,6 +2950,9 @@ export default function FixedIncomePage() {
                   }
                   dragOverGroupId={
                     dragOverGroupId
+                  }
+                  usdCnyRate={
+                    usdCnyRate
                   }
                   onToggleSelected={
                     toggleSelected
@@ -2547,6 +3088,8 @@ type GroupAssetSectionProps = {
 
   dragOverGroupId: string | null;
 
+  usdCnyRate: number;
+
   onToggleSelected: (
     id: string
   ) => void;
@@ -2602,6 +3145,7 @@ function GroupAssetSection({
   draggingAssetId,
   dragOverAssetId,
   dragOverGroupId,
+  usdCnyRate,
   onToggleSelected,
   onEdit,
   onDelete,
@@ -2637,10 +3181,10 @@ function GroupAssetSection({
           groupId
         )
       }
-      className={`rounded-xl border bg-white p-4 shadow-sm transition ${
-        isGroupDropTarget
-          ? "border-gray-500 bg-gray-50"
-          : "border-gray-200"
+      className={`rounded-xl border p-4 shadow-sm transition ${
+        title.includes("香港固收")
+          ? "bg-[#FFCC99] border-[#FFCC99]"
+          : "bg-[#FFDD66] border-[#FFDD66]"
       }`}
     >
 
@@ -2667,18 +3211,25 @@ function GroupAssetSection({
 
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
 
-            <span>
-              金额：
-              <strong className="ml-1 text-gray-700">
-                {money(
-                  stats.amount
-                )}
-              </strong>
-            </span>
+          
+  <span>
+  金额：
+  <strong
+    className={`ml-1 ${
+      stats.amount > 50000
+        ? "text-red-500 text-lg font-semibold"
+        : stats.amount > 20000
+        ? "text-[#FFCC66] text-base font-medium"
+        : "text-gray-700 text-sm"
+    }`}
+  >
+    {money(stats.amount)}
+  </strong>
+</span>
 
             <span>
               今日：
-              <strong className="ml-1 text-green-600">
+              <strong className="ml-1 text-gray-600">
                 {moneyExact(
                   stats.dailyInterest
                 )}
@@ -2687,7 +3238,7 @@ function GroupAssetSection({
 
             <span>
               年利息：
-              <strong className="ml-1 text-green-600">
+              <strong className="ml-1 text-gray-600">
                 {money(
                   stats.annualInterest
                 )}
@@ -2720,8 +3271,7 @@ function GroupAssetSection({
           资产
       ================================================= */}
 
-      {assets.length ===
-      0 ? (
+      {assets.length === 0 ? (
         <div className="rounded-lg border border-dashed border-gray-300 px-4 py-6 text-center text-xs text-gray-400">
           {isGroupDropTarget
             ? "松开鼠标，将资产移动到这里"
@@ -2745,36 +3295,54 @@ function GroupAssetSection({
                 dragOverAssetId ===
                 asset.id;
 
+              const assetCurrency: FixedIncomeCurrency =
+                asset.currency ===
+                "USD"
+                  ? "USD"
+                  : "CNY";
+
+              const originalAmount =
+                toNumber(
+                  asset.amount
+                );
+
+              const normalizedAsset =
+                asset.currency === "CNY"
+                  ? asset
+                  : {
+                      ...asset,
+                      exchange_rate:
+                        asset.exchange_rate ??
+                        usdCnyRate,
+                    };
+
+              const cnyAmount =
+                getFixedIncomeAssetCnyAmount(
+                  normalizedAsset
+                );
+
               const dailyInterest =
-                getDailyInterest(
-                  asset
+                getFixedIncomeAssetDailyInterest(
+                  normalizedAsset
                 );
 
               return (
                 <div
-                  key={
-                    asset.id
-                  }
+                  key={asset.id}
                   draggable
-                  onDragStart={(
-                    event
-                  ) =>
+                  onDragStart={(event) =>
                     onAssetDragStart(
                       event,
                       asset.id
                     )
                   }
-                  onDragOver={(
-                    event
-                  ) =>
+                  onDragOver={(event) =>
                     onAssetDragOver(
                       event,
                       asset.id
                     )
                   }
-                  onDrop={(
-                    event
-                  ) =>
+                  onDrop={(event) =>
                     onAssetDrop(
                       event,
                       asset.id
@@ -2794,9 +3362,7 @@ function GroupAssetSection({
                   }`}
                 >
 
-                  {/* =================================================
-                      第一行
-                  ================================================= */}
+                  {/* 第一行 */}
 
                   <div className="flex items-center gap-2">
 
@@ -2809,9 +3375,7 @@ function GroupAssetSection({
 
                     <input
                       type="checkbox"
-                      checked={
-                        selected
-                      }
+                      checked={selected}
                       onChange={() =>
                         onToggleSelected(
                           asset.id
@@ -2823,105 +3387,106 @@ function GroupAssetSection({
                     <div className="min-w-0 flex-1">
 
                       <div className="truncate text-sm font-semibold text-gray-900">
-                        {
-                          asset.name
-                        }
+                        {asset.name}
                       </div>
 
                       {asset.institution && (
                         <div className="truncate text-xs text-gray-400">
-                          {
-                            asset.institution
-                          }
+                          {asset.institution}
                         </div>
                       )}
 
                     </div>
 
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        assetCurrency === "USD"
+                          ? "bg-blue-50 text-blue-600"
+                          : "bg-gray-100 text-gray-500"
+                      }`}
+                    >
+                      {assetCurrency}
+                    </span>
+
                   </div>
 
-                  {/* =================================================
-                      数据
-                  ================================================= */}
+                  {/* 数据 */}
 
                   <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
 
                     <div>
-
                       <div className="text-[11px] text-gray-400">
                         当前金额
                       </div>
 
                       <div className="mt-0.5 text-sm font-semibold text-gray-900">
-                        {money(
-                          toNumber(
-                            asset.amount
-                          )
+                        {moneyByCurrency(
+                          originalAmount,
+                          assetCurrency
                         )}
                       </div>
 
+                      {assetCurrency === "USD" && (
+                        <div className="mt-0.5 text-[10px] text-gray-400">
+                          折合{" "}
+                          {money(cnyAmount)}
+                        </div>
+                      )}
                     </div>
 
                     <div>
-
                       <div className="text-[11px] text-gray-400">
                         类型
                       </div>
 
                       <div className="mt-0.5 truncate text-sm text-gray-700">
-                        {
-                          asset.type
-                        }
+                        {asset.type}
                       </div>
-
                     </div>
 
                     <div>
-
                       <div className="text-[11px] text-gray-400">
                         年利率
                       </div>
 
                       <div className="mt-0.5 text-sm text-gray-700">
-
-                        {asset.interest_rate ===
-                          null ||
-                        asset.interest_rate ===
-                          undefined
+                        {asset.interest_rate === null ||
+                        asset.interest_rate === undefined
                           ? "-"
                           : `${toNumber(
                               asset.interest_rate
-                            ).toFixed(
-                              2
-                            )}%`}
-
+                            ).toFixed(2)}%`}
                       </div>
-
                     </div>
 
                     <div>
-
                       <div className="text-[11px] text-gray-400">
                         今日利息
                       </div>
 
-                      <div className="mt-0.5 text-sm font-medium text-green-600">
-
+                      <div className="mt-0.5 text-sm font-medium text-red-600">
                         {asset.auto_interest
-                          ? moneyExact(
-                              dailyInterest
-                            )
+                          ? moneyExact(dailyInterest)
                           : "-"}
-
                       </div>
-
                     </div>
 
                   </div>
 
-                  {/* =================================================
-                      自动计息
-                  ================================================= */}
+                  {/* USD 汇率 */}
+
+                  {assetCurrency === "USD" && (
+                    <div className="mt-2 text-[10px] text-gray-400">
+                      汇率{" "}
+                      {asset.exchange_rate == null
+                        ? "-"
+                        : toNumber(
+                            asset.exchange_rate
+                          ).toFixed(4)}
+                      {" · "}
+                      统计按人民币计算
+                    </div>
+                  )}
 
                   {asset.auto_interest && (
                     <div className="mt-2 text-[11px] text-gray-400">
@@ -2929,30 +3494,20 @@ function GroupAssetSection({
                     </div>
                   )}
 
-                  {/* =================================================
-                      备注
-                  ================================================= */}
-
                   {asset.note && (
                     <div className="mt-2 truncate text-[11px] text-gray-400">
-                      {
-                        asset.note
-                      }
+                      {asset.note}
                     </div>
                   )}
 
-                  {/* =================================================
-                      操作
-                  ================================================= */}
+                  {/* 操作 */}
 
                   <div className="mt-3 flex gap-2 border-t border-gray-100 pt-3">
 
                     <button
                       type="button"
                       onClick={() =>
-                        onEdit(
-                          asset
-                        )
+                        onEdit(asset)
                       }
                       className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
                     >
@@ -2962,18 +3517,14 @@ function GroupAssetSection({
                     <button
                       type="button"
                       onClick={() =>
-                        void onDelete(
-                          asset.id
-                        )
+                        void onDelete(asset.id)
                       }
                       disabled={
-                        deletingId ===
-                        asset.id
+                        deletingId === asset.id
                       }
                       className="flex-1 rounded-lg border border-red-200 px-2 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
                     >
-                      {deletingId ===
-                      asset.id
+                      {deletingId === asset.id
                         ? "删除中..."
                         : "删除"}
                     </button>

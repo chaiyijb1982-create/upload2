@@ -22,10 +22,8 @@ import {
 
 import AssetSummary from "@/components/AssetSummary";
 import WealthTrend from "@/components/WealthTrend";
-import AIAdvisor from "@/components/AIAdvisor";
 import AssetAllocation from "@/components/AssetAllocation";
 import HoldingsTable from "@/components/HoldingsTable";
-import ForecastCurve from "@/components/ForecastCurve";
 import PlatformAllocation from "@/components/PlatformAllocation";
 
 
@@ -567,7 +565,7 @@ export default function Home() {
             : 0;
 
 
-        // =================================================
+              // =================================================
         // Investment Total
         // =================================================
 
@@ -577,8 +575,65 @@ export default function Home() {
 
 
         // =================================================
+        // 人民币 / 美元资产拆分
+        //
+        // 美元资产 =
+        // 1. 香港 / 海外持有资产
+        // 2. 大陆资产中的美国 / 全球产品
+        //
+        // 人民币资产 =
+        // TOTAL WEALTH - 美元资产
+        //
+        // 注意：
+        // holdings.amount 已经是 Dashboard 使用的人民币金额，
+        // 因此这里直接使用 amount，不再次乘汇率。
+        // =================================================
+
+        const mainlandGlobalHoldings =
+          mainlandHoldings.filter(
+            (
+              item: any
+            ) => {
+              const category =
+                String(
+                  item?.category ?? ""
+                )
+                  .trim()
+                  .toLowerCase();
+
+              return (
+                category ===
+                  "global_stock" ||
+                category ===
+                  "global"
+              );
+            }
+          );
+
+
+        // 大陆美国 / 全球产品
+        const mainlandGlobalAsset =
+          mainlandGlobalHoldings.reduce(
+            (
+              sum: number,
+              item: any
+            ) => {
+              return (
+                sum +
+                numberValue(
+                  item?.amount
+                )
+              );
+            },
+            0
+          );
+
+
+        // =================================================
         // 原始投资资产
         // =================================================
+
+  
 
         const originalTotalWealth =
           numberValue(
@@ -592,9 +647,52 @@ export default function Home() {
         // 投资资产 + 固收资产
         // =================================================
 
-        const totalWealth =
+             const totalWealth =
           investmentTotal +
           fixedIncomeSum;
+
+
+        // =================================================
+        // TOTAL WEALTH
+        // 人民币 / 美元资产
+        // =================================================
+
+        // 美元资产：
+        // 香港全部持有资产
+        // +
+        // 大陆美国 / 全球产品
+        const usdAsset =
+          hkAsset +
+          mainlandGlobalAsset;
+
+
+        // 人民币资产：
+        // TOTAL WEALTH 减去美元资产
+        const rmbAsset =
+          totalWealth -
+          usdAsset;
+
+
+        // =================================================
+        // 人民币 / 美元资产比例
+        // =================================================
+
+        const usdAssetPercent =
+          totalWealth > 0
+            ? (
+                usdAsset /
+                totalWealth
+              ) * 100
+            : 0;
+
+
+        const rmbAssetPercent =
+          totalWealth > 0
+            ? (
+                rmbAsset /
+                totalWealth
+              ) * 100
+            : 0;
 
 
         // =================================================
@@ -664,12 +762,6 @@ export default function Home() {
 
         // =================================================
         // 找目标日期之前最近一条数据
-        //
-        // 周末 / 节假日 / 缺数据
-        // 自动向前寻找最近交易日
-        //
-        // 如果历史不足：
-        // 使用数据库最早记录
         // =================================================
 
         const findPreviousHistory = (
@@ -708,10 +800,6 @@ export default function Home() {
           }
 
 
-          // -----------------------------------------------
-          // 历史不足
-          // -----------------------------------------------
-
           return (
             result ??
             sortedHistory[0] ??
@@ -745,9 +833,6 @@ export default function Home() {
 
         // =================================================
         // 历史投资资产
-        //
-        // asset_history.total_asset
-        // = 历史投资资产
         // =================================================
 
         const getHistoryInvestment =
@@ -771,7 +856,6 @@ export default function Home() {
             item: any
           ) => {
 
-            // 优先使用历史 cn_asset
             if (
               item?.cn_asset !==
               undefined &&
@@ -785,9 +869,6 @@ export default function Home() {
 
             }
 
-
-            // 如果历史没有 cn_asset，
-            // 使用 total_asset 作为兜底
             return 0;
 
           };
@@ -822,17 +903,6 @@ export default function Home() {
 
         // =================================================
         // 历史 TOTAL WEALTH
-        //
-        // 关键：
-        //
-        // 历史 Total Wealth
-        // =
-        // 历史投资资产
-        // +
-        // 当前固收资产
-        //
-        // 避免因为固收没有历史 snapshot，
-        // 导致 TOTAL WEALTH 出现虚假大幅变化。
         // =================================================
 
         const getHistoryTotalWealth =
@@ -924,9 +994,6 @@ export default function Home() {
 
         // =================================================
         // YTD
-        //
-        // 今年不再显示在 AssetSummary，
-        // 但保留数据给后续系统使用。
         // =================================================
 
         const yearStartDate =
@@ -1299,7 +1366,6 @@ export default function Home() {
 
         // =================================================
         // YTD 数据
-        // 保留，但 AssetSummary 不显示
         // =================================================
 
         const ytdTotalWealth =
@@ -1337,7 +1403,25 @@ export default function Home() {
           total_wealth:
             totalWealth,
 
+          // =================================================
+          // 人民币 / 美元资产
+          // =================================================
 
+          rmb_asset:
+            rmbAsset,
+
+          usd_asset:
+            usdAsset,
+
+          rmb_asset_percent:
+            rmbAssetPercent,
+
+          usd_asset_percent:
+            usdAssetPercent,
+
+          mainland_global_asset:
+            mainlandGlobalAsset,
+            
           original_total_asset:
             originalTotalWealth,
 
@@ -1431,71 +1515,12 @@ export default function Home() {
             hong_kong:
               hkComparisons,
 
-            // 保留今年数据，但 UI 不显示
             ytd:
               ytdComparison,
 
           },
 
         };
-
-
-        // =================================================
-        // Debug
-        // =================================================
-
-        console.log(
-          "========================================"
-        );
-
-        console.log(
-          "Investment Total:",
-          investmentTotal
-        );
-
-        console.log(
-          "Mainland Investment:",
-          cnAsset
-        );
-
-        console.log(
-          "HK Investment:",
-          hkAsset
-        );
-
-        console.log(
-          "Fixed Income:",
-          fixedIncomeSum
-        );
-
-        console.log(
-          "TOTAL WEALTH:",
-          totalWealth
-        );
-
-        console.log(
-          "TOTAL WEALTH Comparisons:",
-          totalWealthComparisons
-        );
-
-        console.log(
-          "Investment Comparisons:",
-          investmentComparisons
-        );
-
-        console.log(
-          "Mainland Comparisons:",
-          cnComparisons
-        );
-
-        console.log(
-          "HK Comparisons:",
-          hkComparisons
-        );
-
-        console.log(
-          "========================================"
-        );
 
 
         // =================================================
@@ -1862,35 +1887,7 @@ export default function Home() {
 
 
         {/* =================================================
-            4. Forecast
-            ================================================= */}
-
-        <ForecastCurve
-          currentAsset={
-            totalWealth
-          }
-        />
-
-
-        {/* =================================================
-            5. AI Advisor
-            ================================================= */}
-
-        <AIAdvisor
-          asset={
-            asset
-          }
-          allocation={
-            allocation
-          }
-          holdings={
-            holdings
-          }
-        />
-
-
-        {/* =================================================
-            6. Asset Allocation
+            5. Asset Allocation
             ================================================= */}
 
         {
@@ -1912,7 +1909,7 @@ export default function Home() {
 
 
         {/* =================================================
-            7. Platform Allocation
+            6. Platform Allocation
             ================================================= */}
 
         {
@@ -1929,7 +1926,7 @@ export default function Home() {
 
 
         {/* =================================================
-            8. Holdings
+            7. Holdings
             ================================================= */}
 
         {
@@ -1946,7 +1943,7 @@ export default function Home() {
 
 
         {/* =================================================
-            9. System Status
+            8. System Status
             ================================================= */}
 
         <div

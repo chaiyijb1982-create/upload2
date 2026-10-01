@@ -2343,7 +2343,7 @@ export default function CreditCardPage() {
             ${showYuEstimate ? "" : "hidden"}
           `}>
             <div className="text-sm text-gray-500">
-              {selectedBillMonthNumber}月有鱼预估消费
+              {selectedBillMonthNumber}月有鱼预估消费(不含分期)
             </div>
 
             <div className="
@@ -2391,7 +2391,7 @@ export default function CreditCardPage() {
             p-5
           ">
             <div className="text-sm text-gray-500">
-              {selectedBillMonthNumber}月预计支出
+              {selectedBillMonthNumber}月预计支出(含分期)
             </div>
 
             <div className="
@@ -2488,7 +2488,7 @@ export default function CreditCardPage() {
                     className="rounded"
                   />
 
-                  有鱼预估消费
+                  有鱼预估消费(不含分期)
 
                 </label>
 
@@ -2544,8 +2544,8 @@ export default function CreditCardPage() {
               w-full
               ${
                 showYuEstimate || showGap
-                  ? "min-w-[1450px]"
-                  : "min-w-[1150px]"
+                  ? "min-w-[1050px]"
+                  : "min-w-[750px]"
               }
               text-sm
             `}>
@@ -2731,7 +2731,7 @@ export default function CreditCardPage() {
                         )
                       }
                     >
-                      手动预估消费
+                      手动预估消费<br/>(不含分期)
                       {sortIcon("monthly_estimate")}
                     </button>
 
@@ -2763,7 +2763,8 @@ export default function CreditCardPage() {
                           )
                         }
                       >
-                        有鱼预估消费
+                        有鱼预估消费<br/>
+                        (不含分期)
                         {sortIcon("yu_estimate")}
                       </button>
 
@@ -2823,7 +2824,7 @@ export default function CreditCardPage() {
                         handleSort("total")
                       }
                     >
-                      预计支出
+                      预计支出<br/>(含分期)
                       {sortIcon("total")}
                     </button>
 
@@ -3341,133 +3342,81 @@ export default function CreditCardPage() {
 
               </tbody>
 
+              {/* =================================================
+                  合计行：按列统计
+              ================================================= */}
+
+              {sortedCards.length > 0 && (
+                <tfoot>
+                  <tr className="border-t border-gray-200 bg-gray-50 font-semibold">
+                    <td
+                      className="px-4 py-3.5 text-left text-gray-900"
+                      colSpan={2}
+                    >
+                      合计
+                    </td>
+
+                    {/* 账单日 */}
+                    <td className="px-4 py-3.5 text-right text-gray-400">
+                      -
+                    </td>
+
+                    {/* 还款日 */}
+                    <td className="px-4 py-3.5 text-right text-gray-400">
+                      -
+                    </td>
+
+                    {/* 分期合计 */}
+                    <td className="px-4 py-3.5 text-right text-gray-900">
+                      {money(installmentTotal)}
+                    </td>
+
+                    {/* 手动预估合计 */}
+                    <td className="px-4 py-3.5 text-right text-gray-900">
+                      {money(estimateTotal)}
+                    </td>
+
+                    {/* 有鱼预估合计 */}
+                    {showYuEstimate && (
+                      <td className="px-4 py-3.5 text-right bg-gray-100 text-gray-900">
+                        {yuLoading
+                          ? "..."
+                          : money(yuEstimateTotal)}
+                      </td>
+                    )}
+
+                    {/* GAP 合计 */}
+                    {showGap && (
+                      <td
+                        className={`px-4 py-3.5 text-right bg-gray-100 ${
+                          gapTotal > 0
+                            ? "text-red-600"
+                            : gapTotal < 0
+                              ? "text-green-600"
+                              : "text-gray-900"
+                        }`}
+                      >
+                        {money(gapTotal)}
+                      </td>
+                    )}
+
+                    {/* 预计支出合计 */}
+                    <td className="px-4 py-3.5 text-right text-gray-900">
+                      {money(total)}
+                    </td>
+
+                    {/* 实际账单合计 */}
+                    <td className="px-4 py-3.5 text-right text-gray-900">
+                      {money(actualBillTotal)}
+                    </td>
+
+                    {/* 操作 */}
+                    <td className="px-4 py-3.5" />
+                  </tr>
+                </tfoot>
+              )}
+
             </table>
-
-          </div>
-
-
-          {/* =================================================
-              合计
-          ================================================= */}
-
-          <div className="
-            border-t
-            border-gray-200
-            bg-gray-50
-            px-4
-            py-4
-          ">
-
-            <div className="
-              flex
-              flex-wrap
-              items-center
-              justify-end
-              gap-6
-              text-sm
-            ">
-
-              <div>
-                <span className="text-gray-500">
-                  手动预估：
-                </span>
-
-                <span className="
-                  ml-2
-                  font-semibold
-                  text-gray-900
-                ">
-                  {money(estimateTotal)}
-                </span>
-              </div>
-
-
-              {showYuEstimate && (
-                <div className="
-                  bg-gray-100
-                  px-3
-                  py-1.5
-                  rounded-md
-                ">
-                  <span className="text-gray-500">
-                    有鱼预估：
-                  </span>
-
-                  <span className="
-                    ml-2
-                    font-semibold
-                    text-gray-900
-                  ">
-                    {
-                      yuLoading
-                        ? "..."
-                        : money(
-                            yuEstimateTotal
-                          )
-                    }
-                  </span>
-                </div>
-              )}
-
-
-              {showGap && (
-                <div className="
-                  bg-gray-100
-                  px-3
-                  py-1.5
-                  rounded-md
-                ">
-                  <span className="text-gray-500">
-                    GAP：
-                  </span>
-
-                  <span className={`
-                    ml-2
-                    font-semibold
-                    ${
-                      gapTotal > 0
-                        ? "text-red-600"
-                        : gapTotal < 0
-                          ? "text-green-600"
-                          : "text-gray-900"
-                    }
-                  `}>
-                    {money(gapTotal)}
-                  </span>
-                </div>
-              )}
-
-
-              <div>
-                <span className="text-gray-500">
-                  {selectedBillMonthNumber}月预计支出：
-                </span>
-
-                <span className="
-                  ml-2
-                  font-semibold
-                  text-gray-900
-                ">
-                  {money(total)}
-                </span>
-              </div>
-
-
-              <div>
-                <span className="text-gray-500">
-                  {selectedBillMonthNumber}月实际账单：
-                </span>
-
-                <span className="
-                  ml-2
-                  font-semibold
-                  text-gray-900
-                ">
-                  {money(actualBillTotal)}
-                </span>
-              </div>
-
-            </div>
 
           </div>
 
@@ -4233,7 +4182,7 @@ export default function CreditCardPage() {
                     text-xs
                     text-gray-500
                   ">
-                    {selectedBillMonthNumber}月有鱼预估消费
+                    {selectedBillMonthNumber}月有鱼预估消费(不含分期)
                   </div>
 
                   <div className="

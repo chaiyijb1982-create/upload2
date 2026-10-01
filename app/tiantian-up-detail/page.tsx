@@ -50,13 +50,6 @@ const START_ASSET = 1600000;
 // =====================================================
 // 生活费用
 // =====================================================
-//
-// 默认回退生活费：2027 - 2031：37万
-// 默认回退生活费：2032 - 2042：32万
-//
-// 财务自由目标：
-// 从当年开始到 2042 年所有剩余生活费。
-// =====================================================
 
 const BASE_EXPENSE: Record<
   number,
@@ -139,18 +132,6 @@ function toNumber(
 // =====================================================
 // 财务自由目标
 // =====================================================
-//
-// 2027
-// = 2027~2042 所有生活费
-//
-// 2028
-// = 2028~2041 所有生活费
-//
-// ...
-//
-// 2041
-// = 2041 年生活费
-// =====================================================
 
 type ForecastInput = {
   expense: number;
@@ -197,8 +178,6 @@ function getDefaultForecastInputs(): ForecastInputs {
   return result;
 }
 
-// Financial Freedom 的 forecast_inputs 永远以“万元”保存。
-// Tiantian 页面内部金额全部以“元”计算，因此只在这里统一转换。
 function getForecastExpenseYuan(
   year: number,
   forecastInputs: ForecastInputs
@@ -231,10 +210,6 @@ function getFinancialFreedomTarget(
 // 金额格式
 // =====================================================
 
-// =====================================================
-// 金额格式
-// =====================================================
-
 function money(
   value: number
 ): string {
@@ -242,28 +217,11 @@ function money(
   const n =
     toNumber(value);
 
-
-  // ===================================================
-  // 负数处理
-  //
-  // 例如：
-  // -413000
-  // → -¥41.3 万
-  //
-  // -123000000
-  // → -¥1.23 亿
-  // ===================================================
-
   const negative =
     n < 0;
 
   const abs =
     Math.abs(n);
-
-
-  // ===================================================
-  // 亿
-  // ===================================================
 
   if (
     abs >= 100000000
@@ -281,11 +239,6 @@ function money(
 
   }
 
-
-  // ===================================================
-  // 万
-  // ===================================================
-
   if (
     abs >= 10000
   ) {
@@ -302,11 +255,6 @@ function money(
 
   }
 
-
-  // ===================================================
-  // 普通金额
-  // ===================================================
-
   return (
     (negative ? "-" : "") +
     "¥" +
@@ -318,6 +266,26 @@ function money(
 
 }
 
+// 正数红色、负数绿色、0 灰色
+function amountColor(
+  value: number
+): string {
+
+  const n =
+    toNumber(value);
+
+  if (n > 0) {
+    return "text-red-600";
+  }
+
+  if (n < 0) {
+    return "text-green-600";
+  }
+
+  return "text-gray-400";
+
+}
+
 
 // =====================================================
 // 页面
@@ -326,19 +294,11 @@ function money(
 export default function TiantianUpDetailPage() {
 
 
-  // ===================================================
-  // 当前资产
-  // ===================================================
-
   const [
     currentAsset,
     setCurrentAsset,
   ] = useState(0);
 
-
-  // ===================================================
-  // Dashboard Total Wealth
-  // ===================================================
 
   const [
     dashboardTotalWealth,
@@ -346,9 +306,11 @@ export default function TiantianUpDetailPage() {
   ] = useState(0);
 
 
-  // ===================================================
-  // 固收
-  // ===================================================
+  const [
+    originalAssetForDisplay,
+    setOriginalAssetForDisplay,
+  ] = useState(0);
+
 
   const [
     fixedIncome,
@@ -356,19 +318,11 @@ export default function TiantianUpDetailPage() {
   ] = useState(0);
 
 
-  // ===================================================
-  // Financial Freedom Loan
-  // ===================================================
-
   const [
     financialFreedomLoan,
     setFinancialFreedomLoan,
   ] = useState(0);
 
-
-  // ===================================================
-  // 保险
-  // ===================================================
 
   const [
     insurance,
@@ -376,19 +330,11 @@ export default function TiantianUpDetailPage() {
   ] = useState<any>(null);
 
 
-  // ===================================================
-  // 年度保险预测
-  // ===================================================
-
   const [
     insuranceProjection,
     setInsuranceProjection,
   ] = useState<any[]>([]);
 
-
-  // ===================================================
-  // 年度贷款模型
-  // ===================================================
 
   const [
     loanPressure,
@@ -404,30 +350,17 @@ export default function TiantianUpDetailPage() {
   >({});
 
 
-  // ===================================================
-  // 年度预测
-  // ===================================================
-
   const [
     yearlyRows,
     setYearlyRows,
   ] = useState<any[]>([]);
 
 
-  // ===================================================
-  // Loading
-  // ===================================================
-
   const [
     loading,
     setLoading,
   ] = useState(true);
 
-
-  // ===================================================
-  // Financial Freedom 年度输入
-  // 与 /financial-freedom 共用 Supabase 中的 forecast_inputs
-  // ===================================================
 
   const [
     forecastInputs,
@@ -436,10 +369,6 @@ export default function TiantianUpDetailPage() {
     () => getDefaultForecastInputs()
   );
 
-
-  // =====================================================
-  // 当前财务自由目标
-  // =====================================================
 
   const currentFreedomTarget =
     useMemo(
@@ -452,10 +381,6 @@ export default function TiantianUpDetailPage() {
     );
 
 
-  // =====================================================
-  // 当前财务自由差额
-  // =====================================================
-
   const currentFreedomGap =
     Math.max(
       currentFreedomTarget -
@@ -463,10 +388,6 @@ export default function TiantianUpDetailPage() {
       0
     );
 
-
-  // =====================================================
-  // 全部未缴保费
-  // =====================================================
 
   const unpaidPremium =
     toNumber(
@@ -480,10 +401,6 @@ export default function TiantianUpDetailPage() {
     );
 
 
-  // =====================================================
-  // 夫妻未缴保费
-  // =====================================================
-
   const coupleUnpaidPremium =
     toNumber(
       insurance?.coupleUnpaidPremium ??
@@ -491,10 +408,6 @@ export default function TiantianUpDetailPage() {
       0
     );
 
-
-  // =====================================================
-  // 儿子现金价值
-  // =====================================================
 
   const sonCashValue =
     toNumber(
@@ -504,47 +417,21 @@ export default function TiantianUpDetailPage() {
     );
 
 
-  // =====================================================
-  // 当前夫妻保费 - 儿子现金价值
-  // =====================================================
-
   const coupleMinusSon =
     coupleUnpaidPremium -
     sonCashValue;
 
-
-  // =====================================================
-  // 当前天天向上1
-  //
-  // 当前财务自由差额
-  // +
-  // 全部未来未缴保费
-  // =====================================================
 
   const tiantian1 =
     currentFreedomGap +
     unpaidPremium;
 
 
-  // =====================================================
-  // 当前天天向上2
-  //
-  // 当前财务自由差额
-  // +
-  // 夫妻未来未缴保费
-  // -
-  // 儿子现金价值
-  // =====================================================
-
   const tiantian2 =
     currentFreedomGap +
     coupleUnpaidPremium -
     sonCashValue;
 
-
-  // =====================================================
-  // 加载数据
-  // =====================================================
 
   useEffect(() => {
 
@@ -554,16 +441,6 @@ export default function TiantianUpDetailPage() {
 
         setLoading(true);
 
-
-        // =================================================
-        // 0. 读取 Financial Freedom 年度输入
-        //
-        // /financial-freedom 会把可编辑年度数据保存到：
-        // financial_freedom_history.forecast_inputs
-        //
-        // Tiantian Up Detail 不再维护第二套生活费数据，
-        // 财务自由目标直接使用这里的同一份数据。
-        // =================================================
 
         const {
           data: forecastHistory,
@@ -586,8 +463,6 @@ export default function TiantianUpDetailPage() {
         let savedForecastInputs =
           forecastHistory?.[0]?.forecast_inputs;
 
-        // 同一浏览器内，如果 Financial Freedom 刚刚修改过，优先读取本地最新编辑值。
-        // 这样即使 Supabase 网络保存稍有延迟，两个页面也会立即保持一致。
         try {
           const localValue = window.localStorage.getItem(
             "financial_freedom_forecast_inputs_v1"
@@ -605,8 +480,6 @@ export default function TiantianUpDetailPage() {
           );
         }
 
-        // 先建立完整默认值，再覆盖保存的值。
-        // 这样即使数据库只保存部分年份，也不会让未保存年份变成 0。
         const resolvedForecastInputs =
           getDefaultForecastInputs();
 
@@ -655,10 +528,6 @@ export default function TiantianUpDetailPage() {
         setForecastInputs(resolvedForecastInputs);
 
 
-        // =================================================
-        // 1. 获取最新 Dashboard 资产
-        // =================================================
-
         const latest =
           await getLatestAsset();
 
@@ -669,10 +538,6 @@ export default function TiantianUpDetailPage() {
           ) ||
           START_ASSET;
 
-
-        // =================================================
-        // 2. 获取固收资产
-        // =================================================
 
         const {
           data: fixedIncomeData,
@@ -699,10 +564,6 @@ export default function TiantianUpDetailPage() {
         }
 
 
-        // =================================================
-        // 3. 固收合计
-        // =================================================
-
         const fixedIncomeSum =
           (
             Array.isArray(
@@ -721,7 +582,6 @@ export default function TiantianUpDetailPage() {
                   item?.amount ?? 0
                 );
 
-
               return (
                 sum +
                 (
@@ -738,29 +598,10 @@ export default function TiantianUpDetailPage() {
           );
 
 
-        // =================================================
-        // 4. Dashboard Total Wealth
-        //
-        // 和原版本保持一致：
-        //
-        // asset_history.total_asset
-        // +
-        // fixed_income_assets
-        //
-        // 固收只加一次。
-        // =================================================
-
         const totalWealth =
           originalAsset +
           fixedIncomeSum;
 
-
-        // =================================================
-        // 5. Financial Freedom Loans
-        //
-        // 只读取：
-        // include_financial_freedom = true
-        // =================================================
 
         const ffLoans =
           await getFinancialFreedomLoans();
@@ -789,7 +630,6 @@ export default function TiantianUpDetailPage() {
                   0
                 );
 
-
               return (
                 sum +
                 (
@@ -806,14 +646,6 @@ export default function TiantianUpDetailPage() {
           );
 
 
-        // =================================================
-        // 6. 当前家庭净资产
-        //
-        // Dashboard Total Wealth
-        // -
-        // Financial Freedom Loan
-        // =================================================
-
         const netAsset =
           totalWealth -
           loanBalance;
@@ -823,42 +655,33 @@ export default function TiantianUpDetailPage() {
           totalWealth
         );
 
+        setOriginalAssetForDisplay(
+          originalAsset
+        );
 
         setFixedIncome(
           fixedIncomeSum
         );
 
-
         setFinancialFreedomLoan(
           loanBalance
         );
-
 
         setCurrentAsset(
           netAsset
         );
 
 
-        // =================================================
-        // 7. 保险
-        // =================================================
-
         const insuranceData =
           await getInsuranceSummary();
-
 
         setInsurance(
           insuranceData
         );
 
 
-        // =================================================
-        // 8. 年度保险预测
-        // =================================================
-
         const projection =
           await getInsuranceYearProjection();
-
 
         const safeProjection =
           Array.isArray(
@@ -867,15 +690,10 @@ export default function TiantianUpDetailPage() {
             ? projection
             : [];
 
-
         setInsuranceProjection(
           safeProjection
         );
 
-
-        // =================================================
-        // 9. 年度贷款模型
-        // =================================================
 
         const loans:
           Record<
@@ -898,12 +716,10 @@ export default function TiantianUpDetailPage() {
               year
             );
 
-
           const pressure =
             await getAnnualLoanPressure(
               year
             );
-
 
           loans[year] = {
 
@@ -926,18 +742,6 @@ export default function TiantianUpDetailPage() {
           loans
         );
 
-
-        // =================================================
-        // 10. 年度资产预测
-        //
-        // ★ 与 /financial-freedom 使用完全相同的资产模型 ★
-        //
-        // 年末资产 = 年初资产 × (1 + growthRate)
-        //          + (香港投资 + 当年剩余现金) × 10000
-        //
-        // 注意：生活费、年金、贷款不会再次从资产中扣除。
-        // Financial Freedom 页面本身也不是这样计算年末资产的。
-        // =================================================
 
         const activeForecastInputs = resolvedForecastInputs;
         let simulationAsset = netAsset;
@@ -1024,72 +828,6 @@ export default function TiantianUpDetailPage() {
 
         setYearlyRows(result);
 
-        // =================================================
-        // Debug
-        // =================================================
-
-        console.log(
-          "========================================"
-        );
-
-        console.log(
-          "TIANTIAN UP DETAIL"
-        );
-
-        console.log(
-          "Original Asset:",
-          originalAsset
-        );
-
-        console.log(
-          "Fixed Income:",
-          fixedIncomeSum
-        );
-
-        console.log(
-          "Dashboard Total Wealth:",
-          totalWealth
-        );
-
-        console.log(
-          "Financial Freedom Loan:",
-          loanBalance
-        );
-
-        console.log(
-          "Current Net Asset:",
-          netAsset
-        );
-
-        console.log(
-          "Current Freedom Target:",
-          currentFreedomTarget
-        );
-
-        console.log(
-          "Current Freedom Gap:",
-          Math.max(
-            0,
-            currentFreedomTarget -
-            netAsset
-          )
-        );
-
-        console.log(
-          "Insurance Projection:",
-          safeProjection
-        );
-
-        console.log(
-          "Annual Freedom Rows:",
-          result
-        );
-
-        console.log(
-          "========================================"
-        );
-
-
       }
       catch (
         error
@@ -1115,10 +853,6 @@ export default function TiantianUpDetailPage() {
   }, []);
 
 
-  // =====================================================
-  // Loading
-  // =====================================================
-
   if (
     loading
   ) {
@@ -1130,7 +864,6 @@ export default function TiantianUpDetailPage() {
         <TopBar
           title="天天向上详情"
         />
-
 
         <main
           className="
@@ -1151,10 +884,6 @@ export default function TiantianUpDetailPage() {
   }
 
 
-  // =====================================================
-  // 页面
-  // =====================================================
-
   return (
 
     <>
@@ -1162,7 +891,6 @@ export default function TiantianUpDetailPage() {
       <TopBar
         title="天天向上详情"
       />
-
 
       <main
         className="
@@ -1182,7 +910,7 @@ export default function TiantianUpDetailPage() {
 
           <h1
             className="
-              text-3xl
+              text-2xl
               font-bold
               text-gray-900
             "
@@ -1192,10 +920,10 @@ export default function TiantianUpDetailPage() {
 
           </h1>
 
-
           <p
             className="
-              mt-2
+              mt-1
+              text-sm
               text-gray-500
             "
           >
@@ -1208,685 +936,484 @@ export default function TiantianUpDetailPage() {
 
 
         {/* =================================================
-            当前核心指标
+            天天向上详情 · 顶部指标总表
             ================================================= */}
 
-        <section
-          className="
-            grid
-            grid-cols-1
-            md:grid-cols-2
-            gap-6
-          "
-        >
+        <section className="overflow-x-auto w-fit max-w-full mx-auto">
 
-
-          {/* 天天向上1 */}
-
-          <div
+          <table
             className="
-              bg-white
+              w-auto
+              border-collapse
+              text-base
+              tabular-nums
               border
-              rounded-2xl
-              p-7
-              shadow-sm
+              border-gray-300
+              bg-white
             "
           >
 
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              天天向上1（当前）
-
-            </p>
-
-
-            <h2
-              className="
-                text-4xl
-                font-bold
-                text-blue-700
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  tiantian1
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-sm
-                text-gray-400
-                mt-2
-              "
-            >
-
-              当前财务自由差额 + 全部未缴保费
-
-            </p>
-
-          </div>
-
-
-          {/* 天天向上2 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              天天向上2（当前）
-
-            </p>
-
-
-            <h2
-              className="
-                text-4xl
-                font-bold
-                text-green-700
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  tiantian2
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-sm
-                text-gray-400
-                mt-2
-              "
-            >
-
-              当前财务自由差额 + 夫妻未缴保费 − 儿子现金价值
-
-            </p>
-
-          </div>
-
-
-        </section>
-
-
-        {/* =================================================
-            当前资产结构
-            ================================================= */}
-
-        <section
-          className="
-            grid
-            grid-cols-1
-            md:grid-cols-2
-            lg:grid-cols-4
-            gap-6
-          "
-        >
-
-
-          {/* Dashboard */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-6
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              Dashboard Total Wealth
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  dashboardTotalWealth
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              asset_history.total_asset + 固收
-
-            </p>
-
-          </div>
-
-
-          {/* 固收 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-6
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              固收资产
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  fixedIncome
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              fixed_income_assets
-
-            </p>
-
-          </div>
-
-
-          {/* Loan */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-6
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              Financial Freedom 贷款
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                text-red-700
-                mt-3
-              "
-            >
-
-              − {
-                money(
-                  financialFreedomLoan
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              仅统计勾选「计入 Financial Freedom」的贷款
-
-            </p>
-
-          </div>
-
-
-          {/* 净资产 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-6
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              当前家庭净资产
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                text-blue-700
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  currentAsset
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              Dashboard Total Wealth − Financial Freedom贷款
-
-            </p>
-
-          </div>
-
-
-        </section>
-
-
-        {/* =================================================
-            财务自由
-            ================================================= */}
-
-        <section
-          className="
-            grid
-            grid-cols-1
-            md:grid-cols-3
-            gap-6
-          "
-        >
-
-
-          {/* 财务自由目标 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              当前财务自由目标
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  currentFreedomTarget
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              2027–2042 全部剩余生活费用
-
-            </p>
-
-          </div>
-
-
-          {/* 当前差额 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              当前财务自由差额
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                text-blue-700
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  currentFreedomGap
-                )
-              }
-
-            </h2>
-
-
-            <p
-              className="
-                text-xs
-                text-gray-400
-                mt-2
-              "
-            >
-
-              当前财务自由目标 − 当前家庭净资产
-
-            </p>
-
-          </div>
-
-
-          {/* 全部未缴保费 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              全部未缴保费
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                text-purple-700
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  unpaidPremium
-                )
-              }
-
-            </h2>
-
-          </div>
-
-
-        </section>
-
-
-        {/* =================================================
-            保险
-            ================================================= */}
-
-        <section
-          className="
-            grid
-            grid-cols-1
-            md:grid-cols-3
-            gap-6
-          "
-        >
-
-
-          {/* 夫妻 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              夫妻未缴保费
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  coupleUnpaidPremium
-                )
-              }
-
-            </h2>
-
-          </div>
-
-
-          {/* 儿子 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              儿子现金价值
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  sonCashValue
-                )
-              }
-
-            </h2>
-
-          </div>
-
-
-          {/* 差额 */}
-
-          <div
-            className="
-              bg-white
-              border
-              rounded-2xl
-              p-7
-              shadow-sm
-            "
-          >
-
-            <p
-              className="
-                text-gray-500
-              "
-            >
-
-              夫妻保费 − 儿子现金价值
-
-            </p>
-
-
-            <h2
-              className="
-                text-3xl
-                font-bold
-                text-orange-600
-                mt-3
-              "
-            >
-
-              {
-                money(
-                  coupleMinusSon
-                )
-              }
-
-            </h2>
-
-          </div>
-
+            <thead>
+
+              <tr className="bg-white text-gray-800">
+
+                <th
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-left
+                    font-semibold
+                    whitespace-nowrap
+                  "
+                >
+                  分类
+                </th>
+
+                <th
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-left
+                    font-semibold
+                    whitespace-nowrap
+                  "
+                >
+                  指标
+                </th>
+
+                <th
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                  "
+                >
+                  金额
+                </th>
+
+              </tr>
+
+            </thead>
+
+            <tbody>
+
+              {/* 核心结果 */}
+
+              <tr>
+
+                <td
+                  rowSpan={2}
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-gray-900
+                    font-semibold
+                    align-top
+                    whitespace-nowrap
+                  "
+                >
+                  核心结果
+                </td>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  天天向上1（当前）
+                  <span className="text-gray-400">[当前财务自由差额 + 全部未缴保费]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-bold
+                    whitespace-nowrap
+                    ${amountColor(tiantian1)}
+                  `}
+                >
+                  {money(tiantian1)}
+                </td>
+
+              </tr>
+
+              <tr className="border-b-4 border-black">
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  天天向上2（当前）
+                  <span className="text-gray-400">[当前财务自由差额 + 夫妻未缴保费 − 儿子现金价值]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-bold
+                    whitespace-nowrap
+                    ${amountColor(tiantian2)}
+                  `}
+                >
+                  {money(tiantian2)}
+                </td>
+
+              </tr>
+
+
+              {/* 当前资产结构 */}
+
+              <tr>
+
+                <td
+                  rowSpan={3}
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-gray-900
+                    font-semibold
+                    align-top
+                    whitespace-nowrap
+                  "
+                >
+                  当前资产结构
+                </td>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  total_asset
+                  <span className="text-gray-400">[asset_history.total_asset]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(originalAssetForDisplay)}
+                  `}
+                >
+                  {money(originalAssetForDisplay)}
+                </td>
+
+              </tr>
+
+              <tr>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  固收资产
+                  <span className="text-gray-400">[fixed_income_assets]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(fixedIncome)}
+                  `}
+                >
+                  {money(fixedIncome)}
+                </td>
+
+              </tr>
+
+              <tr className="border-b-4 border-black">
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  Dashboard Total Wealth
+                  <span className="text-gray-400">[asset_history.total_asset + 固收]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(dashboardTotalWealth)}
+                  `}
+                >
+                  {money(dashboardTotalWealth)}
+                </td>
+
+              </tr>
+
+
+              {/* 当前家庭净资产 */}
+
+              <tr>
+
+                <td
+                  rowSpan={2}
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-gray-900
+                    font-semibold
+                    align-top
+                    whitespace-nowrap
+                  "
+                >
+                  当前家庭净资产
+                </td>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  Financial Freedom 贷款
+                  <span className="text-gray-400">[仅统计勾选「计入 Financial Freedom」的贷款]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(-financialFreedomLoan)}
+                  `}
+                >
+                  − {money(financialFreedomLoan)}
+                </td>
+
+              </tr>
+
+              <tr className="border-b-4 border-black">
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-900 font-bold whitespace-nowrap">
+                  当前家庭净资产
+                  <span className="text-gray-400">[Dashboard Total Wealth − Financial Freedom贷款]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-bold
+                    whitespace-nowrap
+                    ${amountColor(currentAsset)}
+                  `}
+                >
+                  {money(currentAsset)}
+                </td>
+
+              </tr>
+
+
+              {/* 财务自由 */}
+
+              <tr>
+
+                <td
+                  rowSpan={2}
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-gray-900
+                    font-semibold
+                    align-top
+                    whitespace-nowrap
+                  "
+                >
+                  财务自由
+                </td>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  当前财务自由目标
+                  <span className="text-gray-400">[2027–2042 全部剩余生活费用]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(currentFreedomTarget)}
+                  `}
+                >
+                  {money(currentFreedomTarget)}
+                </td>
+
+              </tr>
+
+              <tr className="border-b-4 border-black">
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-900 font-bold whitespace-nowrap">
+                  当前财务自由差额
+                  <span className="text-gray-400">[当前财务自由目标 − 当前家庭净资产]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-bold
+                    whitespace-nowrap
+                    ${amountColor(currentFreedomGap)}
+                  `}
+                >
+                  {money(currentFreedomGap)}
+                </td>
+
+              </tr>
+
+
+              {/* 保险 */}
+
+              <tr>
+
+                <td
+                  rowSpan={4}
+                  className="
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-gray-900
+                    font-semibold
+                    align-top
+                    whitespace-nowrap
+                  "
+                >
+                  保险
+                </td>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  全部未缴保费
+                  <span className="text-gray-400">[家庭全部未来未缴保费合计]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(unpaidPremium)}
+                  `}
+                >
+                  {money(unpaidPremium)}
+                </td>
+
+              </tr>
+
+              <tr>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  夫妻未缴保费
+                  <span className="text-gray-400">[夫妻双方未来未缴保费合计]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(coupleUnpaidPremium)}
+                  `}
+                >
+                  {money(coupleUnpaidPremium)}
+                </td>
+
+              </tr>
+
+              <tr>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-800 whitespace-nowrap">
+                  儿子现金价值
+                  <span className="text-gray-400">[儿子保单当前现金价值]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-semibold
+                    whitespace-nowrap
+                    ${amountColor(sonCashValue)}
+                  `}
+                >
+                  {money(sonCashValue)}
+                </td>
+
+              </tr>
+
+              <tr>
+
+                <td className="border border-gray-300 px-2 py-2 text-gray-900 font-bold whitespace-nowrap">
+                  夫妻保费 − 儿子现金价值
+                  <span className="text-gray-400">[夫妻未缴保费 − 儿子现金价值]</span>
+                </td>
+
+                <td
+                  className={`
+                    border
+                    border-gray-300
+                    px-2
+                    py-2
+                    text-right
+                    font-bold
+                    whitespace-nowrap
+                    ${amountColor(coupleMinusSon)}
+                  `}
+                >
+                  {money(coupleMinusSon)}
+                </td>
+
+              </tr>
+
+            </tbody>
+
+          </table>
 
         </section>
 
@@ -1900,121 +1427,72 @@ export default function TiantianUpDetailPage() {
             bg-blue-50
             border
             border-blue-100
-            rounded-2xl
-            p-7
+            rounded-xl
+            p-5
+            w-fit
+            max-w-full
+            mx-auto
           "
         >
 
           <h2
             className="
-              text-lg
+              text-base
               font-bold
               text-blue-900
             "
           >
-
             📐 计算规则
-
           </h2>
-
 
           <div
             className="
-              mt-4
-              text-sm
+              mt-3
+              text-base
               text-blue-800
-              leading-8
+              leading-7
+              whitespace-nowrap
             "
           >
 
             <p>
-
-              <b>
-                当前家庭净资产
-              </b>
-
+              <b>当前家庭净资产</b>
               = Dashboard Total Wealth − Financial Freedom贷款
-
             </p>
 
-
             <p>
-
-              <b>
-                Dashboard Total Wealth
-              </b>
-
+              <b>Dashboard Total Wealth</b>
               = asset_history.total_asset + 固收资产
-
             </p>
 
-
             <p>
-
-              <b>
-                年末预计资产
-              </b>
-
+              <b>年末预计资产</b>
               = 年初资产 + 年初资产 × 5% + 年度现金流
-
             </p>
 
-
             <p>
-
-              <b>
-                年度现金流
-              </b>
-
+              <b>年度现金流</b>
               = 年收入 − 生活费 − 年金 − Financial Freedom贷款压力
-
             </p>
 
-
             <p>
-
-              <b>
-                当年财务自由目标
-              </b>
-
+              <b>当年财务自由目标</b>
               = 从当年开始到 2042 年全部剩余生活费
-
             </p>
 
-
             <p>
-
-              <b>
-                财务自由差额(年末)
-              </b>
-
-              = max(
-              当年财务自由目标 − 年末预计资产,
-              0
-              )
-
+              <b>财务自由差额(年末)</b>
+              = max(当年财务自由目标 − 年末预计资产, 0)
             </p>
 
-
             <p>
-
-              <b>
-                天天向上1
-              </b>
-
+              <b>天天向上1</b>
               = 财务自由差额(年末) + 全部未来保费
-
             </p>
 
-
             <p>
-
-              <b>
-                天天向上2
-              </b>
-
+              <b>天天向上2</b>
               = 财务自由差额(年末) + 夫妻未来保费 − 儿子现金价值
-
             </p>
 
           </div>
@@ -2033,28 +1511,27 @@ export default function TiantianUpDetailPage() {
             rounded-2xl
             overflow-hidden
             shadow-sm
+            w-fit
+            max-w-full
+            mx-auto
           "
         >
 
-
           <div
             className="
-              p-6
+              p-5
               border-b
             "
           >
 
             <h2
               className="
-                text-xl
+                text-lg
                 font-bold
               "
             >
-
               📊 2027–2042 天天向上年度预测
-
             </h2>
-
 
             <p
               className="
@@ -2063,9 +1540,7 @@ export default function TiantianUpDetailPage() {
                 mt-1
               "
             >
-
               年末资产、财务自由目标与 Financial Freedom 使用同一套预测模型
-
             </p>
 
           </div>
@@ -2074,127 +1549,93 @@ export default function TiantianUpDetailPage() {
           <div
             className="
               overflow-x-auto
+              w-fit
+              max-w-full
             "
           >
 
             <table
               className="
-                w-full
-                text-sm
-                min-w-[1500px]
+                w-auto
+                border-collapse
+                text-base
+                tabular-nums
               "
             >
 
               <thead
                 className="
-                  bg-gray-50
+                  bg-white
+                  text-gray-800
+                  font-semibold
                   border-b
+                  border-gray-200
                 "
               >
 
                 <tr>
 
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-left
-                      whitespace-nowrap
-                    "
-                  >
+                  {/* 基础数据 */}
+
+                  <th className="px-2 py-2 text-left whitespace-nowrap">
                     年份
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     年初资产
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     生活费
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     年金
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     待还贷款
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     投资收益
                   </th>
 
+                  {/* 年末资产 */}
 
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       font-bold
                       whitespace-nowrap
+                      border-l
+                      border-black
                     "
                   >
                     年末资产
                   </th>
 
+                  {/* 财务自由目标/差额 */}
 
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       whitespace-nowrap
+                      border-l
+                      border-black
                     "
                   >
                     财务自由目标(年末)
                   </th>
 
-
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       font-bold
                       whitespace-nowrap
@@ -2203,70 +1644,58 @@ export default function TiantianUpDetailPage() {
                     财务自由差额(年末)
                   </th>
 
+                  {/* 保费与现金价值 */}
 
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       whitespace-nowrap
+                      border-l
+                      border-black
                     "
                   >
                     全部未来保费(年末)
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     夫妻未来保费(年末)
                   </th>
 
-
-                  <th
-                    className="
-                      px-4
-                      py-4
-                      text-right
-                      whitespace-nowrap
-                    "
-                  >
+                  <th className="px-2 py-2 text-right whitespace-nowrap">
                     儿子现金价值(年末)
                   </th>
 
+                  {/* 天天向上 */}
 
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       font-bold
-                      text-blue-700
+                      bg-[#FBF3DC]
                       whitespace-nowrap
+                      border-l
+                      border-black
                     "
                   >
                     天天向上1(年末)
                   </th>
 
-
                   <th
                     className="
-                      px-4
-                      py-4
+                      px-2
+                      py-2
                       text-right
                       font-bold
-                      text-green-700
+                      bg-[#FBF3DC]
                       whitespace-nowrap
                     "
                   >
                     天天向上2(年末)
                   </th>
-
 
                 </tr>
 
@@ -2286,7 +1715,6 @@ export default function TiantianUpDetailPage() {
                           row.freedomGap
                         );
 
-
                       return (
 
                         <tr
@@ -2294,177 +1722,90 @@ export default function TiantianUpDetailPage() {
                             row.year
                           }
                           className="
+                            bg-white
                             border-b
+                            border-gray-200
                             last:border-b-0
                             hover:bg-gray-50
                           "
                         >
 
-                          {/* 年份 */}
+                          {/* 基础数据 */}
 
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              font-semibold
-                              whitespace-nowrap
-                            "
-                          >
-
+                          <td className="px-2 py-2 font-semibold whitespace-nowrap">
                             {row.year}
-
                           </td>
 
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {money(row.beginAsset)}
+                          </td>
 
-                          {/* 年初资产 */}
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {money(row.expense)}
+                          </td>
+
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {money(row.pension)}
+                          </td>
+
+                          <td className="px-2 py-2 text-right text-red-600 whitespace-nowrap">
+                            {money(row.loan)}
+                          </td>
 
                           <td
-                            className="
-                              px-4
-                              py-4
+                            className={`
+                              px-2
+                              py-2
                               text-right
                               whitespace-nowrap
-                            "
+                              ${
+                                toNumber(row.investmentReturn) > 0
+                                  ? "text-red-600"
+                                  : toNumber(row.investmentReturn) < 0
+                                  ? "text-green-600"
+                                  : "text-gray-400"
+                              }
+                            `}
                           >
-
-                            {
-                              money(
-                                row.beginAsset
-                              )
-                            }
-
+                            {money(row.investmentReturn)}
                           </td>
-
-
-                          {/* 生活费 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              text-right
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.expense
-                              )
-                            }
-
-                          </td>
-
-
-                          {/* 年金 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              text-right
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.pension
-                              )
-                            }
-
-                          </td>
-
-
-                          {/* 贷款压力 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              text-right
-                              text-red-600
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.loan
-                              )
-                            }
-
-                          </td>
-
-
-                          {/* 投资收益 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              text-right
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.investmentReturn
-                              )
-                            }
-
-                          </td>
-
 
                           {/* 年末资产 */}
 
                           <td
                             className="
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               font-bold
                               text-blue-700
                               whitespace-nowrap
+                              border-l
+                              border-black
                             "
                           >
-
-                            {
-                              money(
-                                row.totalAsset
-                              )
-                            }
-
+                            {money(row.totalAsset)}
                           </td>
 
-
-                          {/* 财务自由目标 */}
+                          {/* 财务自由目标/差额 */}
 
                           <td
                             className="
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               whitespace-nowrap
+                              border-l
+                              border-black
                             "
                           >
-
-                            {
-                              money(
-                                row.freedomTarget
-                              )
-                            }
-
+                            {money(row.freedomTarget)}
                           </td>
-
-
-                          {/* 财务自由差额 */}
 
                           <td
                             className={`
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               font-bold
                               whitespace-nowrap
@@ -2475,121 +1816,67 @@ export default function TiantianUpDetailPage() {
                               }
                             `}
                           >
-
                             {
                               gap > 0
-                                ? money(
-                                    gap
-                                  )
+                                ? money(gap)
                                 : "已达成"
                             }
-
                           </td>
 
-
-                          {/* 全部未来保费 */}
+                          {/* 保费与现金价值 */}
 
                           <td
                             className="
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               whitespace-nowrap
+                              border-l
+                              border-black
                             "
                           >
-
-                            {
-                              money(
-                                row.totalFuturePremium
-                              )
-                            }
-
+                            {money(row.totalFuturePremium)}
                           </td>
 
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {money(row.coupleFuturePremium)}
+                          </td>
 
-                          {/* 夫妻未来保费 */}
+                          <td className="px-2 py-2 text-right whitespace-nowrap">
+                            {money(row.sonFutureCashValue)}
+                          </td>
+
+                          {/* 天天向上 */}
 
                           <td
                             className="
-                              px-4
-                              py-4
-                              text-right
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.coupleFuturePremium
-                              )
-                            }
-
-                          </td>
-
-
-                          {/* 儿子现金价值 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
-                              text-right
-                              whitespace-nowrap
-                            "
-                          >
-
-                            {
-                              money(
-                                row.sonFutureCashValue
-                              )
-                            }
-
-                          </td>
-
-
-                          {/* 天天向上1 */}
-
-                          <td
-                            className="
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               font-bold
                               text-blue-700
+                              bg-[#FBF3DC]
                               whitespace-nowrap
+                              border-l
+                              border-black
                             "
                           >
-
-                            {
-                              money(
-                                row.yearTiantian1
-                              )
-                            }
-
+                            {money(row.yearTiantian1)}
                           </td>
-
-
-                          {/* 天天向上2 */}
 
                           <td
                             className="
-                              px-4
-                              py-4
+                              px-2
+                              py-2
                               text-right
                               font-bold
                               text-green-700
+                              bg-[#FBF3DC]
                               whitespace-nowrap
                             "
                           >
-
-                            {
-                              money(
-                                row.yearTiantian2
-                              )
-                            }
-
+                            {money(row.yearTiantian2)}
                           </td>
-
 
                         </tr>
 
@@ -2606,18 +1893,14 @@ export default function TiantianUpDetailPage() {
           </div>
 
 
-          {/* =================================================
-              说明
-              ================================================= */}
-
           <div
             className="
-              m-6
+              m-5
               rounded-xl
               bg-indigo-50
               border
               border-indigo-100
-              p-5
+              p-4
               text-sm
               text-indigo-800
               leading-7
@@ -2625,81 +1908,41 @@ export default function TiantianUpDetailPage() {
           >
 
             <p>
-
-              <b>
-                📐 财务自由目标：
-              </b>
-
+              <b>📐 财务自由目标：</b>
               每一年都重新计算「从该年开始到 2042 年剩余生活费」。
-
             </p>
 
-
             <p>
-
-              例如：
-
-              2027 =
-              {START_YEAR}–{END_YEAR} 全部生活费；
-
-              2028 =
-              2028–2041 全部生活费；
-
-              2042 =
-              2042 年生活费。
-
+              例如：2027 = {START_YEAR}–{END_YEAR} 全部生活费；
+              2028 = 2028–2041 全部生活费；
+              2042 = 2042 年生活费。
             </p>
 
-
             <p>
-
-              <b>
-                财务自由差额(年末)
-              </b>
-
+              <b>财务自由差额(年末)</b>
               使用年末预计资产计算，而不是使用当前资产。
               达成财务自由后，页面显示「已达成」。
-
             </p>
 
-
             <p>
-
-              <b>
-                天天向上1 / 天天向上2
-              </b>
-
+              <b>天天向上1 / 天天向上2</b>
               即使财务自由已经达成，
               仍然继续使用「财务自由目标 − 年末资产」的真实差额。
               因此超过财务自由目标的资产会以负数继续抵减未来保费压力。
-
             </p>
 
-
             <p>
-
-              <b>
-                年末资产
-              </b>
-
+              <b>年末资产</b>
               会进入下一年的年初资产继续按照 5% 复利。
-
             </p>
 
-
             <p>
-
-              <b>
-                保险年度数据
-              </b>
-
+              <b>保险年度数据</b>
               直接使用 getInsuranceYearProjection() 返回的年度数据，
               按年份匹配全部未来保费、夫妻未来保费和儿子现金价值。
-
             </p>
 
           </div>
-
 
         </section>
 
